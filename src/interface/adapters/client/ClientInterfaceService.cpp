@@ -1171,6 +1171,8 @@ ECM ClientInterfaceService::Connect(
       if (!(ensured.rcm) || !ensured.data) {
         continue;
       }
+      status = MergeStatus_(
+          status, filesystem_service_.EnsureClientWorkdir(ensured.data, control));
 
       if (existed_before) {
         const std::string ensured_nickname =
@@ -1215,6 +1217,11 @@ ECM ClientInterfaceService::Connect(
 
     ECM add_rcm = client_service_.AddClient(created.data, request.force);
     status = MergeStatus_(status, add_rcm);
+    if ((add_rcm)) {
+      status = MergeStatus_(
+          status,
+          filesystem_service_.EnsureClientWorkdir(created.data, control));
+    }
   }
   return status;
 }

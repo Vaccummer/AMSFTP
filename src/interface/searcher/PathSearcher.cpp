@@ -9,6 +9,36 @@
 using namespace AMInterface::searcher::detail;
 
 namespace AMInterface::searcher {
+namespace {
+
+std::string TrimTrailingSep_(std::string text) {
+  while (!text.empty() && (text.back() == '/' || text.back() == '\\')) {
+    text.pop_back();
+  }
+  return text;
+}
+
+std::string LeafNameForSort_(const std::string &insert_text) {
+  const std::string clean = TrimTrailingSep_(insert_text);
+  if (clean.empty()) {
+    return clean;
+  }
+  const size_t slash_pos = clean.find_last_of("/\\");
+  if (slash_pos != std::string::npos) {
+    return clean.substr(slash_pos + 1);
+  }
+  const size_t at_pos = clean.find_last_of('@');
+  if (at_pos != std::string::npos) {
+    return clean.substr(at_pos + 1);
+  }
+  return clean;
+}
+
+bool StartsWithDot_(const std::string &name) {
+  return !name.empty() && name.front() == '.';
+}
+
+} // namespace
 
 /**
  * @brief Collect path candidates.
@@ -50,8 +80,10 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
   }
 
-  AMDomain::client::ClientHandle client =
-      path.remote ? runtime->GetClient(path.nickname) : runtime->LocalClient();
+  AMDomain::client::ClientHandle client = runtime->GetClient(path.nickname);
+  if (!client && !path.remote) {
+    client = runtime->LocalClient();
+  }
   if (!client) {
     return result;
   }
@@ -92,6 +124,18 @@ void AMPathSearchEngine::SortCandidates(
                      const int ro = PathTypeOrder(rhs.path_type);
                      if (lo != ro) {
                        return lo < ro;
+                     }
+                     const std::string lname =
+                         LeafNameForSort_(lhs.insert_text);
+                     const std::string rname =
+                         LeafNameForSort_(rhs.insert_text);
+                     const bool ldot = StartsWithDot_(lname);
+                     const bool rdot = StartsWithDot_(rname);
+                     if (ldot != rdot) {
+                       return ldot;
+                     }
+                     if (lname != rname) {
+                       return lname < rname;
                      }
                      return lhs.insert_text < rhs.insert_text;
                    });
@@ -245,10 +289,21 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
     return path;
   }
 
-  const auto current_client = runtime_->CurrentClient();
-  const bool current_remote =
-      current_client && current_client->ConfigPort().GetProtocol() !=
-                            AMDomain::host::ClientProtocol::LOCAL;
+  std::string current_nickname = AMStr::Strip(runtime_->CurrentNickname());
+  if (current_nickname.empty()) {
+    current_nickname = "local";
+  }
+  AMDomain::client::ClientHandle current_client =
+      runtime_->GetClient(current_nickname);
+  if (!current_client && AMStr::lowercase(current_nickname) == "local") {
+    current_client = runtime_->LocalClient();
+  }
+  bool current_remote =
+      AMStr::lowercase(current_nickname) != std::string("local");
+  if (current_client) {
+    current_remote = current_client->ConfigPort().GetProtocol() !=
+                     AMDomain::host::ClientProtocol::LOCAL;
+  }
 
   bool force_local = false;
   std::string nickname;
@@ -272,8 +327,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
       }
     } else {
       path_part_raw = token_prefix;
-      nickname =
-          current_client ? current_client->ConfigPort().GetNickname() : "local";
+      nickname = current_nickname;
     }
   }
 
@@ -312,9 +366,10 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   }
   path.base = path.header + path.dir_raw;
 
-  AMDomain::client::ClientHandle client =
-      path.remote ? runtime_->GetClient(path.nickname)
-                  : runtime_->LocalClient();
+  AMDomain::client::ClientHandle client = runtime_->GetClient(path.nickname);
+  if (!client && !path.remote) {
+    client = runtime_->LocalClient();
+  }
   if (!client) {
     return path;
   }

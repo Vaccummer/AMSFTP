@@ -36,6 +36,14 @@ AMDomain::client::ClientHandle CompletionRuntimeAdapter::CurrentClient() const {
   return client_service_.GetCurrentClient();
 }
 
+std::string CompletionRuntimeAdapter::CurrentNickname() const {
+  std::string nickname = AMStr::Strip(client_service_.CurrentNickname());
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+  return nickname;
+}
+
 AMDomain::client::ClientHandle CompletionRuntimeAdapter::LocalClient() const {
   return client_service_.GetLocalClient();
 }
