@@ -3887,3 +3887,505 @@ redesign ClientAppService completely:
 4.10 AddPublicClient(ClientHandle) add client to container, no check, directly put in
 
 4.11 SetPublicClientCallback(optional `<disconnectcb>`, optional `<trace_cb>`, optional<know_host_cb>, optional `<auth_cb>`): nullopt -> remain same, if has value, set to it
+ClientAppService Improve
+
+1. ClientServiceArg
+
+only holds 
+
+    int heartbeat_interval_s = 60;
+
+    int heartbeat_timeout_ms = 100;
+move its definition to domain ClientModel
+
+2. write a base class of ClientAppService layer
+
+this class holds all kinds of callbacks and private_keys and amf
+
+this class construct with ClientServiceArg
+
+this class supplies interfaces:
+
+1. to register callbacks(callbacks has two kind, one for client in maintainer, one for public pool)
+2. get/set private keys
+3. get/set heartbeat args
+4. get init args
+5. register amf
+FilesystemAppServiceBase
+
+add one class in application layer, filesystem part
+
+1. constructor
+
+need args:
+
+struct FilesystemArg, defined in filesystem domain model header, holds one attr int max_cd_history=1
+
+shared_ptr `<HostAppService>`
+
+shared_ptr `<ClientAppService>`
+
+throw exception if any ptr is nullptr
+
+2. attrs
+
+AMAtomic `<FilesystemArg>`
+
+3. interfaces
+
+ECM Init(, )
+
+`FilesystemArg` GetInitArg()
+
+ECM ChangeDir(ClientHandle, path)
+
++ check path exsists or isdir
++ then operate on metadata and change cwd
+Implemention new interface layer class for filesystem
+
+FilesystemAppBaseAdapter
+
+header placed in src\interface\adapters\filesystem
+
+General Introduction
+
+this class is the orchestration of functions from all kind of services and interface business, but they are not the final functions bind to CLI.
+for example: 
+
+GetClient(nickname):
+
+1. find in the clientservice, if found, return it
+2. find in hostservice, if found, confirm whether to create it
+3. return error
+
+the class implement base functions intergrated some interface business
+
+Constructor:
+ref of hostservice, ref of clientservice, ref of filesystem service
+
+Attrs
+
+list `<ClientPath>` for cd history
+
+Interfaces to Provide
+
+1. function to resolve path string, arg is const str & return is `<ClientPath>`
+
+a@b : a is nickname, b is path
+
+@c: nickname is local, path is c
+
+d: nickname is current nickname, path is d
+
+need to check nickname valid(if given), is_wildcard, userpath too
+
+2. function to get client(use nickname only)
+   check in clientservice if ture, return rcm and clienthandle
+   check in hostconfigservice, if ture, create client atuomatically and return rcm, else, return rcm
+3. function to resolve paths client
+
+this function recieve vector `<ClientPath>` &
+it maintains a dict<nickname, clienthandle>, then resolve client of `ClientPath` one by one
+FilesystemAppService
+
+derived class of FilesystemAppBaseService, implemention real business functions, but no interface business
+
+interfaces:
+
+1. ClientPath GetCwd()
+
+get current client->get metadata->build ClientPath
+
+2. ECM ChangDir(ClientPath)
+
+resolve client->check path exists->write to metadata
+
+3. vector `<res>` Stat(vector `<ClientPath>`, control_ref)
+
+call ResolvePathsClient with error_stop == false
+
+then call stat func of clienthandle to get info
+
+struct res: holds attr, rcm, PathInfo.
+
+set a proper name for res
+
+4. ECMData<vector `<PathInfo>`> Listdir(`ClientPath`, control_ref)
+5. ECMData<vector `<str> ListNames(`ClientPath `, control_ref)`
+6. ECM Mkdirs(ClientPath `, control_ref`)
+
+getclient->split path->call mkdir one by one
+
+7. ECMData `<double>` TestRTT(nickname)
+8. ECM Rename(`PathInfo src`, `PathInfo dst`, ClientPath `, control_ref`)
+9. ECM ShellRun(nickname, cmd, ClientPath `, control_ref`)
+
+get client->get metadata->build_cmd->call client func to run
+
+there's FilesystemAppBaseService::BuildShellCmd, implement it and use it
+FilesystemAdapter
+
+provides functions for processing RawStringPath and final CLI bind business interfaces
+
+holds:
+
+a FilesystemAppService &
+
+a PromptManager(for print and prompt)
+
+(construct with these args too)
+
+Interfaces:
+
+General Introduction: path is pure string, format is nickname@path, @path, path
+
+there's a 
+
+  [[nodiscard]] ECMData`<ClientPath>`
+
+  SplitRawPath(conststd::string&token) const;
+in FilesystemAppBaseService, move it to interface layer as a help
+
+
+1. cd
+
+recieve a string path and change to target client and dir
+
+if error, print it; support "-" for last history
+FilesystemAppService Improvement
+
+add neccessary interfaces to execute these business:
+
+1. resolve destination path (ClientPath Fromat)
+
+a. get client
+
+b. add client a ClientContainer (pass in as ptr)
+
+c. aboolute dst
+
+d. get dst stat
+
+e. build TransferPath: holds ClientHandle, vector `<PathInfo>`  if dst not exists, set empty vector
+
+2. resolve source path, multi targets
+
+like resolve destination path, but a few changes:
+
+a. source ClientPath support wildcard, so if ClientPath.wildcard is true, need use find
+
+b. you need gather paths belong to same host, return std::map `<nickname, TransferPath>` 
+
++ matched paths need to be compact
+
+c. you need to add src clients to container too and pay attention to src and dst have same host, that needs container hold a pair<client, client>
+
+d. you need you return error paths too:
+
+like src not exists, src and dst are the same
+
+error_data map<nickname, ClientPath>
+### Path.hpp refactor
+
+@src\foundation\core\Path.hpp
+
+1. move all functions to a namespace AMPath
+
+move Path.hpp to src\foundation\tools and rename to path.hpp
+
+fix callsite gaps resulted from this changes
+
+### RustTomlRead.h Refactor
+
+@./tomlread
+
+this is the rust tomlread repo, you need to rename functions to suit current project style,  for example:
+
+cfgffi_read -> RustTomlRead()
+
+### ConfigPayloadTag Refactor
+
+remove enum ConfigPayloadTag and related tag, now struct type identify depends on RTTI(typid and std::type_index)
+
+you needs to remove that tag, and refactor IConfigStorePort
+
+### domain/Client refactor
+
+remove src\domain\client\ClientDomainService.cpp
+remove MakeClientIOControlArgs and MakeClientControlComponent, use ClientControlComponent constructor instead
+remove ResolveTimeoutBudgetMs
+
+### domain/config refactor
+
+move TransferManagerArg to domain transfer model
+
+move LogManagerArg to domain logger model
+
+rename src\domain\config\ConfigRules.hpp to src\domain\config\ConfigDomainService.hpp
+move functions in this file to namespaceAMDomain::config::service
+
+### domain/filesystem refactor
+
+rename AMDomain::filesystem::services to AMDomain::filesystem::service
+remove BuildShellCommand
+
+### domain/var refactor
+
+move helper functions in model file to service file
+
+### domain/writer refactor
+
+rename AMAsyncWriteSchedulerPort to IWriteSchedulerPort
+
+### application/client refactor
+
+AMApplication::TransferRuntime::ITransferClientPoolPort this seems to be a legacy class. if true, remove it
+
+mutable AMAtomic `<bool>` config_dirty_ -> use atomic bool
+remove ScopedConnectHooksGuard, cause ConnectHooks is not temporarily set
+replace JoinCandidates_ with AMStr join function
+remove redundant ClientAppServiceBase::ExportConfigSnapshot()
+set some static functions in ClientAppService:
+
+1. to get metadata of a client
+2. to set metadata of a client
+3. to get cwd of a client
+4. to set cwd of a client
+5. try to lease a client
+6. try to return a client
+
+these functions are not invlove any IO operation, pure client data query. just implement them, but don't use them for now
+
+### application/host refactor
+
+rename AMHostAppService to HostAppService
+
+change 
+
+  [[nodiscard]] std::pair<ECM, HostConfig>
+
+  GetClientConfig(conststd::string&nickname);
+to 
+
+  [[nodiscard]] ECMData`<HostConfig>`
+
+  GetClientConfig(const std::string&nickname, bool case_sensitive);
+
+
+remove all these functions:
+
+  ECMEnsureSnapshotLoaded_() const;
+
+  ECMLoadSnapshot_() const;
+
+  [[nodiscard]] HostConfigArgSnapshotFromCache_() const;
+
+  ECMPersistSnapshot_(constHostConfigArg&snapshot, booldump_async = true);
+
+  voidResetSnapshotCache_();
+
+
+set a static const localconfig fallback in domain host service, in HostAppService::Init, if local_config is invalid, use that fallback, remove BuildDefaultLocalConfig_
+
+
+remove these legacy functions:
+
+  ECMList(booldetailed = true) const;
+
+  ECMAdd(conststd::string&nickname = "");
+
+  ECMModify(conststd::string&nickname);
+
+  ECMDelete(conststd::string&nickname);
+
+  ECMDelete(conststd::vector[std::string](std::string) &targets);
+
+  ECMQuery(conststd::string&targets) const;
+
+  ECMQuery(conststd::vector[std::string](std::string) &targets) const;
+
+  ECMRename(conststd::string&old_nickname, conststd::string&new_nickname);
+
+  ECMSrc() const;
+
+  [[nodiscard]] ECMSave();
+
+  ECMSetHostValue(conststd::string&nickname, conststd::string&attrname,
+
+    conststd::string&value_str);
+
+
+### application/var refactor
+
+remove:
+ECMLoadFromSnapshot(constVarSetArg&snapshot);
+[[nodiscard]] VarSetArgExportConfigSnapshot() const;
+### application/filesystem Refacotr
+
+replcae AcquireTransferLease_ with interface in clientappservice to lease or return client
+
+move functions in ClientOperationHelper to FilesystemAppService as static functions, unify to use functions in clientappserice to operate metadata(check all callsize in filesystem part)
+
+remove function CdHistory() 
+
+remove legacy ClientPath
+
+refactor ResolvePath, recieve PathTarget return ResolvedPath (note: this function has many callsites)
+
+std::vector `<PathTarget>` version return vector<ECMData `<ResolvedPath>>`
+
+FilesystemAppService::find are too complicated with so many lambda functions, you can set helper functions and classes to make FilesystemAppService::find look more clear
+
+
+1. wrap TransferClientContainer to a class, supplies inerface to add src client, add dst client, get client, release client
+   change current container client holder to a struct, holds src, dst attr, both are ClientHandle Type. strict rule:
+
+   1. src can share clients
+   2. dst can shared clients
+   3. but src and dst can't use same clients
+2. ResolveTransferDst add an arg TransferClientContainer*clients. add dst client to container too
+3. ResolveTransferSrc improvement
+
+SourceResolveResult.error_data should include ECM
+
+remove redundant ECMrcm = {EC::Success, ""}; if has fata error, set in ECMData
+
+4. rename TransferPath to DstResolveResult
+
+remove 
+
+  std::vector`<PathInfo>` raw_paths = {};
+
+  std::vector`<PathInfo>` paths = {};
+
+  ECMrcm = {EC::Success, ""};
+just set a optional`<PathInfo>`
+## Client/Interface Refacor
+
+remove legacy UICreateClient
+
+remove AMInterface::ApplicationAdapters related codes, it was deprecated
+
+namespaceAMInterface::ApplicationAdapters {
+
+usingClientInterfaceService = AMInterface::client::ClientInterfaceService;
+
+}
+
+remove ResolveClientCwd_, use clientappserivce interface
+
+change knowhost confirmation prompt to such style
+(local) D:/CodeLib > connect wsl
+Unknown host: am@172.26.36.83:22
+
+Protocol:            [ecdsa-sha2-nistp256]
+Fingerprint:        eIwLEKQ+vMo5KIvlCDF0vPBUbkzCis+lrq8h1n5jnPo=
+
+Trust this host key? (y/N): 
+
+add shortcut for changclient, if nickname is empty, chang to local client(this happens in ArgStruct::Run, ClientInterfaceService::ChangeClient remains same)
+
+ListClients:
+if neither check or detail, just get nicknames from client service then style print
+
+if detail: must get conrequest and metadata from client instead of from hostmanager, then print it
+
+if check: run check and get status
+
+if detail and check:
+[local]
+
+status        :  ✅
+protocol    :   local
+hostname    :   localhost
+username    :   ""
+port        :   22
+password    :   ""
+buffer_size :   64000000
+keyfile     :   ""
+compression :   false
+trash_dir   :   d:/CodeLib/trash
+login_dir   :   d:/CodeLib
+cwd         :   ""
+cmd_prefix  :   "powershell -NoProfile -Command "cd {$cwd};{$escaped_cmd}""
+wrap_cmd    :   true
+
+
+set a blank line to separate different clients
+
+set a helper function NormalizedNicknames, this function normalize nicknames(domain client service) and dedup them 
+
+add a ClientInterfaceService::CheckClients
+can accept multi targets, has an option detail
+if not detail, just like ListClients with check
+if detail, just like ListClients with check and detail
+
+ListHosts without detail needs to print nicknames with style: unestablished_nickname and nickname
+
+RemoveHosts now allow to remove current client, if remove current client, change to local client. still can't remove local client
+### FilesystemInterfaceSerivce::SplitRawTarget Improve
+
+nickname identify rules:
+
+1. no @, nickname is current name, path is stripped token
+2. has multi @
+   2.1 split at first @, if the former part is not nickname valid, fallback to 1(which means the whole token is path, nickname is current nickname)
+   2.2 else just the former part is nickname, remain is path
+3. @ at the end
+   3.1 if former part is not valid nickname, fallback to 1
+   3.2 set nickname and set path to .
+4. @ at the head
+   nickname is local, remain is path
+5. only @: equal to local@.
+
+ps:final nickname and path need to be stripped
+VerifyKnownHostFingerprint
+
+libssh2_session_hostkey seems 
+
+
+ECMNBResultToECM(constNBResult`<CURLcode>` &nb_res,
+
+    conststd::string&action = "",
+
+    conststd::string&target = "") const {
+if terminated or timeout, just return ec and error_msg
+}
+
+if ok. then just return ok
+
+if has response code, then cast response code to EC just like GetECM does and write response code to rawerror
+
+cast CURLcode to EC and use curl_easy_strerror to get error_msg, store CURLcode to rawerror
+Transfer protocol improvement
+
+1. AMAtomic<TransferTask *> cur_task = AMAtomic<TransferTask *>(nullptr); change taskinfo cur_task to AMAtomic, now both change cur_task ptr or operate on cur_task need to under the lock to avoid resource conflict
+2. Submit now only requires TaskInfo, casue TaskInfo holds a container attr
+3. split tasks in TaskInfo to file part and dir part. dir part excute first(just call mkdirs), then excute file transfer
+4. when transfer single file, need to mkdir of dst parent dir, if not success, directly report error instead of transfer.
+
+
+single src result print format in WaitTask_
+
+✅ 1.2MB/1.2MB
+
+❌ PermissionDenied 9.6KB/1.2MB  access denied
+
+
+multi src results print format(not terminated or timeout)
+
+Transfer → [serverB] /data/output/
+
+✅ [serverA] /data/a.txt 1.2MB
+✅ [serverA] /data/b.txt 1.3MB
+❌ [serverC] /data/c.txt 1.4MB
+    NotFound: file does not exist
+
+❌ [serverD] /data/d.txt
+    PermissionDenied: access denied
+
+Summary: 4 total | 2 success | 2 failed
+
+
+terminated or timeout:
+❌ Terminated 1.0MB/1.2MB Task is terminated by user
