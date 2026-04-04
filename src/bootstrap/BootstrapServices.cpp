@@ -1,6 +1,7 @@
 #include "bootstrap/BootstrapServices.hpp"
 
 #include "application/client/ClientAppService.hpp"
+#include "application/completion/CompleterAppService.hpp"
 #include "application/config/ConfigAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
@@ -36,6 +37,7 @@ struct ConfigSnapshots final {
   AMDomain::client::ClientServiceArg client_service_arg = {};
   AMDomain::filesystem::FilesystemArg filesystem_arg = {};
   AMDomain::var::VarSetArg var_arg = {};
+  AMDomain::completion::CompleterArg completer_arg = {};
   AMDomain::prompt::PromptProfileArg prompt_profile_arg = {};
   AMDomain::prompt::PromptHistoryArg prompt_history_arg = {};
   AMDomain::style::StyleConfigArg style_arg = {};
@@ -54,6 +56,8 @@ struct AppServiceBuildState final {
   std::unique_ptr<AMApplication::filesystem::FilesystemAppService>
       filesystem_service = nullptr;
   std::unique_ptr<AMApplication::var::VarAppService> var_service = nullptr;
+  std::unique_ptr<AMApplication::completion::CompleterConfigManager>
+      completer_config_manager = nullptr;
   std::unique_ptr<AMApplication::prompt::PromptProfileManager>
       prompt_profile_manager = nullptr;
   std::unique_ptr<AMApplication::prompt::PromptHistoryManager>
@@ -123,6 +127,7 @@ ConfigSnapshots ReadConfigSnapshots_(
   (void)service->Read(&snapshots.client_service_arg);
   (void)service->Read(&snapshots.filesystem_arg);
   (void)service->Read(&snapshots.var_arg);
+  (void)service->Read(&snapshots.completer_arg);
   (void)service->Read(&snapshots.prompt_profile_arg);
   (void)service->Read(&snapshots.prompt_history_arg);
   (void)service->Read(&snapshots.style_arg);
@@ -173,6 +178,17 @@ void BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
 
 void BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
                                   AppServiceBuildState *state) {
+  state->completer_config_manager =
+      std::make_unique<AMApplication::completion::CompleterConfigManager>(
+          snapshots.completer_arg);
+  {
+    const ECM rcm = state->completer_config_manager->Init();
+    if (!(rcm)) {
+      PrintBootstrapWarn(
+          AMStr::fmt("completer config init failed: {}", rcm.msg()));
+    }
+  }
+
   state->prompt_profile_manager =
       std::make_unique<AMApplication::prompt::PromptProfileManager>(
           snapshots.prompt_profile_arg);
@@ -250,6 +266,7 @@ void RegisterConfigSyncPorts_(AppServiceBuildState *state) {
   register_port(state->client_service.get(), "ClientAppService");
   register_port(state->filesystem_service.get(), "FilesystemAppService");
   register_port(state->var_service.get(), "VarAppService");
+  register_port(state->completer_config_manager.get(), "CompleterConfigManager");
   register_port(state->prompt_profile_manager.get(), "PromptProfileManager");
   register_port(state->prompt_history_manager.get(), "PromptHistoryManager");
   register_port(state->style_service.get(), "StyleConfigManager");
@@ -388,6 +405,8 @@ void BindServicesToCliManagers_(BootstrapServices *runtime,
   runtime->managers.filesystem_service.SetInstance(
       std::move(app_state->filesystem_service));
   runtime->managers.var_service.SetInstance(std::move(app_state->var_service));
+  runtime->managers.completer_config_manager.SetInstance(
+      std::move(app_state->completer_config_manager));
 
   runtime->managers.client_interface_service.SetInstance(
       std::move(interface_state->client_interface_service));
@@ -476,4 +495,3 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 }
 
 } // namespace AMBootstrap
-

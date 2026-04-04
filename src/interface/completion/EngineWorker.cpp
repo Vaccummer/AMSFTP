@@ -1068,26 +1068,22 @@ void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
     scoped.search_delay_ms = policy.search_delay_ms;
 
     if (policy.use_async) {
-      auto cancel_flag = AMDomain::client::CreateClientControlToken();
-      scoped.control_token = cancel_flag;
+      scoped.control_token = AMDomain::client::CreateClientControlToken();
       scoped.async_search = true;
-      AMCompletionAsyncJob job;
-      job.request_id = ctx.request_id;
-      job.mode = ctx.mode;
-      job.target = scoped.targets.front();
-      job.context = std::move(scoped);
-      job.source_engine = engine;
-      job.interrupt_flag = [flag = cancel_flag]() {
-        return !flag || flag->IsInterrupted();
-      };
-      job.interrupt_cancel = [flag = cancel_flag]() {
-        if (flag) {
-          flag->RequestInterrupt();
-        }
-      };
-      ScheduleAsyncJob_(std::move(job));
-      scheduled_async = true;
-      continue;
+      auto task = engine->CreateTask(scoped);
+      if (task) {
+        const AMCompletionTarget async_target = scoped.targets.front();
+        TerminateOnAirTask_(async_target);
+        AMCompletionAsyncTask request = {};
+        request.request_id = ctx.request_id;
+        request.mode = ctx.mode;
+        request.target = async_target;
+        request.task = std::move(task);
+        request.source_engine = engine;
+        ScheduleAsyncTask_(std::move(request));
+        scheduled_async = true;
+        continue;
+      }
     }
 
     scoped.control_token = nullptr;

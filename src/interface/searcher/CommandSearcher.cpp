@@ -163,6 +163,11 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   return result;
 }
 
+std::shared_ptr<AMInterface::completer::ICompletionTask>
+AMCommandSearchEngine::CreateTask(const AMCompletionContext &ctx) {
+  return AMCompletionSearchEngine::CreateTask(ctx);
+}
+
 /**
  * @brief Sort command-related candidates.
  */

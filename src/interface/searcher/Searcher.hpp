@@ -40,6 +40,9 @@ public:
   AMCompletionCandidates
   CollectCandidates(const AMCompletionContext &ctx) override;
 
+  std::shared_ptr<AMInterface::completer::ICompletionTask>
+  CreateTask(const AMCompletionContext &ctx) override;
+
   /**
    * @brief Sort command-related candidates.
    */
@@ -85,6 +88,9 @@ public:
   AMCompletionCandidates
   CollectCandidates(const AMCompletionContext &ctx) override;
 
+  std::shared_ptr<AMInterface::completer::ICompletionTask>
+  CreateTask(const AMCompletionContext &ctx) override;
+
   /**
    * @brief Sort internal-value candidates.
    */
@@ -114,6 +120,9 @@ public:
    */
   AMCompletionCandidates
   CollectCandidates(const AMCompletionContext &ctx) override;
+
+  std::shared_ptr<AMInterface::completer::ICompletionTask>
+  CreateTask(const AMCompletionContext &ctx) override;
 
   /**
    * @brief Sort path candidates.

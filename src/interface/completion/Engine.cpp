@@ -1,13 +1,22 @@
 #include "interface/completion/Engine.hpp"
+#include "application/completion/CompleterAppService.hpp"
 #include "Isocline/isocline.h"
+#include "interface/style/StyleManager.hpp"
 #include "interface/cli/InteractiveEventRegistry.hpp"
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <exception>
 #include <iterator>
 
 namespace AMInterface::completer {
 namespace {
+std::atomic<uint64_t> g_completion_task_id{1};
+
+uint64_t NextCompletionTaskId_() {
+  return g_completion_task_id.fetch_add(1, std::memory_order_relaxed);
+}
+
 /**
  * @brief Normalize a configured style into a bbcode opening tag.
  */
@@ -81,16 +90,130 @@ void IsoclineCompleteCallback_(ic_completion_env_t *cenv, const char *prefix) {
   if (!input || cursor < 0) {
     return;
   }
-  const AMCompletionMode mode =
-      MapCompletionMode_(ic_completion_source(cenv));
+  const AMCompletionMode mode = MapCompletionMode_(ic_completion_source(cenv));
   engine->HandleCompletion(cenv, std::string(input),
                            static_cast<size_t>(cursor), mode);
 }
+
+class GenericCompletionTask final : public ICompletionTask {
+public:
+  GenericCompletionTask(uint64_t id, AMCompletionContext ctx,
+                        AMCompletionSearchEngine *engine)
+      : id_(id), ctx_(std::move(ctx)), engine_(engine) {
+    if (!ctx_.control_token) {
+      ctx_.control_token = AMDomain::client::CreateClientControlToken();
+    }
+    ctx_.async_search = true;
+  }
+
+  [[nodiscard]] uint64_t ID() const override { return id_; }
+
+  void Run() override {
+    CompletionTaskState expected = CompletionTaskState::Pending;
+    if (!state_.compare_exchange_strong(expected, CompletionTaskState::Running,
+                                        std::memory_order_acq_rel)) {
+      return;
+    }
+    if (cancel_requested_.load(std::memory_order_acquire)) {
+      state_.store(CompletionTaskState::Canceled, std::memory_order_release);
+      return;
+    }
+    if (engine_ == nullptr) {
+      {
+        std::lock_guard<std::mutex> lock(result_mtx_);
+        result_.rcm = Err(EC::InvalidHandle, "completion task", "",
+                          "search engine is null");
+      }
+      state_.store(CompletionTaskState::Failed, std::memory_order_release);
+      return;
+    }
+
+    try {
+      if (ctx_.search_delay_ms > 0 &&
+          !cancel_requested_.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(ctx_.search_delay_ms));
+      }
+      if (cancel_requested_.load(std::memory_order_acquire)) {
+        state_.store(CompletionTaskState::Canceled, std::memory_order_release);
+        return;
+      }
+      AMCompletionCandidates collected = engine_->CollectCandidates(ctx_);
+      if (!cancel_requested_.load(std::memory_order_acquire)) {
+        engine_->SortCandidates(ctx_, collected.items);
+      }
+      {
+        std::lock_guard<std::mutex> lock(result_mtx_);
+        result_ = {std::move(collected), OK};
+      }
+      if (cancel_requested_.load(std::memory_order_acquire)) {
+        state_.store(CompletionTaskState::Canceled, std::memory_order_release);
+      } else {
+        state_.store(CompletionTaskState::Done, std::memory_order_release);
+      }
+    } catch (const std::exception &e) {
+      {
+        std::lock_guard<std::mutex> lock(result_mtx_);
+        result_.rcm = Err(EC::UnknownError, "completion task", "", e.what());
+      }
+      if (cancel_requested_.load(std::memory_order_acquire)) {
+        state_.store(CompletionTaskState::Canceled, std::memory_order_release);
+      } else {
+        state_.store(CompletionTaskState::Failed, std::memory_order_release);
+      }
+    } catch (...) {
+      {
+        std::lock_guard<std::mutex> lock(result_mtx_);
+        result_.rcm =
+            Err(EC::UnknownError, "completion task", "", "unknown error");
+      }
+      if (cancel_requested_.load(std::memory_order_acquire)) {
+        state_.store(CompletionTaskState::Canceled, std::memory_order_release);
+      } else {
+        state_.store(CompletionTaskState::Failed, std::memory_order_release);
+      }
+    }
+  }
+
+  void Terminate() override {
+    cancel_requested_.store(true, std::memory_order_release);
+    if (ctx_.control_token) {
+      ctx_.control_token->RequestInterrupt();
+    }
+    CompletionTaskState expected = CompletionTaskState::Pending;
+    (void)state_.compare_exchange_strong(expected, CompletionTaskState::Canceled,
+                                         std::memory_order_acq_rel);
+  }
+
+  [[nodiscard]] CompletionTaskState State() const override {
+    return state_.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] ECMData<AMCompletionCandidates> Result() const override {
+    std::lock_guard<std::mutex> lock(result_mtx_);
+    return result_;
+  }
+
+private:
+  uint64_t id_ = 0;
+  AMCompletionContext ctx_ = {};
+  AMCompletionSearchEngine *engine_ = nullptr;
+  std::atomic<CompletionTaskState> state_{CompletionTaskState::Pending};
+  std::atomic<bool> cancel_requested_{false};
+  mutable std::mutex result_mtx_;
+  ECMData<AMCompletionCandidates> result_ = {};
+};
 } // namespace
 
 /**
  * @brief Default cache-clear hook for engines without cache state.
  */
+std::shared_ptr<ICompletionTask>
+AMCompletionSearchEngine::CreateTask(const AMCompletionContext &ctx) {
+  return std::make_shared<GenericCompletionTask>(NextCompletionTaskId_(), ctx,
+                                                 this);
+}
+
 void AMCompletionSearchEngine::ClearCache() {}
 
 /**
@@ -172,13 +295,18 @@ void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
  * @brief Load completion configuration from settings.
  */
 void AMCompleteEngine::LoadConfig() {
-  int max_items = 999;
+  AMDomain::completion::CompleterArg completer_arg = {};
+  if (completer_config_manager_ != nullptr) {
+    completer_arg = completer_config_manager_->GetInitArg();
+  }
+
+  int max_items = static_cast<int>(completer_arg.maxnum);
   if (max_items <= 0) {
     max_items = -1;
   }
   args_.complete_max_items = max_items;
 
-  int max_rows = 9;
+  int max_rows = static_cast<int>(completer_arg.maxrows_perpage);
   if (max_rows == 0) {
     max_rows = 9;
   }
@@ -187,33 +315,25 @@ void AMCompleteEngine::LoadConfig() {
   }
   args_.complete_max_rows = static_cast<long>(max_rows);
 
-  auto read_bool = [](const std::vector<std::string> &path,
-                      bool default_value) {
-    std::string value = "false";
-    value = AMStr::lowercase(AMStr::Strip(value));
-    if (value == "true" || value == "1" || value == "yes" || value == "on") {
-      return true;
-    }
-    if (value == "false" || value == "0" || value == "no" || value == "off") {
-      return false;
-    }
-    return default_value;
-  };
-
-  args_.complete_number_pick =
-      read_bool({"Style", "CompleteMenu", "number_pick"}, true);
-  args_.complete_auto_fill =
-      read_bool({"Style", "CompleteMenu", "auto_fillin"}, true);
-  args_.complete_select_sign = "*";
+  args_.complete_number_pick = completer_arg.number_pick;
+  args_.complete_auto_fill = completer_arg.auto_fillin;
+  args_.complete_select_sign = ">";
   args_.complete_order_num_style = "";
   args_.complete_help_style = "";
 
-  args_.complete_delay_ms = 100;
+  if (style_service_ != nullptr) {
+    const auto style_cfg = style_service_->GetInitArg().style.complete_menu;
+    args_.complete_select_sign = style_cfg.item_select_sign;
+    args_.complete_order_num_style = style_cfg.order_num_style;
+    args_.complete_help_style = style_cfg.help_style;
+  }
+
+  args_.complete_delay_ms = static_cast<int>(completer_arg.complete_delay_ms);
   if (args_.complete_delay_ms < 0) {
     args_.complete_delay_ms = 0;
   }
 
-  int async_workers = 2;
+  int async_workers = static_cast<int>(completer_arg.async_workers);
   if (async_workers < 1) {
     async_workers = 1;
   }
@@ -222,9 +342,13 @@ void AMCompleteEngine::LoadConfig() {
   args_.complete_async_workers = worker_count;
 
   std::string command_tag = "";
-  args_.input_tag_command = NormalizeStyleTag_(command_tag);
-
   std::string module_tag = "";
+  if (style_service_ != nullptr) {
+    const auto style_cfg = style_service_->GetInitArg().style;
+    command_tag = style_cfg.input_highlight.command;
+    module_tag = style_cfg.input_highlight.module;
+  }
+  args_.input_tag_command = NormalizeStyleTag_(command_tag);
   args_.input_tag_module = NormalizeStyleTag_(module_tag);
 
   if (worker_changed) {
@@ -277,6 +401,7 @@ uint64_t AMCompleteEngine::NextRequestId_(const std::string &input,
   last_request_id_ =
       request_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   current_request_id_.store(last_request_id_, std::memory_order_relaxed);
+  desired_request_id_.store(last_request_id_, std::memory_order_relaxed);
 
   CancelPendingAsyncRequests_();
   return last_request_id_;
@@ -360,43 +485,85 @@ void AMCompleteEngine::EnsurePromptReturnCancelHookRegistered_() {
 }
 
 /**
- * @brief Push an async request into the worker queue.
+ * @brief Push an async task into the worker queue.
  */
-void AMCompleteEngine::ScheduleAsyncJob_(AMCompletionAsyncJob request) {
-  if (!request.interrupt_flag) {
+void AMCompleteEngine::ScheduleAsyncTask_(AMCompletionAsyncTask request) {
+  if (!request.task) {
     return;
   }
-
-  if (request.interrupt_cancel) {
-    std::lock_guard<std::mutex> lock(async_interrupts_mtx_);
-    async_interrupts_.push_back(request.interrupt_cancel);
-  }
-
   {
     std::lock_guard<std::mutex> lock(async_queue_mtx_);
     async_queue_.push_back(std::move(request));
   }
-
   async_queue_cv_.notify_one();
+}
+
+void AMCompleteEngine::TerminateOnAirTask_(AMCompletionTarget target) {
+  std::shared_ptr<ICompletionTask> task = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(async_on_air_mtx_);
+    auto it = async_on_air_tasks_.find(target);
+    if (it != async_on_air_tasks_.end()) {
+      task = it->second;
+    }
+  }
+  if (task) {
+    task->Terminate();
+  }
+}
+
+void AMCompleteEngine::SetOnAirTask_(
+    AMCompletionTarget target, const std::shared_ptr<ICompletionTask> &task) {
+  if (!task) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(async_on_air_mtx_);
+  async_on_air_tasks_[target] = task;
+}
+
+void AMCompleteEngine::ClearOnAirTask_(
+    AMCompletionTarget target, const std::shared_ptr<ICompletionTask> &task) {
+  std::lock_guard<std::mutex> lock(async_on_air_mtx_);
+  auto it = async_on_air_tasks_.find(target);
+  if (it == async_on_air_tasks_.end()) {
+    return;
+  }
+  if (it->second == task) {
+    async_on_air_tasks_.erase(it);
+  }
 }
 
 /**
  * @brief Interrupt and clear queued/inflight async requests.
  */
 void AMCompleteEngine::CancelPendingAsyncRequests_() {
+  std::vector<std::shared_ptr<ICompletionTask>> tasks_to_cancel = {};
   {
     std::lock_guard<std::mutex> lock(async_queue_mtx_);
+    tasks_to_cancel.reserve(async_queue_.size());
+    for (auto &queued : async_queue_) {
+      if (queued.task) {
+        tasks_to_cancel.push_back(queued.task);
+      }
+    }
     async_queue_.clear();
   }
 
   {
-    std::lock_guard<std::mutex> lock(async_interrupts_mtx_);
-    for (auto &cancel : async_interrupts_) {
-      if (cancel) {
-        cancel();
+    std::lock_guard<std::mutex> lock(async_on_air_mtx_);
+    tasks_to_cancel.reserve(tasks_to_cancel.size() + async_on_air_tasks_.size());
+    for (const auto &entry : async_on_air_tasks_) {
+      if (entry.second) {
+        tasks_to_cancel.push_back(entry.second);
       }
     }
-    async_interrupts_.clear();
+    async_on_air_tasks_.clear();
+  }
+
+  for (const auto &task : tasks_to_cancel) {
+    if (task) {
+      task->Terminate();
+    }
   }
 
   {
@@ -467,7 +634,7 @@ void AMCompleteEngine::ConsumeAsyncResults_(const AMCompletionContext &ctx,
  */
 void AMCompleteEngine::AsyncWorkerLoop_() {
   while (true) {
-    AMCompletionAsyncJob request;
+    AMCompletionAsyncTask request;
     {
       std::unique_lock<std::mutex> lock(async_queue_mtx_);
       async_queue_cv_.wait(lock, [this]() {
@@ -482,42 +649,44 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
       async_queue_.pop_front();
     }
 
-    if (request.request_id != CurrentRequestId()) {
+    if (!request.task) {
       continue;
     }
-    if (request.IsInterrupted()) {
+    SetOnAirTask_(request.target, request.task);
+
+    if (request.request_id !=
+        desired_request_id_.load(std::memory_order_acquire)) {
+      request.task->Terminate();
+      ClearOnAirTask_(request.target, request.task);
       continue;
     }
 
-    if (request.context.search_delay_ms > 0) {
-      std::this_thread::sleep_for(
-          std::chrono::milliseconds(request.context.search_delay_ms));
-      if (request.IsInterrupted()) {
-        continue;
-      }
-    }
+    request.task->Run();
+    ClearOnAirTask_(request.target, request.task);
 
     AMCompletionAsyncResult result;
     result.request_id = request.request_id;
     result.mode = request.mode;
     result.target = request.target;
     result.source_engine = request.source_engine;
-    auto engine = request.source_engine.lock();
-    if (!engine) {
-      continue;
-    }
-    AMCompletionCandidates collected = engine->CollectCandidates(request.context);
-    if (request.IsInterrupted() || collected.items.empty()) {
+    if (result.request_id !=
+        desired_request_id_.load(std::memory_order_acquire)) {
       continue;
     }
 
-    engine->SortCandidates(request.context, collected.items);
-    result.candidates = std::move(collected.items);
-    result.from_cache = collected.from_cache;
-
-    if (result.request_id != CurrentRequestId()) {
+    const CompletionTaskState state = request.task->State();
+    if (state == CompletionTaskState::Canceled ||
+        state == CompletionTaskState::Pending ||
+        state == CompletionTaskState::Running) {
       continue;
     }
+    const auto task_result = request.task->Result();
+    if (!(task_result.rcm) || task_result.data.items.empty()) {
+      continue;
+    }
+
+    result.candidates = task_result.data.items;
+    result.from_cache = task_result.data.from_cache;
 
     {
       std::lock_guard<std::mutex> lock(async_results_mtx_);

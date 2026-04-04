@@ -72,6 +72,11 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   return result;
 }
 
+std::shared_ptr<AMInterface::completer::ICompletionTask>
+AMPathSearchEngine::CreateTask(const AMCompletionContext &ctx) {
+  return AMCompletionSearchEngine::CreateTask(ctx);
+}
+
 /**
  * @brief Sort path candidates.
  */

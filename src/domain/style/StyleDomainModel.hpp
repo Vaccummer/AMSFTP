@@ -6,15 +6,9 @@
 namespace AMDomain::style {
 
 struct CompleteMenuStyle {
-  int64_t maxnum = 999;
-  int64_t maxrows_perpage = 5;
   std::string item_select_sign = ">";
-  bool number_pick = false;
-  bool auto_fillin = false;
   std::string order_num_style = "";
   std::string help_style = "";
-  int64_t complete_delay_ms = 100;
-  int64_t async_workers = 2;
 };
 
 struct TableStyle {
