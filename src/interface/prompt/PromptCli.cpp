@@ -1,6 +1,5 @@
 #include "Isocline/isocline.h"
 #include "foundation/tools/string.hpp"
-#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
@@ -590,9 +589,8 @@ void PromptIOManager::RefreshEnd() {
   if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
     (void)profile->Use();
   }
-  const bool detached_mode =
-      io_state_.refresh_detached_mode_.exchange(false,
-                                                std::memory_order_relaxed);
+  const bool detached_mode = io_state_.refresh_detached_mode_.exchange(
+      false, std::memory_order_relaxed);
   const int cleared_rows = painted_refresh_rows_;
   ClearRefreshLocked_();
   if (detached_mode && cleared_rows > 0) {
@@ -627,13 +625,12 @@ void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
 
 /** Prompt for a yes/no response. */
 bool PromptIOManager::PromptYesNo(const std::string &prompt, bool *canceled) {
-  std::string answer = "";
-  bool is_cancel =
-      LiteralPrompt(prompt, "", &answer, {{"y", "yes"}, {"n", "no"}});
+  auto answer = LiteralPrompt(
+      prompt, "", {{"y", "yes"}, {"n", "no"}, {"Y", "yes"}, {"N", "no"}});
   if (canceled) {
-    *canceled = !is_cancel;
+    *canceled = !answer.has_value();
   }
-  return answer == "y";
+  return answer.has_value() && AMStr::lowercase(AMStr::Strip(*answer)) == "y";
 }
 
 void PromptIOManager::ClearScreen(bool clear_scrollback) {
@@ -656,6 +653,14 @@ void PromptIOManager::UseAlternateScreen(bool enable) {
     ic_print("\x1b[?1049l");
   }
   ic_term_flush();
+}
+
+void PromptIOManager::SetCursorVisible(bool visible) {
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+    (void)profile->Use();
+  }
+  ic_term_set_cursor_visible(visible);
 }
 
 /** Prompt for a line of input with optional defaults.
@@ -695,14 +700,11 @@ bool PromptIOManager::PromptLine(const std::string &prompt, std::string *out,
 }
 */
 
-bool PromptIOManager::Prompt(
+std::optional<std::string> PromptIOManager::Prompt(
     const std::string &prompt, const std::string &placeholder,
-    std::string *out_input,
     const std::function<bool(const std::string &)> &checker,
-    const std::vector<std::pair<std::string, std::string>> &candidates) {
-  if (!out_input) {
-    return true;
-  }
+    const std::vector<std::pair<std::string, std::string>> &candidates,
+    const PromptReadOptions &options) {
 
   PromptValueQueryContext query_ctx;
   query_ctx.checker = checker ? &checker : nullptr;
@@ -724,6 +726,22 @@ bool PromptIOManager::Prompt(
     highlighter = &PromptValueQueryHighlight_;
     highlighter_arg = &query_ctx;
   }
+  if (options.completer.has_value()) {
+    completer = options.completer.value();
+    completer_arg = options.completer_data.has_value()
+                        ? options.completer_data.value()
+                        : completer_arg;
+  } else if (options.completer_data.has_value()) {
+    completer_arg = options.completer_data.value();
+  }
+  if (options.highlighter.has_value()) {
+    highlighter = options.highlighter.value();
+    highlighter_arg = options.highlighter_data.has_value()
+                          ? options.highlighter_data.value()
+                          : highlighter_arg;
+  } else if (options.highlighter_data.has_value()) {
+    highlighter_arg = options.highlighter_data.value();
+  }
 
   // ScopedPrintCacheLockGuard_ lock(*this);
   // ScopedPromptHookGuard_ hooklock;
@@ -732,7 +750,7 @@ bool PromptIOManager::Prompt(
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
   char *line = nullptr;
   ScopedAtomicFlag_ prompt_active_guard(&io_state_.prompt_active_);
-  auto profile = CurrentProfile_(isocline_profile_manager_);
+  auto profile = isocline_profile_manager_.CurrentProfile();
   if (profile && profile->Use()) {
     std::optional<ic_completer_fun_t *> completer_opt = std::nullopt;
     std::optional<void *> completer_data_opt = std::nullopt;
@@ -761,20 +779,19 @@ bool PromptIOManager::Prompt(
     line = ic_readline_ex(prompt.c_str(), initial);
   }
   if (!line) {
-    return false;
+    return std::nullopt;
   }
   // isocline_profile_manager_.RemoveLastHistoryEntry();
-  *out_input = std::string(line);
+  std::string out = line;
   ic_free(line);
-  return true;
+  return out;
 }
 
 /**
  * @brief Prompt for one literal value using a literal->help dictionary.
  */
-bool PromptIOManager::LiteralPrompt(
+std::optional<std::string> PromptIOManager::LiteralPrompt(
     const std::string &prompt, const std::string &placeholder,
-    std::string *out_input,
     const std::vector<std::pair<std::string, std::string>> &literals) {
   std::function<bool(const std::string &)> literal_checker;
   if (!literals.empty()) {
@@ -785,21 +802,14 @@ bool PromptIOManager::LiteralPrompt(
           [&normalized](const auto &item) { return item.first == normalized; });
     };
   }
-  return Prompt(prompt, placeholder, out_input, literal_checker, literals);
+  return Prompt(prompt, placeholder, literal_checker, literals);
 }
 
 /**
  * @brief Prompt for a command line using the shared readline handle.
  */
-bool PromptIOManager::PromptCore(
-    const std::string &prompt, std::string *out_input,
-    AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer) {
-
-  if (!out_input) {
-    return true;
-  }
-  out_input->clear();
-
+std::optional<std::string> PromptIOManager::PromptCore(
+    const std::string &prompt) {
   std::string prompt_header;
   std::string prompt_line;
   SplitPromptForReadline_(prompt, &prompt_header, &prompt_line);
@@ -814,46 +824,32 @@ bool PromptIOManager::PromptCore(
   ScopedAtomicFlag_ prompt_active_guard(&io_state_.prompt_active_);
   auto profile = CurrentProfile_(isocline_profile_manager_);
   if (profile && profile->Use()) {
-    std::optional<ic_highlight_fun_t *> highlighter_opt =
-        &AMInterface::parser::TokenTypeAnalyzer::PromptHighlighter_;
-    std::optional<void *> highlighter_data_opt = token_type_analyzer;
-    auto highlighter_guard =
-        profile->TemporarySetHighlighter(highlighter_opt, highlighter_data_opt);
-    (void)highlighter_guard;
     line = ic_readline_ex(prompt_line.c_str(), nullptr);
   } else {
-    ic_set_default_highlighter(
-        &AMInterface::parser::TokenTypeAnalyzer::PromptHighlighter_,
-        token_type_analyzer);
     line = ic_readline_ex(prompt_line.c_str(), nullptr);
   }
   if (!line) {
     ClearActivePromptHeader_();
-    return false;
+    return std::nullopt;
   }
   // isocline_profile_manager_.RemoveLastHistoryEntry();
-  *out_input = std::string(line);
+  std::string out = line;
   ic_free(line);
   ClearActivePromptHeader_();
-  return true;
+  return out;
 }
 
-bool PromptIOManager::SecurePrompt(const std::string &prompt,
-                                   std::string *out_input) {
-  if (!out_input) {
-    return true;
-  }
-  out_input->clear();
+std::optional<std::string> PromptIOManager::SecurePrompt(
+    const std::string &prompt) {
   ScopedAtomicFlag_ secure_phase_guard(&io_state_.secure_phase_);
 
-  auto profile = CurrentProfile_(isocline_profile_manager_);
   char *line = ic_readline_secure(prompt.c_str(), nullptr);
   if (!line) {
-    return false;
+    return std::nullopt;
   }
-  *out_input = std::string(line);
+  std::string out = line;
   ic_free(line);
-  return true;
+  return out;
 }
 
 } // namespace AMInterface::prompt
