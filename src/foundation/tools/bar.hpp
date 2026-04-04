@@ -112,6 +112,21 @@ public:
     speed_bps_ = 0.0;
   }
 
+  /**
+   * @brief Start tracing with a pre-existing elapsed duration.
+   * @param elapsed_ms Elapsed milliseconds already consumed by the task.
+   */
+  void StartTraceWithElapsedMs(int64_t elapsed_ms) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    const auto now = std::chrono::steady_clock::now();
+    const int64_t clamped_elapsed_ms = std::max<int64_t>(0, elapsed_ms);
+    start_time_ = now - std::chrono::milliseconds(clamped_elapsed_ms);
+    last_update_time_ = now;
+    last_update_size_ = current_size_;
+    speed_samples_.clear();
+    speed_bps_ = 0.0;
+  }
+
   std::string Render(const RenderArgs &args) {
     std::lock_guard<std::mutex> lock(mtx_);
     if (args.total >= 0) {

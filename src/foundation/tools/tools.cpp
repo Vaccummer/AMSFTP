@@ -2,6 +2,7 @@
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
 #include <array>
+#include <cmath>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +12,76 @@
 
 namespace {
 namespace fs = std::filesystem;
+std::string FormatScaledBinary_(double value, int max_nums, int max_point,
+                                size_t pad_width, bool pad_left,
+                                bool per_second) {
+  static const std::array<const char *, 5> kUnits = {"B", "KB", "MB", "GB",
+                                                      "TB"};
+  if (!std::isfinite(value) || value < 0.0) {
+    value = 0.0;
+  }
+  const int safe_max_nums = std::max(1, max_nums);
+  const int safe_max_point = std::max(0, max_point);
+  double max_value = 1.0;
+  for (int i = 0; i < safe_max_nums; ++i) {
+    max_value *= 10.0;
+  }
+  max_value -= 1.0;
+
+  size_t unit_idx = 0;
+  while (value > max_value && unit_idx + 1 < kUnits.size()) {
+    value /= 1024.0;
+    ++unit_idx;
+  }
+
+  const double point_scale = std::pow(10.0, static_cast<double>(safe_max_point));
+  if (point_scale > 0.0) {
+    const double rounded = std::round(value * point_scale) / point_scale;
+    if (rounded > max_value && unit_idx + 1 < kUnits.size()) {
+      value /= 1024.0;
+      ++unit_idx;
+    } else {
+      value = rounded;
+    }
+  }
+
+  auto format_out = [&](int precision) -> std::string {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(std::max(0, precision)) << value;
+    std::string number = oss.str();
+    if (precision > 0) {
+      while (!number.empty() && number.back() == '0') {
+        number.pop_back();
+      }
+      if (!number.empty() && number.back() == '.') {
+        number.pop_back();
+      }
+    }
+    if (number.empty()) {
+      number = "0";
+    }
+    std::string out_local = AMStr::fmt("{}{}", number, kUnits[unit_idx]);
+    if (per_second) {
+      out_local += "/s";
+    }
+    return out_local;
+  };
+
+  int precision = safe_max_point;
+  std::string out = format_out(precision);
+  while (pad_width > 0 && out.size() > pad_width && precision > 0) {
+    --precision;
+    out = format_out(precision);
+  }
+  if (pad_width == 0 || out.size() >= pad_width) {
+    return out;
+  }
+  if (pad_left) {
+    return AMStr::PadLeftAscii(out, pad_width);
+  }
+  return AMStr::PadRightAscii(out, pad_width);
+}
+
 int HexToInt_(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -618,6 +689,18 @@ std::string PadLeftAscii(std::string_view value, size_t width) {
   return out;
 }
 
+std::string PadRightAscii(std::string_view value, size_t width) {
+  if (width == 0) {
+    return {};
+  }
+  if (value.size() >= width) {
+    return std::string(value.substr(0, width));
+  }
+  std::string out(value);
+  out.append(width - value.size(), ' ');
+  return out;
+}
+
 size_t CountLines(const std::string &text) {
   if (text.empty()) {
     return 0;
@@ -659,6 +742,25 @@ std::string FormatSize(int64_t size) {
     return "0B";
   }
   return AMStr::FormatSize(static_cast<size_t>(size));
+}
+
+std::string FormatSize(size_t size, int max_nums, int max_point,
+                       size_t pad_width, bool pad_left) {
+  return FormatScaledBinary_(static_cast<double>(size), max_nums, max_point,
+                             pad_width, pad_left, false);
+}
+
+std::string FormatSize(int64_t size, int max_nums, int max_point,
+                       size_t pad_width, bool pad_left) {
+  const int64_t safe_size = std::max<int64_t>(0, size);
+  return FormatScaledBinary_(static_cast<double>(safe_size), max_nums,
+                             max_point, pad_width, pad_left, false);
+}
+
+std::string FormatSpeed(double bytes_per_second, int max_nums, int max_point,
+                        size_t pad_width, bool pad_left) {
+  return FormatScaledBinary_(bytes_per_second, max_nums, max_point, pad_width,
+                             pad_left, true);
 }
 
 bool GetEnv(std::string_view key, std::string *target) {
