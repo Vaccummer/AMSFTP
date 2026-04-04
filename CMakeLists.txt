@@ -4,6 +4,9 @@ project(AMSFTP LANGUAGES C CXX)
 option(AMSFTP_ENABLE_LAYER_CHECK
        "Enable Workflow-0 layered include dependency check target"
        ON)
+set(AMSFTP_LINK_MODE "dynamic" CACHE STRING
+    "Link mode for AMSFTP dependencies: dynamic or static")
+set_property(CACHE AMSFTP_LINK_MODE PROPERTY STRINGS dynamic static)
 
 # ========= C++ Standard =========
 set(CMAKE_CXX_STANDARD 17)
@@ -20,10 +23,15 @@ find_package(libssh2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
-# ========= MSVC Runtime (/MD /MDd) =========
+# ========= MSVC Runtime (/MD /MDd or /MT /MTd) =========
 if (MSVC)
-  set(CMAKE_MSVC_RUNTIME_LIBRARY
-      "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+  if (AMSFTP_LINK_MODE STREQUAL "static")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY
+        "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  else()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY
+        "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+  endif()
 endif()
 
 # ========= Source Files =========
@@ -114,6 +122,15 @@ find_library(CFGFFI_LIB NAMES cfgffi
     "${PROJECT_SOURCE_DIR}/tomlread/target/debug"
   NO_DEFAULT_PATH
 )
+if (NOT CFGFFI_LIB)
+  # Rust cdylib on Windows commonly emits import library as cfgffi.dll.lib.
+  find_file(CFGFFI_LIB NAMES cfgffi.dll.lib cfgffi.lib
+    PATHS
+      "${PROJECT_SOURCE_DIR}/tomlread/target/release"
+      "${PROJECT_SOURCE_DIR}/tomlread/target/debug"
+    NO_DEFAULT_PATH
+  )
+endif()
 find_file(CFGFFI_DLL NAMES cfgffi.dll
   PATHS
     "${PROJECT_SOURCE_DIR}/tomlread/target/release"
