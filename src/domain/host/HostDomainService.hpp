@@ -8,6 +8,7 @@
 namespace AMDomain::host {
 inline constexpr int DefaultSFTPPort = 22;
 inline constexpr int DefaultFTPPort = 21;
+inline constexpr int DefaultHTTPPort = 80;
 inline const std::string klocalname = "local";
 namespace HostService {
 using HostConfigMap = std::map<std::string, HostConfig>;
@@ -48,34 +49,43 @@ template <typename T>
 [[nodiscard]] inline ECM ValidateFieldValue(ConRequest::Attr attr, T value) {
   auto invalid_type = [attr]() -> ECM {
     if (attr == ConRequest::Attr::nickname) {
-      return Err(EC::InvalidArg, "", "", "Invalid type for nickname, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "Invalid type for nickname, expected string-like type");
     }
     if (attr == ConRequest::Attr::hostname) {
-      return Err(EC::InvalidArg, "", "", "Invalid type for hostname, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "Invalid type for hostname, expected string-like type");
     }
     if (attr == ConRequest::Attr::username) {
-      return Err(EC::InvalidArg, "", "", "Invalid type for username, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "Invalid type for username, expected string-like type");
     }
     if (attr == ConRequest::Attr::protocol) {
-      return Err(EC::InvalidArg, "", "", "Invalid type for protocol, expected ClientProtocol or "
+      return Err(EC::InvalidArg, "", "",
+                 "Invalid type for protocol, expected ClientProtocol or "
                  "string-like type");
     }
     if (attr == ConRequest::Attr::port) {
-      return Err(EC::InvalidArg, "", "", "Invalid type for port, expected integer or string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "Invalid type for port, expected integer or string-like type");
     }
     if (attr == ConRequest::Attr::password ||
         attr == ConRequest::Attr::keyfile) {
-      return Err(EC::InvalidArg, "", "", "Invalid type for path/text field, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "Invalid type for path/text field, expected string-like type");
     }
     if (attr == ConRequest::Attr::buffer_size) {
-      return Err(EC::InvalidArg, "", "", "Invalid type for buffer_size, expected integer or "
+      return Err(EC::InvalidArg, "", "",
+                 "Invalid type for buffer_size, expected integer or "
                  "string-like type");
     }
     if (attr == ConRequest::Attr::compression) {
-      return Err(EC::InvalidArg, "", "", "Invalid type for compression, expected bool or "
+      return Err(EC::InvalidArg, "", "",
+                 "Invalid type for compression, expected bool or "
                  "string-like type");
     }
-    return Err(EC::InvalidArg, "", "", AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
+    return Err(EC::InvalidArg, "", "",
+               AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   };
 
   using DT = std::decay_t<T>;
@@ -102,7 +112,8 @@ template <typename T>
     if (attr == ConRequest::Attr::port) {
       const int64_t port_value = static_cast<int64_t>(value);
       if (port_value <= 0 || port_value > 65535) {
-        return Err(EC::InvalidArg, "", "", "Port must be an integer between 1 and 65535");
+        return Err(EC::InvalidArg, "", "",
+                   "Port must be an integer between 1 and 65535");
       }
       return OK;
     }
@@ -118,7 +129,8 @@ template <typename T>
     if (attr == ConRequest::Attr::nickname) {
       const std::string text = AMStr::Strip(text_value);
       if (!ValidateNickname(text)) {
-        return Err(EC::InvalidArg, "", "", "Invalid nickname: only alphanumeric, underscore, and "
+        return Err(EC::InvalidArg, "", "",
+                   "Invalid nickname: only alphanumeric, underscore, and "
                    "hyphen characters are allowed");
       }
       return OK;
@@ -140,17 +152,20 @@ template <typename T>
 
     if (attr == ConRequest::Attr::protocol) {
       const std::string text = AMStr::lowercase(AMStr::Strip(text_value));
-      if (text == "sftp" || text == "ftp" || text == "local") {
+      if (text == "sftp" || text == "ftp" || text == "local" ||
+          text == "http") {
         return OK;
       }
-      return Err(EC::InvalidArg, "", "", "Protocol must be sftp, ftp, or local");
+      return Err(EC::InvalidArg, "", "",
+                 "Protocol must be sftp, ftp, local, or http");
     }
 
     if (attr == ConRequest::Attr::port) {
       int64_t parsed_port = 0;
       if (!AMStr::GetNumber(text_value, &parsed_port) || parsed_port <= 0 ||
           parsed_port > 65535) {
-        return Err(EC::InvalidArg, "", "", "Port must be an integer between 1 and 65535");
+        return Err(EC::InvalidArg, "", "",
+                   "Port must be an integer between 1 and 65535");
       }
       return OK;
     }
@@ -163,7 +178,9 @@ template <typename T>
     if (attr == ConRequest::Attr::buffer_size) {
       int64_t parsed_size = 0;
       if (!AMStr::GetNumber(text_value, &parsed_size)) {
-        return Err(EC::InvalidArg, "", "", "No number found in buffer_size text, or value out of range");
+        return Err(
+            EC::InvalidArg, "", "",
+            "No number found in buffer_size text, or value out of range");
       }
       return OK;
     }
@@ -176,7 +193,8 @@ template <typename T>
       return OK;
     }
 
-    return Err(EC::InvalidArg, "", "", AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
+    return Err(EC::InvalidArg, "", "",
+               AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   }
 
   return invalid_type();
@@ -189,9 +207,11 @@ template <typename T>
         attr == ClientMetaData::Attr::login_dir ||
         attr == ClientMetaData::Attr::cwd ||
         attr == ClientMetaData::Attr::cmd_template) {
-      return Err(EC::InvalidArg, "", "", "invalid type: expected string-like value");
+      return Err(EC::InvalidArg, "", "",
+                 "invalid type: expected string-like value");
     }
-    return Err(EC::InvalidArg, "", "", AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
+    return Err(EC::InvalidArg, "", "",
+               AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   };
 
   using DT = std::decay_t<T>;
@@ -204,7 +224,8 @@ template <typename T>
         attr == ClientMetaData::Attr::cmd_template) {
       return OK;
     }
-    return Err(EC::InvalidArg, "", "", AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
+    return Err(EC::InvalidArg, "", "",
+               AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   }
 
   return invalid_type();
@@ -222,24 +243,31 @@ template <typename T>
                                             T value) {
   auto invalid_type = [attr]() -> ECM {
     if (attr == KnownHostQuery::Attr::port) {
-      return Err(EC::InvalidArg, "", "", "invalid type for port, expected integer or string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "invalid type for port, expected integer or string-like type");
     }
     if (attr == KnownHostQuery::Attr::nickname) {
-      return Err(EC::InvalidArg, "", "", "invalid type for nickname, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "invalid type for nickname, expected string-like type");
     }
     if (attr == KnownHostQuery::Attr::hostname) {
-      return Err(EC::InvalidArg, "", "", "invalid type for hostname, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "invalid type for hostname, expected string-like type");
     }
     if (attr == KnownHostQuery::Attr::protocol) {
-      return Err(EC::InvalidArg, "", "", "invalid type for protocol, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "invalid type for protocol, expected string-like type");
     }
     if (attr == KnownHostQuery::Attr::username) {
-      return Err(EC::InvalidArg, "", "", "invalid type for username, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "invalid type for username, expected string-like type");
     }
     if (attr == KnownHostQuery::Attr::fingerprint) {
-      return Err(EC::InvalidArg, "", "", "invalid type for fingerprint, expected string-like type");
+      return Err(EC::InvalidArg, "", "",
+                 "invalid type for fingerprint, expected string-like type");
     }
-    return Err(EC::InvalidArg, "", "", AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
+    return Err(EC::InvalidArg, "", "",
+               AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   };
 
   using DT = std::decay_t<T>;
@@ -251,7 +279,8 @@ template <typename T>
     }
     const int64_t numeric_value = static_cast<int64_t>(value);
     if (numeric_value <= 0 || numeric_value > 65535) {
-      return Err(EC::InvalidArg, "", "", "port must be an integer between 1 and 65535");
+      return Err(EC::InvalidArg, "", "",
+                 "port must be an integer between 1 and 65535");
     }
     return OK;
   }
@@ -264,7 +293,8 @@ template <typename T>
         return OK;
       }
       if (!HostService::ValidateNickname(text)) {
-        return Err(EC::InvalidArg, "", "", "Invalid nickname: only alphanumeric, underscore, and "
+        return Err(EC::InvalidArg, "", "",
+                   "Invalid nickname: only alphanumeric, underscore, and "
                    "hyphen characters are allowed");
       }
       return OK;
@@ -279,7 +309,8 @@ template <typename T>
       int64_t parsed_port = 0;
       if (!AMStr::GetNumber(text_value, &parsed_port) || parsed_port <= 0 ||
           parsed_port > 65535) {
-        return Err(EC::InvalidArg, "", "", "port must be an integer between 1 and 65535");
+        return Err(EC::InvalidArg, "", "",
+                   "port must be an integer between 1 and 65535");
       }
       return OK;
     }
@@ -298,7 +329,8 @@ template <typename T>
       }
       return OK;
     }
-    return Err(EC::InvalidArg, "", "", AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
+    return Err(EC::InvalidArg, "", "",
+               AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   }
 
   return invalid_type();

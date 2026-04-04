@@ -1396,7 +1396,7 @@ public:
     bool type_match = false;
     std::any *payload = nullptr;
     if (name_found) {
-      type_match = (std::type_index(typeid(it->second)) == type_key);
+      type_match = (std::type_index(it->second.type()) == type_key);
       payload = type_match ? &(it->second) : nullptr;
     }
     mutator(payload, name_found, type_match);

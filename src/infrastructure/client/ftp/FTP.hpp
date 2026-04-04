@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <ctime>
 #include <fcntl.h>
-#include <iostream>
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -1030,6 +1029,13 @@ public:
     return realsize;
   }
 
+  static size_t DiscardWriteCallback(void *contents, size_t size, size_t nmemb,
+                                     void *userp) {
+    (void)contents;
+    (void)userp;
+    return size * nmemb;
+  }
+
   static OS_TYPE ParseSystResponseToOs(const std::string &response) {
     const std::string lowered = AMStr::lowercase(response);
     if (lowered.empty()) {
@@ -1088,6 +1094,12 @@ public:
     curl_easy_setopt(curl, CURLOPT_URL, current_url.c_str());
     curl_easy_setopt(curl, CURLOPT_USERNAME, request.username.c_str());
     curl_easy_setopt(curl, CURLOPT_PASSWORD, decrypted_password.c_str());
+    // Prevent accidental stdout/stderr leakage from libcurl when a call does
+    // not install explicit body/header handlers.
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, DiscardWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, nullptr);
     return OK;
   }
 
@@ -1306,10 +1318,9 @@ public:
       return {AMFSI::StatResult{info}, std::move(rcm)};
     }
 
-    rcm = {detail::CastCurlEC(nb_res.value), "Common_libstat", path,
-           AMStr::fmt("Common_libstat {} error: {}", path,
-                      curl_easy_strerror(nb_res.value)),
-           RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
+    // Keep error mapping consistent with other FTP calls so path-not-exist
+    // is classified correctly (instead of collapsing to UnknownError).
+    rcm = NBResultToECM(nb_res, "Common_libstat", path);
     return {std::move(rcm)};
   }
 

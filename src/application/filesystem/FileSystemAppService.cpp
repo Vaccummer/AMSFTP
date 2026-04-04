@@ -160,20 +160,20 @@ FilesystemAppService::GetClientHome(ClientHandle client,
 }
 
 ECMData<std::string>
-FilesystemAppService::GetClientCwd(ClientHandle client,
+FilesystemAppService::GetClientCwd(const ClientHandle &client,
                                    const ClientControlComponent &control) {
   if (!client) {
     return {"", Err(EC::InvalidHandle, "", "", "Client handle is null")};
   }
   auto meta_cwd = ClientAppService::GetClientCwd(client);
-  if ((meta_cwd.rcm) && !AMStr::Strip(meta_cwd.data).empty()) {
-    return {AMDomain::filesystem::services::NormalizePath(meta_cwd.data), OK};
+  if (meta_cwd.rcm && !AMStr::Strip(meta_cwd.data).empty()) {
+    return {meta_cwd.data, OK};
   }
   auto home_res = GetClientHome(client, control);
   if (!(home_res.rcm)) {
     return {"", home_res.rcm};
   }
-  return {AMDomain::filesystem::services::NormalizePath(home_res.data), OK};
+  return {home_res.data, OK};
 }
 
 ECMData<std::string> FilesystemAppService::ResolveAbsolutePath(
@@ -315,7 +315,7 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
                                     const ClientControlComponent &control,
                                     bool from_history) {
   auto resolved_result = ResolvePath(path, control);
-  if (!(resolved_result.rcm) || !resolved_result.data.client) {
+  if (!resolved_result.rcm || !resolved_result.data.client) {
     return (resolved_result.rcm)
                ? Err(EC::InvalidHandle, "", "", "Resolved client is null")
                : resolved_result.rcm;
@@ -325,38 +325,29 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
 
   auto metadata_opt = ClientAppService::GetClientMetadata(client);
   if (!metadata_opt.has_value()) {
-    return Err(EC::CommonFailure, "", "", "Client metadata not found");
+    return {EC::CommonFailure, "", "", "Client metadata not found"};
   }
   ClientMetaData metadata = *metadata_opt;
   const std::string prev_cwd = metadata.cwd;
   const std::string abs_target = resolved.abs_path;
   auto stat_result = client->IOPort().stat({abs_target, false}, control);
-  if (!(stat_result.rcm)) {
+  if (!stat_result.rcm) {
     return stat_result.rcm;
   }
   if (stat_result.data.info.type != PathType::DIR) {
-    return Err(EC::NotADirectory, "", "",
-               AMStr::fmt("Not a directory: {}", abs_target));
+    return {EC::NotADirectory, "ChangeDir", abs_target, "Not a directory: {}"};
   }
-  std::string resolved_target =
-      AMDomain::filesystem::services::NormalizePath(stat_result.data.info.path);
-  if (resolved_target.empty()) {
-    resolved_target = AMDomain::filesystem::services::NormalizePath(abs_target);
-  }
-  if (resolved_target.empty()) {
-    resolved_target = abs_target;
-  }
-
-  metadata.cwd = resolved_target;
+  metadata.cwd = stat_result.data.info.path;
   const ECM set_meta_rcm =
       ClientAppService::SetClientMetadata(client, metadata);
-  if (!(set_meta_rcm)) {
+  if (!set_meta_rcm) {
     return set_meta_rcm;
   }
 
   client_service_->SetCurrentClient(client);
 
-  if (!from_history && !prev_cwd.empty() && prev_cwd != resolved_target) {
+  if (!from_history && !prev_cwd.empty() &&
+      prev_cwd != stat_result.data.info.path) {
     auto history = cd_history_.lock();
     auto list = history.load();
     PathTarget entry = {};

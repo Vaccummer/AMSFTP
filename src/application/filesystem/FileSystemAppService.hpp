@@ -54,6 +54,12 @@ struct BuildTransferTaskResult {
   std::vector<WarningItem> warnings = {};
 };
 
+struct HttpDownloadPlan {
+  PathTarget final_target = {};
+  ResolvedPath resolved_target = {};
+  std::optional<PathInfo> dst_info = std::nullopt;
+};
+
 struct PermanentRemovePlan {
   std::map<std::string, std::vector<PathTarget>> grouped_display_paths = {};
   std::vector<ResolvedPath> ordered_delete_paths = {};
@@ -80,7 +86,8 @@ public:
   [[nodiscard]] static ECMData<std::string>
   GetClientHome(ClientHandle client, const ClientControlComponent &control);
   [[nodiscard]] static ECMData<std::string>
-  GetClientCwd(ClientHandle client, const ClientControlComponent &control);
+  GetClientCwd(const ClientHandle &client,
+               const ClientControlComponent &control);
   [[nodiscard]] static ECMData<std::string>
   ResolveAbsolutePath(ClientHandle client, const std::string &raw_path,
                       const ClientControlComponent &control);
@@ -157,8 +164,14 @@ public:
       const ClientControlComponent &control, bool error_stop = true);
 
   [[nodiscard]] ECMData<BuildTransferTaskResult>
-  BuildTransferTasks(const SourceResolveResult &src, const DstResolveResult &dst,
+  BuildTransferTasks(const SourceResolveResult &src,
+                     const DstResolveResult &dst,
                      const ClientControlComponent &control,
                      const BuildTransferTaskOptions &opt);
+
+  [[nodiscard]] ECMData<HttpDownloadPlan> BuildHttpDownloadPlan(
+      const std::optional<PathTarget> &dst_target,
+      const std::string &suggested_filename,
+      const ClientControlComponent &control);
 };
 } // namespace AMApplication::filesystem

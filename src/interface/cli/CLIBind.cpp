@@ -1,6 +1,5 @@
 #include "interface/cli/CLIBind.hpp"
 #include "CLI/App.hpp"
-#include "foundation//tools/enum_related.hpp"
 #include "interface/parser/CommandTree.hpp"
 
 namespace AMInterface::cli {
@@ -452,8 +451,9 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
   if (cp_node) {
     cp_node->AddOption("-o", "--output", args.cp->output, 1, 1, Sem::Path,
                        "Destination path (optional)");
-    cp_node->AddOption("-t", "--timeout", args.cp->timeout_ms, 1, 1, Sem::None,
-                       "Transfer timeout in milliseconds (<=0 means no timeout)");
+    cp_node->AddOption(
+        "-t", "--timeout", args.cp->timeout_ms, 1, 1, Sem::None,
+        "Transfer timeout in milliseconds (<=0 means no timeout)");
     cp_node->AddFlag("-f", "--force", args.cp->overwrite,
                      "Overwrite existing targets");
     cp_node->AddFlag("-n", "--no-mkdir", args.cp->no_mkdir,
@@ -469,9 +469,9 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     cp_node->AddPositionalRule(0, Sem::Path, true);
   }
 
-  CommandNode *clone_node = root->AddFunction(
-      "clone", "Clone one source to one destination (cp -c)", args,
-      &CliArgsPool::clone);
+  CommandNode *clone_node =
+      root->AddFunction("clone", "Clone one source to one destination (cp -c)",
+                        args, &CliArgsPool::clone);
   commands.clone_cmd = clone_node ? clone_node->app : nullptr;
   if (commands.clone_cmd) {
     commands.clone_cmd->add_option("src", args.clone->src, "Source path")
@@ -480,6 +480,10 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     commands.clone_cmd->add_option("dst", args.clone->dst, "Destination path")
         ->required()
         ->expected(1, 1);
+    commands.clone_cmd
+        ->add_option("suffix", args.clone->async_suffix,
+                     "Optional async suffix (&)")
+        ->expected(0, 1);
   }
   if (clone_node) {
     clone_node->AddFlag("-f", "--force", args.clone->overwrite,
@@ -490,6 +494,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
                         "Suppress transfer output");
     clone_node->AddPositionalRule(0, Sem::Path, false);
     clone_node->AddPositionalRule(1, Sem::Path, false);
+    clone_node->AddPositionalRule(2, Sem::None, false);
   }
 
   CommandNode *wget_node = root->AddFunction(
@@ -509,12 +514,16 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
                          Sem::None,
                          "Transfer timeout in milliseconds (<=0 means no "
                          "timeout)");
-    wget_node->AddOption("-b", "--bear", args.wget->bear_token, 1, 1,
-                         Sem::None, "Bearer token");
+    wget_node->AddOption("-b", "--bear", args.wget->bear_token, 1, 1, Sem::None,
+                         "Bearer token");
     wget_node->AddOption("-p", "--proxy", args.wget->proxy, 1, 1, Sem::None,
                          "HTTP proxy");
     wget_node->AddOption("-s", "--sproxy", args.wget->sproxy, 1, 1, Sem::None,
                          "HTTPS proxy");
+    wget_node->AddOption("-R", "--redirect", args.wget->redirect_times, 1, 1,
+                         Sem::None,
+                         "Max redirect hops (default from "
+                         "Options.FileSystem.wget_max_redirect)");
     wget_node->AddFlag("-r", "--resume", args.wget->resume,
                        "Resume from existing destination file when possible");
     wget_node->AddFlag("-f", "--force", args.wget->overwrite,
@@ -602,9 +611,9 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     connect_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
 
-  CommandNode *cmd_node = root->AddFunction(
-      "cmd", "Execute one shell command on current client", args,
-      &CliArgsPool::cmd);
+  CommandNode *cmd_node =
+      root->AddFunction("cmd", "Execute one shell command on current client",
+                        args, &CliArgsPool::cmd);
   commands.cmd_cmd = cmd_node ? cmd_node->app : nullptr;
   if (commands.cmd_cmd) {
     commands.cmd_cmd

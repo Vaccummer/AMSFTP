@@ -927,6 +927,17 @@ public:
       out.rcm = {EC::InvalidArg, "Invalid empty path"};
       return out;
     }
+    if (fs::exists(fs::path(args.path))) {
+      if (!fs::is_directory(fs::path(args.path))) {
+        out.rcm.code = EC::PathAlreadyExists;
+        out.rcm.error = "Path already exists and is not a directory";
+        out.rcm.target = args.path;
+        out.rcm.operation = "mkdir";
+        return out;
+      } else {
+        return out;
+      }
+    }
     std::error_code ec;
     fs::create_directory(fs::path(args.path), ec);
     if (ec) {
@@ -945,7 +956,8 @@ public:
   mkdirs(const AMFSI::MkdirsArgs &args,
          const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMFSI::MkdirsResult> out = {};
-    if (args.path.empty()) {
+    const std::string raw_path = AMStr::Strip(args.path);
+    if (raw_path.empty()) {
       out.rcm = {EC::InvalidArg, "Invalid empty path"};
       return out;
     }
@@ -958,16 +970,31 @@ public:
       return out;
     }
 
-    std::error_code ec;
-    fs::create_directories(fs::path(args.path), ec);
-    if (ec) {
-      out.rcm = {fec(ec),
-                 AMStr::fmt("mkdirs {} failed: {}", args.path, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, out.rcm.code, args.path,
-            "mkdirs", out.rcm.error);
+    const std::vector<std::string> parts = AMPath::split(raw_path);
+    if (parts.empty()) {
+      out.rcm =
+          Err(EC::InvalidArg, "mkdirs", raw_path, "Invalid path for mkdirs");
       return out;
     }
 
+    std::string current = "";
+    for (const auto &part : parts) {
+      if (control.IsInterrupted()) {
+        out.rcm = {EC::Terminate, "Interrupted by user"};
+        return out;
+      }
+      if (control.IsTimeout()) {
+        out.rcm = {EC::OperationTimeout, "Operation timed out"};
+        return out;
+      }
+
+      current = current.empty() ? part : AMPath::join(current, part);
+      auto mkdir_result = mkdir({current}, control);
+      if (!(mkdir_result.rcm)) {
+        out.rcm = mkdir_result.rcm;
+        return out;
+      }
+    }
     out.rcm = OK;
     return out;
   }

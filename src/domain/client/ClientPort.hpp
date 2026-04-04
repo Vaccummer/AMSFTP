@@ -132,7 +132,18 @@ public:
     static_assert(!std::is_reference_v<ValueT>,
                   "StoreTypedValue expects value-like type");
     return StoreTypedData(std::type_index(typeid(ValueT)),
-                          std::any(std::forward<T>(value)), overwrite);
+                          std::move(std::any(std::forward<T>(value))),
+                          overwrite);
+  }
+
+  template <typename T>
+  [[nodiscard]] bool StoreNamedValue(const std::string &name, T value,
+                                     bool overwrite = true) {
+    using ValueT = std::decay_t<T>;
+    static_assert(!std::is_reference_v<ValueT>,
+                  "StoreNamedValue expects value-like type");
+    return StoreNamedData(name, std::move(std::any(std::forward<T>(value))),
+                          overwrite);
   }
 
   /**
@@ -252,7 +263,8 @@ public:
   /**
    * @brief Return atomic state storage for read-only coordinated access.
    */
-  [[nodiscard]] virtual const AMAtomic<ECMData<AMDomain::filesystem::CheckResult>> &
+  [[nodiscard]] virtual const AMAtomic<
+      ECMData<AMDomain::filesystem::CheckResult>> &
   StateAtomic() const = 0;
 
   /**

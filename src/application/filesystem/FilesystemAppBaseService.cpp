@@ -3,6 +3,8 @@
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
+#include <chrono>
+#include <thread>
 #include <stdexcept>
 
 namespace AMApplication::filesystem {
@@ -370,9 +372,22 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
     return {nullptr, Err(EC::InvalidArg, "", "", "Client nickname is empty")};
   }
 
-  auto public_result = client_service_->GetPublicClient(nickname);
-  if ((public_result.rcm) && public_result.data) {
-    return public_result;
+  constexpr int kPublicClientLeaseRetryTimes = 8;
+  constexpr int kPublicClientLeaseRetryWaitMs = 25;
+  ECMData<ClientHandle> public_result = {};
+  for (int attempt = 0; attempt <= kPublicClientLeaseRetryTimes; ++attempt) {
+    public_result = client_service_->GetPublicClient(nickname);
+    if ((public_result.rcm) && public_result.data) {
+      return public_result;
+    }
+    if (public_result.rcm.code != EC::PathUsingByOthers) {
+      break;
+    }
+    if (attempt >= kPublicClientLeaseRetryTimes) {
+      break;
+    }
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(kPublicClientLeaseRetryWaitMs));
   }
 
   if (!host_service_->HostExists(nickname)) {

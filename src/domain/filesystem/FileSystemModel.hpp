@@ -8,6 +8,7 @@ using ClientHandle = AMDomain::client::ClientHandle;
 
 struct FilesystemArg {
   int max_cd_history = 1;
+  int wget_max_redirect = 5;
 };
 
 struct PathTarget {
