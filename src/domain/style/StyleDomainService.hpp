@@ -187,11 +187,6 @@ inline void NormalizeCompleteMenu(CompleteMenuStyle *style) {
     return;
   }
   const CompleteMenuStyle defaults = {};
-  style->maxnum = std::max<int64_t>(1, style->maxnum);
-  style->maxrows_perpage = std::max<int64_t>(1, style->maxrows_perpage);
-  style->async_workers = std::max<int64_t>(1, style->async_workers);
-  style->complete_delay_ms = detail::ClampInt64(
-      style->complete_delay_ms, 0, std::numeric_limits<int64_t>::max());
   if (style->item_select_sign.empty()) {
     style->item_select_sign = defaults.item_select_sign;
   }

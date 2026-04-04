@@ -340,7 +340,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 
   AMInterface::completer::AMCompleteEngine completion_engine{
       &command_tree, &token_type_analyzer, completion_runtime,
-      &managers.interactive_event_registry};
+      &managers.interactive_event_registry,
+      &managers.completer_config_manager.Get(), &managers.style_service.Get()};
   completion_engine.LoadConfig();
   completion_engine.Install();
 

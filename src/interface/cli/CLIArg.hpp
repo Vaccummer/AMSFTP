@@ -2,6 +2,7 @@
 #include "CLI/App.hpp"
 #include "application/log/LoggerAppService.hpp"
 #include "application/client/ClientAppService.hpp"
+#include "application/completion/CompleterAppService.hpp"
 #include "application/config/ConfigAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
@@ -93,6 +94,8 @@ struct CLIServices : public NonCopyableNonMovable {
   mutable ServiceHolder<AMApplication::host::KnownHostsAppService>
       known_hosts_service = {};
   mutable ServiceHolder<AMApplication::var::VarAppService> var_service = {};
+  mutable ServiceHolder<AMApplication::completion::CompleterConfigManager>
+      completer_config_manager = {};
   mutable ServiceHolder<AMApplication::log::LoggerAppService> log_manager = {};
   mutable ServiceHolder<AMApplication::client::ClientAppService>
       client_service = {};

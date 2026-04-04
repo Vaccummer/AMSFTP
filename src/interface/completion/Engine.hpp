@@ -24,6 +24,12 @@ class AMInteractiveEventRegistry;
 namespace AMInterface::completion {
 class ICompletionRuntime;
 }
+namespace AMApplication::completion {
+class CompleterConfigManager;
+}
+namespace AMInterface::style {
+class AMStyleService;
+}
 namespace AMInterface::completer {
 using amf = AMDomain::client::amf;
 
@@ -138,6 +144,24 @@ struct AMCompletionContext {
 
 class AMCompletionSearchEngine;
 
+enum class CompletionTaskState {
+  Pending = 0,
+  Running = 1,
+  Done = 2,
+  Canceled = 3,
+  Failed = 4,
+};
+
+class ICompletionTask {
+public:
+  virtual ~ICompletionTask() = default;
+  [[nodiscard]] virtual uint64_t ID() const = 0;
+  virtual void Run() = 0;
+  virtual void Terminate() = 0;
+  [[nodiscard]] virtual CompletionTaskState State() const = 0;
+  [[nodiscard]] virtual ECMData<AMCompletionCandidates> Result() const = 0;
+};
+
 struct AMCompletionAsyncResult {
   uint64_t request_id = 0;
   AMCompletionMode mode = AMCompletionMode::Complete;
@@ -147,18 +171,12 @@ struct AMCompletionAsyncResult {
   std::weak_ptr<AMCompletionSearchEngine> source_engine;
 };
 
-struct AMCompletionAsyncJob {
+struct AMCompletionAsyncTask {
   uint64_t request_id = 0;
   AMCompletionMode mode = AMCompletionMode::Complete;
   AMCompletionTarget target = AMCompletionTarget::Disabled;
-  AMCompletionContext context = {};
+  std::shared_ptr<ICompletionTask> task = nullptr;
   std::weak_ptr<AMCompletionSearchEngine> source_engine;
-  std::function<bool()> interrupt_flag;
-  std::function<void()> interrupt_cancel;
-
-  [[nodiscard]] bool IsInterrupted() const {
-    return interrupt_flag ? interrupt_flag() : true;
-  }
 };
 
 /**
@@ -188,6 +206,17 @@ public:
    */
   virtual void SortCandidates(const AMCompletionContext &ctx,
                               std::vector<AMCompletionCandidate> &items) = 0;
+
+  /**
+   * @brief Create async completion task for this engine.
+   *
+   * Default implementation wraps CollectCandidates() in a task.
+   *
+   * @param ctx Completion request context.
+   * @return Async task handle; nullptr means caller should fallback to sync.
+   */
+  [[nodiscard]] virtual std::shared_ptr<ICompletionTask>
+  CreateTask(const AMCompletionContext &ctx);
 
   /**
    * @brief Clear internal search-engine cache state.
@@ -232,10 +261,15 @@ public:
       AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer,
       std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
       AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry =
-          nullptr)
+          nullptr,
+      AMApplication::completion::CompleterConfigManager
+          *completer_config_manager = nullptr,
+      AMInterface::style::AMStyleService *style_service = nullptr)
       : command_tree_(command_tree), token_type_analyzer_(token_type_analyzer),
         runtime_(std::move(runtime)),
-        interactive_event_registry_(interactive_event_registry) {
+        interactive_event_registry_(interactive_event_registry),
+        completer_config_manager_(completer_config_manager),
+        style_service_(style_service) {
     StartAsyncWorkers_();
     Init();
   }
@@ -380,9 +414,26 @@ private:
   void AsyncWorkerLoop_();
 
   /**
-   * @brief Push an async request into the worker queue.
+   * @brief Push an async task into the worker queue.
    */
-  void ScheduleAsyncJob_(AMCompletionAsyncJob request);
+  void ScheduleAsyncTask_(AMCompletionAsyncTask request);
+
+  /**
+   * @brief Terminate currently on-air task for one target.
+   */
+  void TerminateOnAirTask_(AMCompletionTarget target);
+
+  /**
+   * @brief Mark one task as on-air for target.
+   */
+  void SetOnAirTask_(AMCompletionTarget target,
+                     const std::shared_ptr<ICompletionTask> &task);
+
+  /**
+   * @brief Clear one on-air task for target only when handle matches.
+   */
+  void ClearOnAirTask_(AMCompletionTarget target,
+                       const std::shared_ptr<ICompletionTask> &task);
 
   /**
    * @brief Interrupt and clear queued/inflight async requests.
@@ -409,6 +460,7 @@ private:
   AMCompletionArgs args_{};
   std::atomic<uint64_t> request_counter_{0};
   std::atomic<uint64_t> current_request_id_{0};
+  std::atomic<uint64_t> desired_request_id_{0};
   std::mutex request_mtx_;
   std::string last_input_;
   size_t last_cursor_ = 0;
@@ -424,7 +476,7 @@ private:
   std::atomic<bool> async_stop_{false};
   std::mutex async_queue_mtx_;
   std::condition_variable async_queue_cv_;
-  std::deque<AMCompletionAsyncJob> async_queue_;
+  std::deque<AMCompletionAsyncTask> async_queue_;
   std::vector<std::thread> async_workers_;
 
   const AMInterface::parser::CommandNode *command_tree_ = nullptr;
@@ -433,13 +485,17 @@ private:
       nullptr;
   AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry_ =
       nullptr;
+  AMApplication::completion::CompleterConfigManager *completer_config_manager_ =
+      nullptr;
+  AMInterface::style::AMStyleService *style_service_ = nullptr;
 
   std::mutex async_results_mtx_;
   std::unordered_map<uint64_t, std::vector<AMCompletionAsyncResult>>
       async_results_;
 
-  std::mutex async_interrupts_mtx_;
-  std::vector<std::function<void()>> async_interrupts_;
+  std::mutex async_on_air_mtx_;
+  std::unordered_map<AMCompletionTarget, std::shared_ptr<ICompletionTask>>
+      async_on_air_tasks_;
 
   std::function<void()> prompt_return_cancel_callback_;
   bool prompt_return_cancel_hook_registered_ = false;

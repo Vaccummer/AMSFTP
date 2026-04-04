@@ -1,6 +1,7 @@
 #include "domain/client/ClientDomainService.hpp"
 #include "domain/client/ClientModel.hpp"
 #include "domain/config/ConfigModel.hpp"
+#include "domain/completion/CompletionModel.hpp"
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
@@ -427,6 +428,7 @@ namespace settings_codec {
 using AMDomain::client::ClientServiceArg;
 using AMDomain::config::ConfigBackupSet;
 using AMDomain::log::LogManagerArg;
+using AMDomain::completion::CompleterArg;
 using AMDomain::transfer::TransferManagerArg;
 using AMDomain::filesystem::FilesystemArg;
 using AMDomain::var::VarSetArg;
@@ -618,6 +620,72 @@ public:
       return codec_common::Fail_(error, "null root json");
     }
     (void)AMJson::DelKey(*root, {"Options", "LogManager"});
+    return true;
+  }
+};
+
+class CompleterArgCodec final : public AMInfra::config::IArgCodec {
+public:
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(CompleterArg));
+  }
+
+  [[nodiscard]] DocumentKind Kind() const override {
+    return DocumentKind::Settings;
+  }
+
+  [[nodiscard]] bool Decode(const Json &root, void *out,
+                            std::string *error) const override {
+    if (!out) {
+      return codec_common::Fail_(error, "null output CompleterArg");
+    }
+    auto *typed = static_cast<CompleterArg *>(out);
+    *typed = {};
+
+    const Json options = OptionsRoot_(root);
+    (void)AMJson::QueryKey(options, {"Completer", "maxnum"}, &typed->maxnum);
+    (void)AMJson::QueryKey(options, {"Completer", "maxrows_perpage"},
+                           &typed->maxrows_perpage);
+    (void)AMJson::QueryKey(options, {"Completer", "number_pick"},
+                           &typed->number_pick);
+    (void)AMJson::QueryKey(options, {"Completer", "auto_fillin"},
+                           &typed->auto_fillin);
+    (void)AMJson::QueryKey(options, {"Completer", "complete_delay_ms"},
+                           &typed->complete_delay_ms);
+    (void)AMJson::QueryKey(options, {"Completer", "async_workers"},
+                           &typed->async_workers);
+    return true;
+  }
+
+  [[nodiscard]] bool Encode(const void *in, Json *root,
+                            std::string *error) const override {
+    if (!in || !root) {
+      return codec_common::Fail_(error,
+                                 "null input CompleterArg or root json");
+    }
+    const auto *typed = static_cast<const CompleterArg *>(in);
+    if (!root->is_object()) {
+      *root = Json::object();
+    }
+
+    (*root)["Options"]["Completer"]["maxnum"] = typed->maxnum;
+    (*root)["Options"]["Completer"]["maxrows_perpage"] =
+        typed->maxrows_perpage;
+    (*root)["Options"]["Completer"]["number_pick"] = typed->number_pick;
+    (*root)["Options"]["Completer"]["auto_fillin"] = typed->auto_fillin;
+    (*root)["Options"]["Completer"]["complete_delay_ms"] =
+        typed->complete_delay_ms;
+    (*root)["Options"]["Completer"]["async_workers"] = typed->async_workers;
+    return true;
+  }
+
+  [[nodiscard]] bool Erase(const void *in, Json *root,
+                           std::string *error) const override {
+    (void)in;
+    if (!root) {
+      return codec_common::Fail_(error, "null root json");
+    }
+    (void)AMJson::DelKey(*root, {"Options", "Completer"});
     return true;
   }
 };
@@ -1040,28 +1108,16 @@ void DecodeCompleteMenu_(const Json &json, CompleteMenuStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
-  (void)AMJson::QueryKey(json, {"maxnum"}, &out->maxnum);
-  (void)AMJson::QueryKey(json, {"maxrows_perpage"}, &out->maxrows_perpage);
   (void)AMJson::QueryKey(json, {"item_select_sign"}, &out->item_select_sign);
-  (void)AMJson::QueryKey(json, {"number_pick"}, &out->number_pick);
-  (void)AMJson::QueryKey(json, {"auto_fillin"}, &out->auto_fillin);
   (void)AMJson::QueryKey(json, {"order_num_style"}, &out->order_num_style);
   (void)AMJson::QueryKey(json, {"help_style"}, &out->help_style);
-  (void)AMJson::QueryKey(json, {"complete_delay_ms"}, &out->complete_delay_ms);
-  (void)AMJson::QueryKey(json, {"async_workers"}, &out->async_workers);
 }
 
 Json EncodeCompleteMenu_(const CompleteMenuStyle &in) {
   Json out = Json::object();
-  out["maxnum"] = in.maxnum;
-  out["maxrows_perpage"] = in.maxrows_perpage;
   out["item_select_sign"] = in.item_select_sign;
-  out["number_pick"] = in.number_pick;
-  out["auto_fillin"] = in.auto_fillin;
   out["order_num_style"] = in.order_num_style;
   out["help_style"] = in.help_style;
-  out["complete_delay_ms"] = in.complete_delay_ms;
-  out["async_workers"] = in.async_workers;
   return out;
 }
 
@@ -1542,6 +1598,7 @@ BuildCodecMap() {
   static const settings_codec::TransferManagerArgCodec transfer_manager_codec =
       {};
   static const settings_codec::LogManagerArgCodec log_manager_codec = {};
+  static const settings_codec::CompleterArgCodec completer_codec = {};
   static const settings_codec::ClientServiceArgCodec client_service_codec = {};
   static const settings_codec::FilesystemArgCodec filesystem_codec = {};
   static const settings_codec::VarSetArgCodec var_set_codec = {};
@@ -1557,6 +1614,7 @@ BuildCodecMap() {
   map[backup_set_codec.TypeKey()] = &backup_set_codec;
   map[transfer_manager_codec.TypeKey()] = &transfer_manager_codec;
   map[log_manager_codec.TypeKey()] = &log_manager_codec;
+  map[completer_codec.TypeKey()] = &completer_codec;
   map[client_service_codec.TypeKey()] = &client_service_codec;
   map[filesystem_codec.TypeKey()] = &filesystem_codec;
   map[var_set_codec.TypeKey()] = &var_set_codec;
