@@ -1,7 +1,7 @@
 #pragma once
 
 #include "foundation/core/DataClass.hpp"
-#include "interface/prompt/PromptTemplateInterpreter.hpp"
+#include "interface/parser/PromptTemplateInterpreter.hpp"
 #include "interface/style/StyleManager.hpp"
 
 #include <functional>
