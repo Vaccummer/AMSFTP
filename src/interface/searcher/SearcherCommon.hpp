@@ -164,9 +164,9 @@ inline void SplitPath(const std::string &path, std::string *dir,
  */
 inline int PathTypeOrder(PathType type) {
   switch (type) {
-  case PathType::FILE:
-    return 0;
   case PathType::DIR:
+    return 0;
+  case PathType::FILE:
     return 1;
   case PathType::SYMLINK:
     return 2;

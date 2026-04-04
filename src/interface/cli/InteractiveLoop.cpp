@@ -387,6 +387,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     if (auto profile =
             managers.prompt_profile_history_manager->CurrentProfile();
         profile && profile->Use()) {
+      completion_engine.Install();
       auto highlighter_guard = profile->TemporarySetHighlighter(
           &AMInterface::parser::TokenTypeAnalyzer::PromptHighlighter_,
           &token_type_analyzer);

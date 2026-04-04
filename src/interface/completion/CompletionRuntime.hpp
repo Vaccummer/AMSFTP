@@ -29,6 +29,7 @@ public:
 
   [[nodiscard]] virtual AMDomain::client::ClientHandle
   CurrentClient() const = 0;
+  [[nodiscard]] virtual std::string CurrentNickname() const = 0;
   [[nodiscard]] virtual AMDomain::client::ClientHandle LocalClient() const = 0;
   [[nodiscard]] virtual AMDomain::client::ClientHandle
   GetClient(const std::string &nickname) const = 0;

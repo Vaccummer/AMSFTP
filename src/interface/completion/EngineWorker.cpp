@@ -954,15 +954,56 @@ AMCompleteEngine::ResolvePolicyNickname_(const AMCompletionContext &ctx) const {
   if (!runtime_) {
     return "local";
   }
-  auto current = runtime_->CurrentClient();
-  if (!current) {
-    return "local";
-  }
-  std::string nickname = AMStr::Strip(current->ConfigPort().GetNickname());
+  std::string nickname = AMStr::Strip(runtime_->CurrentNickname());
   if (nickname.empty()) {
     nickname = "local";
   }
   return nickname;
+}
+
+bool IsPathKind_(AMCompletionKind kind) {
+  return kind == AMCompletionKind::PathLocal ||
+         kind == AMCompletionKind::PathRemote;
+}
+
+std::string TrimTrailingSep_(std::string text) {
+  while (!text.empty() && (text.back() == '/' || text.back() == '\\')) {
+    text.pop_back();
+  }
+  return text;
+}
+
+std::string LeafNameForPathSort_(const std::string &insert_text) {
+  const std::string clean = TrimTrailingSep_(insert_text);
+  if (clean.empty()) {
+    return clean;
+  }
+  const size_t slash_pos = clean.find_last_of("/\\");
+  if (slash_pos != std::string::npos) {
+    return clean.substr(slash_pos + 1);
+  }
+  const size_t at_pos = clean.find_last_of('@');
+  if (at_pos != std::string::npos) {
+    return clean.substr(at_pos + 1);
+  }
+  return clean;
+}
+
+bool StartsWithDot_(const std::string &name) {
+  return !name.empty() && name.front() == '.';
+}
+
+int PathTypeOrder_(PathType type) {
+  switch (type) {
+  case PathType::DIR:
+    return 0;
+  case PathType::FILE:
+    return 1;
+  case PathType::SYMLINK:
+    return 2;
+  default:
+    return 3;
+  }
 }
 
 void AMCompleteEngine::FinalizeCandidates_(const AMCompletionContext &ctx,
@@ -979,6 +1020,23 @@ void AMCompleteEngine::FinalizeCandidates_(const AMCompletionContext &ctx,
         }
         if (lhs.kind != rhs.kind) {
           return static_cast<int>(lhs.kind) < static_cast<int>(rhs.kind);
+        }
+        if (IsPathKind_(lhs.kind) && IsPathKind_(rhs.kind)) {
+          const int lo = PathTypeOrder_(lhs.path_type);
+          const int ro = PathTypeOrder_(rhs.path_type);
+          if (lo != ro) {
+            return lo < ro;
+          }
+          const std::string lname = LeafNameForPathSort_(lhs.insert_text);
+          const std::string rname = LeafNameForPathSort_(rhs.insert_text);
+          const bool ldot = StartsWithDot_(lname);
+          const bool rdot = StartsWithDot_(rname);
+          if (ldot != rdot) {
+            return ldot;
+          }
+          if (lname != rname) {
+            return lname < rname;
+          }
         }
         if (lhs.insert_text != rhs.insert_text) {
           return lhs.insert_text < rhs.insert_text;

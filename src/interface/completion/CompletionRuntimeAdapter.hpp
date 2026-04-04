@@ -30,6 +30,7 @@ public:
   ~CompletionRuntimeAdapter() override = default;
 
   [[nodiscard]] AMDomain::client::ClientHandle CurrentClient() const override;
+  [[nodiscard]] std::string CurrentNickname() const override;
   [[nodiscard]] AMDomain::client::ClientHandle LocalClient() const override;
   [[nodiscard]] AMDomain::client::ClientHandle
   GetClient(const std::string &nickname) const override;
