@@ -191,6 +191,13 @@ std::string replace_all(std::string str, const std::string &old_sub,
                         const std::string &new_sub);
 std::string join(const std::vector<std::string> &parts, const std::string &sep);
 std::string PadLeftAscii(std::string_view value, size_t width);
+std::string PadRightAscii(std::string_view value, size_t width);
+std::string FormatSize(size_t size, int max_nums, int max_point,
+                       size_t pad_width, bool pad_left);
+std::string FormatSize(int64_t size, int max_nums, int max_point,
+                       size_t pad_width, bool pad_left);
+std::string FormatSpeed(double bytes_per_second, int max_nums, int max_point,
+                        size_t pad_width, bool pad_left);
 size_t CountLines(const std::string &text);
 void print(const std::string &str);
 

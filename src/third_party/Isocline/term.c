@@ -52,6 +52,7 @@ struct term_s {
   bool nocolor;          // show colors?
   bool silent;           // enable beep?
   bool is_utf8;          // utf-8 output? determined by the tty
+  bool cursor_visible;   // desired cursor visibility (from ?25h/?25l)
   attr_t attr;           // current text attributes
   palette_t palette;     // color support
   buffer_mode_t bufmode; // buffer mode
@@ -360,6 +361,7 @@ ic_private term_t *term_new(alloc_t *mem, tty_t *tty, bool nocolor, bool silent,
   term->buf = sbuf_new(mem);
   term->bufmode = LINEBUFFERED;
   term->attr = attr_default();
+  term->cursor_visible = true;
 
   // respect NO_COLOR
   if (getenv("NO_COLOR") != NULL) {
@@ -874,11 +876,13 @@ static void term_write_esc(term_t *term, const char *s, ssize_t len) {
       break;
     case 'h':
       if (strncmp(s + 2, "?25h", 4) == 0) {
+        term->cursor_visible = true;
         term_cursor_visible(term, true);
       }
       break;
     case 'l':
       if (strncmp(s + 2, "?25l", 4) == 0) {
+        term->cursor_visible = false;
         term_cursor_visible(term, false);
       }
       break;
@@ -899,7 +903,25 @@ static void term_write_esc(term_t *term, const char *s, ssize_t len) {
   }
 }
 
+static void term_track_cursor_visibility_seq(term_t *term, const char *s,
+                                             ssize_t len) {
+  if (term == NULL || s == NULL || len < 6) {
+    return;
+  }
+  for (ssize_t i = 0; i + 5 < len; ++i) {
+    if ((uint8_t)s[i] == 0x1B && s[i + 1] == '[' && s[i + 2] == '?' &&
+        s[i + 3] == '2' && s[i + 4] == '5') {
+      if (s[i + 5] == 'h') {
+        term->cursor_visible = true;
+      } else if (s[i + 5] == 'l') {
+        term->cursor_visible = false;
+      }
+    }
+  }
+}
+
 static bool term_write_direct(term_t *term, const char *s, ssize_t len) {
+  term_track_cursor_visibility_seq(term, s, len);
   term_cursor_visible(term, false); // reduce flicker
   ssize_t pos = 0;
   if ((term->hcon_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0) {
@@ -943,7 +965,7 @@ static bool term_write_direct(term_t *term, const char *s, ssize_t len) {
       pos += next;
     }
   }
-  term_cursor_visible(term, true);
+  term_cursor_visible(term, term->cursor_visible);
   assert(pos == len);
   return (pos == len);
 }

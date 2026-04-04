@@ -682,6 +682,9 @@ void ic_term_done(void);
 /// (happens automatically on newline characters ('\n') as well).
 void ic_term_flush(void);
 
+/// Set terminal cursor visibility.
+void ic_term_set_cursor_visible(bool visible);
+
 /// Write a string to the console (and process CSI escape sequences).
 void ic_term_write(const char *s);
 

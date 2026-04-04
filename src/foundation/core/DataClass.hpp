@@ -4,6 +4,7 @@
 #include <csignal>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -100,6 +101,8 @@ public:
   class Guard {
   public:
     Guard(T &value, mutex_type &mutex) : value_(value), lock_(mutex) {}
+    Guard(T &value, mutex_type &mutex, std::defer_lock_t)
+        : value_(value), lock_(mutex, std::defer_lock) {}
 
     Guard(const Guard &) = delete;
     Guard &operator=(const Guard &) = delete;
@@ -129,6 +132,8 @@ public:
 
     void lock() { lock_.lock(); }
 
+    bool try_lock() { return lock_.try_lock(); }
+
     void unlock() { lock_.unlock(); }
 
     T load() const { return value_; }
@@ -143,6 +148,14 @@ public:
   };
 
   [[nodiscard]] Guard lock() { return Guard(value_, mutex_); }
+
+  [[nodiscard]] std::optional<Guard> try_lock() {
+    Guard guard(value_, mutex_, std::defer_lock);
+    if (!guard.try_lock()) {
+      return std::nullopt;
+    }
+    return std::optional<Guard>(std::move(guard));
+  }
 
 private:
   mutex_type mutex_;
