@@ -1,5 +1,4 @@
-#include "interface/prompt/PromptTemplateInterpreter.hpp"
-#include "foundation/tools/enum_related.hpp"
+#include "interface/parser/PromptTemplateInterpreter.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
@@ -466,10 +465,9 @@ PromptTemplateInterpreter::Parse(const std::string &input) const {
     const size_t index =
         (input.empty() ? static_cast<size_t>(0)
                        : std::min(diag.offset, input.size() - 1));
-    const std::string msg = AMStr::fmt(
-        "{} at {} of {}", diag.message, index, HighlightErrorAt_(input, index));
-    return {std::move(result),
-            Err(EC::InvalidArg, "", "", msg)};
+    const std::string msg = AMStr::fmt("{} at {} of {}", diag.message, index,
+                                       HighlightErrorAt_(input, index));
+    return {std::move(result), Err(EC::InvalidArg, "", "", msg)};
   }
   return {std::move(result), OK};
 }

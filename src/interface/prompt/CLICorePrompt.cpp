@@ -1,5 +1,4 @@
 #include "interface/prompt/CLICorePrompt.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 

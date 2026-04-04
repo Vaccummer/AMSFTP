@@ -1,4 +1,3 @@
-#include "foundation/tools/enum_related.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <string>
 #include <vector>
@@ -187,7 +186,8 @@ ECM IsoclineProfileManager::ChangeClient(const std::string &nickname) {
     profile = BuildProfile_(active_nickname, profile_args, style_arg,
                             history_records);
     if (!profile || !profile->IsValid() || !profile->Use()) {
-      return Err(EC::UnknownError, "", "", "failed to switch isocline profile for nickname: " +
+      return Err(EC::UnknownError, "", "",
+                 "failed to switch isocline profile for nickname: " +
                      active_nickname);
     }
   }
@@ -447,18 +447,21 @@ ECM PromptIOManager::Edit(const std::string &nickname) {
     return Err(EC::InvalidArg, "", "", "empty profile nickname");
   }
   if (target == kDefaultPromptProfile) {
-    return Err(EC::InvalidArg, "", "", "profile nickname must be a host nickname");
+    return Err(EC::InvalidArg, "", "", "profile nickname must be a host
+nickname");
   }
   if (!AMInterface::ApplicationAdapters::Runtime::HostConfigManagerOrThrow()
            .HostExists(target)) {
-    return Err(EC::HostConfigNotFound, "", "", AMStr::fmt("host nickname not found: {}", target));
+    return Err(EC::HostConfigNotFound, "", "", AMStr::fmt("host nickname not
+found: {}", target));
   }
   return EditProfile_(target);
 }
 
 ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
   if (nicknames.empty()) {
-    return Err(EC::InvalidArg, "", "", "profile get requires at least one nickname");
+    return Err(EC::InvalidArg, "", "", "profile get requires at least one
+nickname");
   }
 
   bool first = true;
@@ -468,11 +471,13 @@ ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
       return Err(EC::InvalidArg, "", "", "empty profile nickname");
     }
     if (target == kDefaultPromptProfile) {
-      return Err(EC::InvalidArg, "", "", "profile nickname must be a host nickname");
+      return Err(EC::InvalidArg, "", "", "profile nickname must be a host
+nickname");
     }
     if (!AMInterface::ApplicationAdapters::Runtime::HostConfigManagerOrThrow()
              .HostExists(target)) {
-      return Err(EC::HostConfigNotFound, "", "", AMStr::fmt("host nickname not found: {}", target));
+      return Err(EC::HostConfigNotFound, "", "", AMStr::fmt("host nickname not
+found: {}", target));
     }
 
     if (!first) {
@@ -489,4 +494,3 @@ ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
 }
 */
 } // namespace AMInterface::prompt
-
