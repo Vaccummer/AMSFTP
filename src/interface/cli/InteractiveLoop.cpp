@@ -7,10 +7,10 @@
 #include "interface/completion/CompletionRuntimeAdapter.hpp"
 #include "interface/completion/Engine.hpp"
 #include "interface/parser/CommandPreprocess.hpp"
-#include "interface/token_analyser/TokenAnalyzerRuntimeAdapter.hpp"
 #include "interface/parser/CommandTree.hpp"
-#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include "interface/prompt/CLICorePrompt.hpp"
+#include "interface/token_analyser/TokenAnalyzerRuntimeAdapter.hpp"
+#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -339,9 +339,12 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       managers.var_interface_service.Get(), token_type_analyzer);
 
   AMInterface::completer::AMCompleteEngine completion_engine{
-      &command_tree, &token_type_analyzer, completion_runtime,
+      &command_tree,
+      &token_type_analyzer,
+      completion_runtime,
       &managers.interactive_event_registry,
-      &managers.completer_config_manager.Get(), &managers.style_service.Get()};
+      &managers.completer_config_manager.Get(),
+      &managers.style_service.Get()};
   completion_engine.LoadConfig();
   completion_engine.Install();
 
@@ -375,26 +378,35 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     prompt_arg.result = last_dispatch_result;
 
     const std::string prompt_text = core_prompt.Render(prompt_arg);
-    std::string line;
     (void)managers.config_service->BackupIfNeeded();
 
     // monitor.SilenceHook("GLOBAL");
     // monitor.ResumeHook("COREPROMPT");
     // ctx.task_control_token->ClearInterrupt();
-    bool canceled = !managers.prompt_io_manager->PromptCore(
-        prompt_text, &line, &token_type_analyzer);
+    std::optional<std::string> line_opt = std::nullopt;
+    if (auto profile =
+            managers.prompt_profile_history_manager->CurrentProfile();
+        profile && profile->Use()) {
+      auto highlighter_guard = profile->TemporarySetHighlighter(
+          &AMInterface::parser::TokenTypeAnalyzer::PromptHighlighter_,
+          &token_type_analyzer);
+      (void)highlighter_guard;
+      line_opt = managers.prompt_io_manager->PromptCore(prompt_text);
+    } else {
+      line_opt = managers.prompt_io_manager->PromptCore(prompt_text);
+    }
     // ctx.task_control_token->ClearInterrupt();
     // monitor.SilenceHook("COREPROMPT");
     // monitor.ResumeHook("GLOBAL");
     managers.interactive_event_registry.RunOnCorePromptReturn();
 
-    if (canceled) {
+    if (!line_opt.has_value()) {
       last_dispatch_result = OK;
       last_dispatch_elapsed_ms = 0;
       continue;
     }
 
-    std::string trimmed = AMStr::Strip(line);
+    std::string trimmed = AMStr::Strip(*line_opt);
     if (trimmed.empty()) {
       continue;
     }
@@ -475,4 +487,3 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
-

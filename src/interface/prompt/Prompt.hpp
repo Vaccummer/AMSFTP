@@ -18,10 +18,6 @@
 #include <utility>
 #include <vector>
 
-namespace AMInterface::parser {
-class TokenTypeAnalyzer;
-}
-
 namespace AMInterface::prompt {
 using AMApplication::prompt::PromptHistoryManager;
 using AMApplication::prompt::PromptProfileManager;
@@ -72,6 +68,21 @@ private:
 
 class PromptIOManager : NonCopyableNonMovable {
 public:
+  struct PromptReadOptions {
+    std::optional<ic_completer_fun_t *> completer;
+    std::optional<void *> completer_data;
+    std::optional<ic_highlight_fun_t *> highlighter;
+    std::optional<void *> highlighter_data;
+
+    PromptReadOptions(
+        std::optional<ic_completer_fun_t *> completer = std::nullopt,
+        std::optional<void *> completer_data = std::nullopt,
+        std::optional<ic_highlight_fun_t *> highlighter = std::nullopt,
+        std::optional<void *> highlighter_data = std::nullopt)
+        : completer(completer), completer_data(completer_data),
+          highlighter(highlighter), highlighter_data(highlighter_data) {}
+  };
+
   explicit PromptIOManager(IsoclineProfileManager &isocline_profile_manager)
       : isocline_profile_manager_(isocline_profile_manager) {}
   ~PromptIOManager() override = default;
@@ -101,17 +112,19 @@ public:
   void RefreshEnd();
   void ClearScreen(bool clear_scrollback = false);
   void UseAlternateScreen(bool enable);
+  void SetCursorVisible(bool visible);
 
-  bool SecurePrompt(const std::string &prompt, std::string *out_input);
+  std::optional<std::string> SecurePrompt(const std::string &prompt);
   bool PromptYesNo(const std::string &prompt, bool *canceled);
-  bool Prompt(
-      const std::string &prompt, const std::string &placeholder,
-      std::string *out_input,
+
+  std::optional<std::string> Prompt(
+      const std::string &prompt, const std::string &placeholder = "",
       const std::function<bool(const std::string &)> &checker = {},
-      const std::vector<std::pair<std::string, std::string>> &candidates = {});
-  bool LiteralPrompt(
+      const std::vector<std::pair<std::string, std::string>> &candidates = {},
+      const PromptReadOptions &options = {});
+
+  std::optional<std::string> LiteralPrompt(
       const std::string &prompt, const std::string &placeholder,
-      std::string *out_input,
       const std::vector<std::pair<std::string, std::string>> &literals);
   /**
    * @brief Read one command line using a full rendered prompt string.
@@ -119,9 +132,7 @@ public:
    * When @p prompt contains newline separators, PromptCore prints all leading
    * lines and only passes the last line into readline as the editable prompt.
    */
-  bool PromptCore(
-      const std::string &prompt, std::string *out_input,
-      AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer = nullptr);
+  std::optional<std::string> PromptCore(const std::string &prompt);
 
   ECM Edit(const std::string &nickname);
   ECM Get(const std::vector<std::string> &nicknames);
@@ -178,4 +189,3 @@ public:
 };
 
 } // namespace AMInterface::prompt
-
