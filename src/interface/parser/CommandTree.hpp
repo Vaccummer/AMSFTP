@@ -77,14 +77,32 @@ public:
   template <typename T>
   CommandNode *AddFunction(const std::string &name, const std::string &help,
                            AMInterface::cli::CliArgsPool &args,
-                           std::shared_ptr<T> AMInterface::cli::CliArgsPool::*member) {
+                           T AMInterface::cli::CliArgsPool::*member) {
     CommandNode *child = AddFunction(name, help);
     if (!child || !child->app) {
       return child;
     }
     child->app->callback([&args, member]() {
-      const auto &slot = args.*member;
-      args.active = slot ? slot.get() : nullptr;
+      args.SetActive(&(args.*member));
+    });
+    return child;
+  }
+
+  /**
+   * @brief Add one subcommand and bind callback to grouped CliArgsPool member.
+   */
+  template <typename Group, typename T>
+  CommandNode *AddFunction(const std::string &name, const std::string &help,
+                           AMInterface::cli::CliArgsPool &args,
+                           Group AMInterface::cli::CliArgsPool::*group_member,
+                           T Group::*member) {
+    CommandNode *child = AddFunction(name, help);
+    if (!child || !child->app) {
+      return child;
+    }
+    child->app->callback([&args, group_member, member]() {
+      auto &group = args.*group_member;
+      args.SetActive(&(group.*member));
     });
     return child;
   }
