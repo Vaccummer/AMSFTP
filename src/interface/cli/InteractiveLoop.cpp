@@ -185,20 +185,20 @@ void PrintECM_(AMInterface::prompt::AMPromptIOManager &prompt, const ECM &rcm) {
 void RegisterPromptGetters_(AMInterface::prompt::CLIPromtRender &core_prompt,
                             const CLIServices &managers) {
   core_prompt.RegisterGetter("cwd", [&managers]() {
-    auto client = managers.client_service->GetCurrentClient();
+    auto client = managers.application.client_service->GetCurrentClient();
     return ResolvePromptCwd_(client);
   });
   core_prompt.RegisterGetter("username", [&managers]() {
-    auto client = ResolveActiveClient_(managers.client_service.Get());
+    auto client = ResolveActiveClient_(managers.application.client_service.Get());
     return ResolveUserHost_(client).first;
   });
   core_prompt.RegisterGetter("hostname", [&managers]() {
-    auto client = ResolveActiveClient_(managers.client_service.Get());
+    auto client = ResolveActiveClient_(managers.application.client_service.Get());
     return ResolveUserHost_(client).second;
   });
   core_prompt.RegisterGetter("os_type", [&managers]() {
     OS_TYPE os_type = OS_TYPE::Unknown;
-    auto client = ResolveActiveClient_(managers.client_service.Get());
+    auto client = ResolveActiveClient_(managers.application.client_service.Get());
     if (client) {
       try {
         os_type = client->ConfigPort().GetOSType();
@@ -219,13 +219,13 @@ void RegisterPromptGetters_(AMInterface::prompt::CLIPromtRender &core_prompt,
   core_prompt.RegisterGetter("task_pending", [&managers]() {
     size_t pending_count = 0;
     size_t running_count = 0;
-    managers.transfer_service->GetTaskCounts(&pending_count, &running_count);
+    managers.interfaces.transfer_service->GetTaskCounts(&pending_count, &running_count);
     return std::to_string(pending_count);
   });
   core_prompt.RegisterGetter("task_running", [&managers]() {
     size_t pending_count = 0;
     size_t running_count = 0;
-    managers.transfer_service->GetTaskCounts(&pending_count, &running_count);
+    managers.interfaces.transfer_service->GetTaskCounts(&pending_count, &running_count);
     return std::to_string(running_count);
   });
 }
@@ -323,32 +323,32 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   token_type_analyzer.SetCommandTree(&command_tree);
   auto analyzer_runtime =
       std::make_shared<AMInterface::parser::TokenAnalyzerRuntimeAdapter>(
-          managers.client_service.Get(), managers.host_service.Get(),
-          managers.var_service.Get(), managers.var_interface_service.Get(),
-          managers.style_service.Get(), managers.PromptProfileManager());
+          managers.application.client_service.Get(), managers.application.host_service.Get(),
+          managers.application.var_service.Get(), managers.interfaces.var_interface_service.Get(),
+          managers.interfaces.style_service.Get(), managers.application.prompt_profile_manager.Get());
   auto completion_runtime =
       std::make_shared<AMInterface::completion::CompletionRuntimeAdapter>(
-          managers.client_service.Get(), managers.host_service.Get(),
-          managers.var_service.Get(), managers.var_interface_service.Get(),
-          managers.style_service.Get(), managers.PromptProfileManager(),
-          managers.transfer_pool.Get());
+          managers.application.client_service.Get(), managers.application.host_service.Get(),
+          managers.application.var_service.Get(), managers.interfaces.var_interface_service.Get(),
+          managers.interfaces.style_service.Get(), managers.application.prompt_profile_manager.Get(),
+          managers.domain.transfer_pool.Get());
   token_type_analyzer.SetRuntime(analyzer_runtime);
   token_type_analyzer.BindInteractiveEventRegistry(
-      &managers.interactive_event_registry);
+      &managers.runtime.interactive_event_registry);
   AMInterface::parser::AMInputPreprocess input_preprocess(
-      managers.var_interface_service.Get(), token_type_analyzer);
+      managers.interfaces.var_interface_service.Get(), token_type_analyzer);
 
   AMInterface::completer::AMCompleteEngine completion_engine{
       &command_tree,
       &token_type_analyzer,
       completion_runtime,
-      &managers.interactive_event_registry,
-      &managers.completer_config_manager.Get(),
-      &managers.style_service.Get()};
+      &managers.runtime.interactive_event_registry,
+      &managers.application.completer_config_manager.Get(),
+      &managers.interfaces.style_service.Get()};
   completion_engine.LoadConfig();
   completion_engine.Install();
 
-  AMInterface::prompt::CLIPromtRender core_prompt(managers.style_service.Get());
+  AMInterface::prompt::CLIPromtRender core_prompt(managers.interfaces.style_service.Get());
   RegisterPromptGetters_(core_prompt, managers);
 
   ECM last_dispatch_result = OK;
@@ -364,7 +364,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     // bool settings_reloaded = false;
     // ECM reload_settings_rcm =
     //     ReloadSettingsIfUpdated_(prompt_profile_history_manager,
-    //                              managers.config_service,
+    //                              managers.application.config_service,
     //                              &settings_reloaded);
     // if (reload_settings_rcm.code != EC::Success) {
     //   PrintECM_(prompt, reload_settings_rcm);
@@ -373,33 +373,33 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     // }
 
     prompt_arg.current_nickname =
-        AMStr::Strip(managers.client_service->CurrentNickname());
+        AMStr::Strip(managers.application.client_service->CurrentNickname());
     prompt_arg.elapsed_time_ms = last_dispatch_elapsed_ms;
     prompt_arg.result = last_dispatch_result;
 
     const std::string prompt_text = core_prompt.Render(prompt_arg);
-    (void)managers.config_service->BackupIfNeeded();
+    (void)managers.application.config_service->BackupIfNeeded();
 
     // monitor.SilenceHook("GLOBAL");
     // monitor.ResumeHook("COREPROMPT");
     // ctx.task_control_token->ClearInterrupt();
     std::optional<std::string> line_opt = std::nullopt;
     if (auto profile =
-            managers.prompt_profile_history_manager->CurrentProfile();
+            managers.interfaces.prompt_profile_history_manager->CurrentProfile();
         profile && profile->Use()) {
       completion_engine.Install();
       auto highlighter_guard = profile->TemporarySetHighlighter(
           &AMInterface::parser::TokenTypeAnalyzer::PromptHighlighter_,
           &token_type_analyzer);
       (void)highlighter_guard;
-      line_opt = managers.prompt_io_manager->PromptCore(prompt_text);
+      line_opt = managers.interfaces.prompt_io_manager->PromptCore(prompt_text);
     } else {
-      line_opt = managers.prompt_io_manager->PromptCore(prompt_text);
+      line_opt = managers.interfaces.prompt_io_manager->PromptCore(prompt_text);
     }
     // ctx.task_control_token->ClearInterrupt();
     // monitor.SilenceHook("COREPROMPT");
     // monitor.ResumeHook("GLOBAL");
-    managers.interactive_event_registry.RunOnCorePromptReturn();
+    managers.runtime.interactive_event_registry.RunOnCorePromptReturn();
 
     if (!line_opt.has_value()) {
       last_dispatch_result = OK;
@@ -415,7 +415,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     try {
       auto prep = input_preprocess.Preprocess(trimmed);
       if (prep.rcm.code != EC::Success) {
-        PrintECM_(managers.prompt_io_manager.Get(), prep.rcm);
+        PrintECM_(managers.interfaces.prompt_io_manager.Get(), prep.rcm);
         store_exit_code(static_cast<int>(prep.rcm.code));
         last_dispatch_result = prep.rcm;
         last_dispatch_elapsed_ms = std::max<int64_t>(
@@ -431,7 +431,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       app.clear();
       app.parse(cli_args);
     } catch (const CLI::CallForHelp &e) {
-      managers.prompt_io_manager->Print(app.help());
+      managers.interfaces.prompt_io_manager->Print(app.help());
       ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
       last_dispatch_result = parse_rcm;
@@ -441,7 +441,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
                  .count());
       continue;
     } catch (const CLI::CallForAllHelp &e) {
-      managers.prompt_io_manager->Print(app.help("", CLI::AppFormatMode::All));
+      managers.interfaces.prompt_io_manager->Print(app.help("", CLI::AppFormatMode::All));
       ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
       last_dispatch_result = parse_rcm;
@@ -449,7 +449,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
           AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow());
       continue;
     } catch (const CLI::CallForVersion &e) {
-      managers.prompt_io_manager->Print(app.version());
+      managers.interfaces.prompt_io_manager->Print(app.version());
       ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
       last_dispatch_result = parse_rcm;
@@ -458,7 +458,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       continue;
     } catch (const CLI::ParseError &e) {
       const std::string parse_msg = e.what();
-      managers.prompt_io_manager->Print(parse_msg);
+      managers.interfaces.prompt_io_manager->Print(parse_msg);
       ECM parse_rcm = {EC::InvalidArg, parse_msg};
       store_exit_code(static_cast<int>(parse_rcm.code));
       last_dispatch_result = parse_rcm;
@@ -481,10 +481,12 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   }
 
   if (!skip_loop_exit_callbacks) {
-    managers.interactive_event_registry.RunOnInteractiveLoopExit();
+    managers.runtime.interactive_event_registry.RunOnInteractiveLoopExit();
   }
   ctx.is_interactive->store(false, std::memory_order_relaxed);
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
 
 } // namespace AMInterface::cli
+
+
