@@ -12,6 +12,7 @@
 #include "domain/transfer/TransferPort.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/client/ClientInterfaceService.hpp"
+#include "interface/adapters/config/ConfigInterfaceService.hpp"
 #include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
 #include "interface/adapters/transfer/TransferInterfaceService.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
@@ -71,6 +72,8 @@ struct AppServiceBuildState final {
 };
 
 struct InterfaceServiceBuildState final {
+  std::unique_ptr<AMInterface::config::ConfigInterfaceService>
+      config_interface_service = nullptr;
   std::unique_ptr<AMInterface::client::ClientInterfaceService>
       client_interface_service = nullptr;
   std::unique_ptr<AMInterface::filesystem::FilesystemInterfaceSerivce>
@@ -287,6 +290,10 @@ AppServiceBuildState BuildApplicationServices_(const fs::path &root_dir) {
 void BuildClientInterfaceServices_(
     const AMInterface::cli::amf &task_control_token,
     const AppServiceBuildState &app_state, InterfaceServiceBuildState *state) {
+  state->config_interface_service =
+      std::make_unique<AMInterface::config::ConfigInterfaceService>(
+          *app_state.config_service, *app_state.prompt_io_manager);
+
   state->client_interface_service =
       std::make_unique<AMInterface::client::ClientInterfaceService>(
           *app_state.client_service, *app_state.filesystem_service,
@@ -395,39 +402,41 @@ void BuildAndInitSignalMonitor_(
 void BindServicesToCliManagers_(BootstrapServices *runtime,
                                 AppServiceBuildState *app_state,
                                 InterfaceServiceBuildState *interface_state) {
-  runtime->managers.signal_monitor.SetInstance(std::move(interface_state->signal_monitor));
+  runtime->managers.domain.signal_monitor.SetInstance(std::move(interface_state->signal_monitor));
 
-  runtime->managers.config_service.SetInstance(std::move(app_state->config_service));
-  runtime->managers.host_service.SetInstance(std::move(app_state->host_service));
-  runtime->managers.known_hosts_service.SetInstance(
+  runtime->managers.application.config_service.SetInstance(std::move(app_state->config_service));
+  runtime->managers.application.host_service.SetInstance(std::move(app_state->host_service));
+  runtime->managers.application.known_hosts_service.SetInstance(
       std::move(app_state->known_hosts_service));
-  runtime->managers.client_service.SetInstance(std::move(app_state->client_service));
-  runtime->managers.filesystem_service.SetInstance(
+  runtime->managers.application.client_service.SetInstance(std::move(app_state->client_service));
+  runtime->managers.application.filesystem_service.SetInstance(
       std::move(app_state->filesystem_service));
-  runtime->managers.var_service.SetInstance(std::move(app_state->var_service));
-  runtime->managers.completer_config_manager.SetInstance(
+  runtime->managers.application.var_service.SetInstance(std::move(app_state->var_service));
+  runtime->managers.application.completer_config_manager.SetInstance(
       std::move(app_state->completer_config_manager));
 
-  runtime->managers.client_interface_service.SetInstance(
+  runtime->managers.interfaces.client_interface_service.SetInstance(
       std::move(interface_state->client_interface_service));
-  runtime->managers.filesystem_interface_service.SetInstance(
+  runtime->managers.interfaces.config_interface_service.SetInstance(
+      std::move(interface_state->config_interface_service));
+  runtime->managers.interfaces.filesystem_interface_service.SetInstance(
       std::move(interface_state->filesystem_interface_service));
-  runtime->managers.var_interface_service.SetInstance(
+  runtime->managers.interfaces.var_interface_service.SetInstance(
       std::move(interface_state->var_interface_service));
-  runtime->managers.transfer_pool.SetInstance(std::move(interface_state->transfer_pool));
-  runtime->managers.transfer_service.SetInstance(
+  runtime->managers.domain.transfer_pool.SetInstance(std::move(interface_state->transfer_pool));
+  runtime->managers.interfaces.transfer_service.SetInstance(
       std::move(interface_state->transfer_service));
 
-  runtime->managers.SetPromptProfileManager(
+  runtime->managers.application.prompt_profile_manager.SetInstance(
       std::move(app_state->prompt_profile_manager));
-  runtime->managers.SetPromptHistoryManager(
+  runtime->managers.application.prompt_history_manager.SetInstance(
       std::move(app_state->prompt_history_manager));
-  runtime->managers.style_service.SetInstance(std::move(app_state->style_service));
-  runtime->managers.prompt_profile_history_manager.SetInstance(
+  runtime->managers.interfaces.style_service.SetInstance(std::move(app_state->style_service));
+  runtime->managers.interfaces.prompt_profile_history_manager.SetInstance(
       std::move(app_state->prompt_profile_history_manager));
-  runtime->managers.prompt_io_manager.SetInstance(
+  runtime->managers.interfaces.prompt_io_manager.SetInstance(
       std::move(app_state->prompt_io_manager));
-  runtime->managers.log_manager.SetInstance(
+  runtime->managers.application.log_manager.SetInstance(
       std::make_unique<AMApplication::log::LoggerAppService>());
 }
 
@@ -495,3 +504,5 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 }
 
 } // namespace AMBootstrap
+
+
