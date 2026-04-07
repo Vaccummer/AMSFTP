@@ -1,6 +1,5 @@
 #pragma once
 
-#include "domain/host/HostModel.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/client/ClientInterfaceService.hpp"
 #include "interface/cli/ArgStruct/BaseArgStruct.hpp"
@@ -21,38 +20,6 @@ struct ConfigLsArgs : BaseArgStruct {
     return managers.interfaces.config_interface_service->PrintPaths();
   }
   void reset() override { detail = false; }
-};
-
-/**
- * @brief CLI argument container for config keys.
- */
-struct ConfigKeysArgs : BaseArgStruct {
-  [[nodiscard]] ECM Run(const CLIServices &managers,
-                        const CliRunContext &ctx) const override {
-    (void)ctx;
-    std::string header = {};
-    for (const auto key : AMDomain::host::ConRequest::FieldNames) {
-      header += AMStr::ToString(key) + "\t";
-    }
-    for (const auto key : AMDomain::host::ClientMetaData::FieldNames) {
-      header += AMStr::ToString(key) + "\t";
-    }
-    managers.interfaces.prompt_io_manager->Print(header);
-    return OK;
-  }
-  void reset() override {}
-};
-
-/**
- * @brief CLI argument container for config data.
- */
-struct ConfigDataArgs : BaseArgStruct {
-  [[nodiscard]] ECM Run(const CLIServices &managers,
-                        const CliRunContext &ctx) const override {
-    (void)ctx;
-    return managers.interfaces.config_interface_service->PrintPaths();
-  }
-  void reset() override {}
 };
 
 /**

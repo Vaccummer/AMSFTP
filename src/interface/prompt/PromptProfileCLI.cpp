@@ -45,7 +45,7 @@ bool TryParseInt64Strict_(const std::string &text, int64_t *out) {
 
 void PrintPromptProfile_(PromptIOManager &prompt, const std::string &name,
                          const PromptProfileSettings &profile) {
-  prompt.FmtPrint("[{}]", name);
+  prompt.FmtPrint("\\[{}]", name);
   prompt.FmtPrint("Prompt.marker: {}", profile.prompt.marker);
   prompt.FmtPrint("Prompt.continuation_marker: {}",
                   profile.prompt.continuation_marker);

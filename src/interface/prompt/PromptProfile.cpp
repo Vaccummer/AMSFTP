@@ -10,7 +10,7 @@ inline constexpr const char *kDefaultPromptProfile = "*";
 [[maybe_unused]] void
 PrintPromptProfile_(PromptIOManager &prompt, const std::string &name,
                     const AMDomain::prompt::PromptProfileSettings &profile) {
-  prompt.FmtPrint("[{}]", name);
+  prompt.FmtPrint("\\[{}]", name);
   prompt.FmtPrint("Prompt.marker: {}", profile.prompt.marker);
   prompt.FmtPrint("Prompt.continuation_marker: {}",
                   profile.prompt.continuation_marker);

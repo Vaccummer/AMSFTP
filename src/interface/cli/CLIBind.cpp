@@ -12,7 +12,6 @@ using AMInterface::parser::CommandNode;
  */
 void BindConfigCommands(CommandNode *root, CliArgsPool &args,
                         CliCommands &commands) {
-  using Sem = AMCommandArgSemantic;
   if (!root) {
     return;
   }
@@ -27,15 +26,6 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
       "ls", "List project/config file paths", args, &CliArgsPool::config,
       &CliConfigArgs::ls);
   commands.config.ls = config_ls_node ? config_ls_node->app : nullptr;
-
-  CommandNode *config_keys_node = config_node->AddFunction(
-      "keys", "List keys", args, &CliArgsPool::config, &CliConfigArgs::keys);
-  commands.config.keys = config_keys_node ? config_keys_node->app : nullptr;
-
-  CommandNode *config_data_node = config_node->AddFunction(
-      "data", "Show project/config file paths", args, &CliArgsPool::config,
-      &CliConfigArgs::data);
-  commands.config.data = config_data_node ? config_data_node->app : nullptr;
 
   CommandNode *config_save_node = config_node->AddFunction(
       "save", "Save all config files", args, &CliArgsPool::config, &CliConfigArgs::save);
@@ -59,7 +49,6 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
         ->required()
         ->expected(1, 1);
   }
-
 }
 
 /**
@@ -112,6 +101,11 @@ void BindHostCommands(CommandNode *root, CliArgsPool &args,
       host_node->AddFunction("set", "Set host", args, &CliArgsPool::host,
                              &CliHostArgs::set);
   commands.host.set = host_set_node ? host_set_node->app : nullptr;
+
+  CommandNode *host_keys_node = host_node->AddFunction(
+      "keys", "List private keys", args, &CliArgsPool::host,
+      &CliHostArgs::keys);
+  commands.host.keys = host_keys_node ? host_keys_node->app : nullptr;
 
   if (commands.host.ls) {
     commands.host.ls
@@ -250,8 +244,15 @@ void BindClientCommands(CommandNode *root, CliArgsPool &args,
       "ls", "List client names", args, &CliArgsPool::client, &CliClientArgs::ls);
   commands.client.ls = client_ls_node ? client_ls_node->app : nullptr;
   if (client_ls_node) {
+    commands.client.ls
+        ->add_option("nicknames", args.client.ls.request.nicknames,
+                     "Client nicknames")
+        ->expected(0, -1);
     client_ls_node->AddFlag("-d", "--detail", args.client.ls.request.detail,
                             "Show full status details");
+    client_ls_node->AddFlag("-c", "--check", args.client.ls.request.check,
+                            "Check client status");
+    client_ls_node->AddPositionalRule(0, Sem::ClientName, true);
   }
 
   CommandNode *client_check_node = client_node->AddFunction(
@@ -623,6 +624,19 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     ftp_node->AddPositionalRule(0, Sem::HostNicknameNew, false);
   }
 
+  CommandNode *local_node = root->AddFunction(
+      "local", "Connect to LOCAL host", args, &CliArgsPool::fs,
+      &CliFilesystemArgs::local);
+  commands.fs.local = local_node ? local_node->app : nullptr;
+  if (commands.fs.local) {
+    commands.fs.local
+        ->add_option("nickname", args.fs.local.targets, "nickname")
+        ->expected(0, 1);
+  }
+  if (local_node) {
+    local_node->AddPositionalRule(0, Sem::HostNicknameNew, false);
+  }
+
   CommandNode *ch_node =
       root->AddFunction("ch", "Change current client", args, &CliArgsPool::client, &CliClientArgs::change);
   commands.client.change = ch_node ? ch_node->app : nullptr;
@@ -692,32 +706,6 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
         "-f", "--force", args.fs.exit.force,
         "Exit immediately without interactive-loop exit callbacks");
   }
-}
-
-/**
- * @brief Bind completion-related CLI commands.
- */
-void BindCompleteCommands(CommandNode *root, CliArgsPool &args,
-                          CliCommands &commands) {
-  if (!root) {
-    return;
-  }
-  CommandNode *complete_node =
-      root->AddFunction("complete", "Completion utilities");
-  commands.complete.root = complete_node ? complete_node->app : nullptr;
-
-  CommandNode *cache_node =
-      complete_node
-          ? complete_node->AddFunction("cache", "Manage completion cache")
-          : nullptr;
-  commands.complete.cache_root = cache_node ? cache_node->app : nullptr;
-
-  CommandNode *clear_node =
-      cache_node
-          ? cache_node->AddFunction("clear", "Clear completion cache", args,
-                                    &CliArgsPool::complete, &CliCompleteArgs::cache_clear)
-          : nullptr;
-  commands.complete.cache_clear = clear_node ? clear_node->app : nullptr;
 }
 
 /**
@@ -878,6 +866,7 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args,
  */
 CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args,
                            CommandNode &tree) {
+  app.require_subcommand(0, 1);
   tree.Init(app);
   CliCommands commands;
   commands.app = &app;
@@ -888,7 +877,6 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args,
   BindClientCommands(&tree, args, commands);
   BindVarCommands(&tree, args, commands);
   BindFilesystemCommands(&tree, args, commands);
-  BindCompleteCommands(&tree, args, commands);
   BindTaskCommands(&tree, args, commands);
   return commands;
 }
@@ -951,9 +939,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
                      : command_name.substr(0, command_name.size() - 1);
   if (!args.GetActive()) {
     std::string msg = "No valid command provided";
-    if (cli_commands.complete.root && cli_commands.complete.root->parsed()) {
-      msg = "Invalid complete command";
-    } else if (cli_commands.config.root && cli_commands.config.root->parsed()) {
+    if (cli_commands.config.root && cli_commands.config.root->parsed()) {
       msg = "Invalid config command";
     } else if (cli_commands.host.root && cli_commands.host.root->parsed()) {
       msg = "Invalid host command";
