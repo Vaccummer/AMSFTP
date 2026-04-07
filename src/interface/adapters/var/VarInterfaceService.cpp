@@ -1,8 +1,6 @@
 #include "interface/adapters/var/VarInterfaceService.hpp"
-
-#include "foundation/tools/enum_related.hpp"
+#include "domain/var/VarDomainService.hpp"
 #include "foundation/tools/string.hpp"
-#include <optional>
 
 namespace AMInterface::var {
 namespace {
@@ -135,11 +133,13 @@ VarInterfaceService::ResolveLookupToken(const std::string &token_expr) const {
     }
     const auto zone_it = all_vars.data.find(parsed.data.domain);
     if (zone_it == all_vars.data.end()) {
-      return {{}, Err(EC::InvalidArg, "", "", "target variable zone not found")};
+      return {{},
+              Err(EC::InvalidArg, "", "", "target variable zone not found")};
     }
     const auto var_it = zone_it->second.find(parsed.data.varname);
     if (var_it == zone_it->second.end()) {
-      return {{}, Err(EC::InvalidArg, "", "", "variable not found in target zone")};
+      return {{},
+              Err(EC::InvalidArg, "", "", "variable not found in target zone")};
     }
     return {var_it->second, OK};
   }
@@ -156,7 +156,8 @@ VarInterfaceService::ResolveDefineTarget(bool global,
   }
   if (global && parsed.data.explicit_domain) {
     return {{},
-            Err(EC::InvalidArg, "", "", "cannot combine --global with explicit zone")};
+            Err(EC::InvalidArg, "", "",
+                "cannot combine --global with explicit zone")};
   }
 
   VarInfo target = {};
@@ -174,8 +175,8 @@ ECM VarInterfaceService::QueryAndPrintVar(const std::string &token_expr) const {
   if (!(info.rcm)) {
     return info.rcm;
   }
-  prompt_io_manager_.FmtPrint("{}:{} = {}", info.data.domain, info.data.varname,
-                              info.data.varvalue);
+  prompt_io_manager_.FmtPrint("[{}] ${} = {}", info.data.domain,
+                              info.data.varname, info.data.varvalue);
   return OK;
 }
 
@@ -189,10 +190,11 @@ ECM VarInterfaceService::DefineVar(bool global, const std::string &token_expr,
   return var_service_.AddVar(target.data);
 }
 
-ECM VarInterfaceService::DeleteVar(bool all,
-                                   const std::vector<std::string> &tokens) const {
+ECM VarInterfaceService::DeleteVar(
+    bool all, const std::vector<std::string> &tokens) const {
   if (tokens.empty() || tokens.size() > 2) {
-    return Err(EC::InvalidArg, "", "", "var del requires one var token or [zone token]");
+    return Err(EC::InvalidArg, "", "",
+               "var del requires one var token or [zone token]");
   }
 
   std::string zone_override = {};
@@ -250,10 +252,10 @@ ECM VarInterfaceService::ListVars(
   const auto print_zone =
       [this](const std::string &zone_name,
              const AMApplication::var::ZoneVarInfoMap &zone_vars) {
+        prompt_io_manager_.FmtPrint("\\[{}]", zone_name);
         for (const auto &[name, info] : zone_vars) {
           (void)name;
-          prompt_io_manager_.FmtPrint("{}:{} = {}", zone_name, info.varname,
-                                      info.varvalue);
+          prompt_io_manager_.FmtPrint("${} = {}", info.varname, info.varvalue);
         }
       };
 
@@ -307,10 +309,6 @@ VarInterfaceService::LookupVarValue_(const ParsedVarToken &token,
   auto current_value = lookup_zone(ResolveCurrentDomain_());
   if (current_value.has_value()) {
     return {current_value.value(), OK};
-  }
-  auto public_value = lookup_zone(AMDomain::var::kPublic);
-  if (public_value.has_value()) {
-    return {public_value.value(), OK};
   }
   return {"", Err(EC::InvalidArg, "", "", "variable not found")};
 }

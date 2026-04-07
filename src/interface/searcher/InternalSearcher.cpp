@@ -176,25 +176,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       items = runtime->ListVarsByDomain(prefix_ref.domain);
     } else {
       const std::string current_domain = runtime->CurrentVarDomain();
-      std::unordered_map<std::string, VarInfo> by_name;
-      auto private_vars = runtime->ListVarsByDomain(current_domain);
-      for (const auto &item : private_vars) {
-        by_name[item.varname] = item;
-      }
-      auto public_vars = runtime->ListVarsByDomain(AMDomain::var::kPublic);
-      for (const auto &item : public_vars) {
-        if (by_name.find(item.varname) == by_name.end()) {
-          by_name[item.varname] = item;
-        }
-      }
-      items.reserve(by_name.size());
-      for (const auto &entry : by_name) {
-        items.push_back(entry.second);
-      }
-      std::sort(items.begin(), items.end(),
-                [](const VarInfo &lhs, const VarInfo &rhs) {
-                  return lhs.varname < rhs.varname;
-                });
+      items = runtime->ListVarsByDomain(current_domain);
     }
 
     std::vector<std::string> keys;
@@ -207,9 +189,12 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     for (const auto &match : BuildGeneralMatch(keys, name_prefix)) {
       const auto &item = items[match.index];
       AMDomain::var::VarRef candidate_ref = prefix_ref;
+      if (candidate_ref.explicit_domain) {
+        candidate_ref.domain = item.domain;
+      }
       candidate_ref.varname = item.varname;
       AMCompletionCandidate candidate;
-      candidate.insert_text = AMDomain::var::BuildVarToken(candidate_ref, true);
+      candidate.insert_text = AMDomain::var::BuildVarToken(candidate_ref);
       candidate.display = runtime->Format(
           candidate.insert_text, AMInterface::style::StyleIndex::PublicVarname);
       candidate.help =
