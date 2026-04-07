@@ -38,25 +38,16 @@ ECMData<VarInfo> VarAppService::GetVar(const std::string &zone_name,
 
   const auto store = store_.lock();
   const auto zone_it = store->set.find(zone_name);
-  if (zone_it != store->set.end()) {
-    const auto var_it = zone_it->second.find(varname);
-    if (var_it == zone_it->second.end()) {
-      return {{}, Err(EC::InvalidArg, "", "", "variable not found in target zone")};
-    }
-    return {{zone_name, varname, var_it->second}, OK};
+  if (zone_it == store->set.end()) {
+    return {{}, Err(EC::InvalidArg, "", "", "target zone not found")};
   }
 
-  if (zone_name != AMDomain::var::kPublic) {
-    const auto public_it = store->set.find(AMDomain::var::kPublic);
-    if (public_it != store->set.end()) {
-      const auto fallback_it = public_it->second.find(varname);
-      if (fallback_it != public_it->second.end()) {
-        return {{AMDomain::var::kPublic, varname, fallback_it->second}, OK};
-      }
-    }
+  const auto var_it = zone_it->second.find(varname);
+  if (var_it == zone_it->second.end()) {
+    return {{}, Err(EC::InvalidArg, "", "", "variable not found in target zone")};
   }
 
-  return {{}, Err(EC::InvalidArg, "", "", "target zone not found and no public fallback")};
+  return {{zone_name, varname, var_it->second}, OK};
 }
 
 ECMData<VarInfoList> VarAppService::SearchVar(const std::string &varname) const {
