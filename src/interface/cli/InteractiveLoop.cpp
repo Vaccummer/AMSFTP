@@ -232,79 +232,6 @@ void RegisterPromptGetters_(AMInterface::prompt::CLIPromtRender &core_prompt,
 } // namespace
 
 /**
- * @brief Register callback into one callback vector.
- */
-void AMInteractiveEventRegistry::RegisterCallback_(
-    std::vector<std::function<void()> *> *callbacks,
-    std::function<void()> *clear_fn) {
-  if (!callbacks || !clear_fn) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (std::find(callbacks->begin(), callbacks->end(), clear_fn) !=
-      callbacks->end()) {
-    return;
-  }
-  callbacks->push_back(clear_fn);
-}
-
-/**
- * @brief Register callback for PromptCore-return phase.
- */
-void AMInteractiveEventRegistry::RegisterOnCorePromptReturn(
-    std::function<void()> *clear_fn) {
-  RegisterCallback_(&core_prompt_return_callbacks_, clear_fn);
-}
-
-/**
- * @brief Register callback for interactive-loop-exit phase.
- */
-void AMInteractiveEventRegistry::RegisterOnInteractiveLoopExit(
-    std::function<void()> *clear_fn) {
-  RegisterCallback_(&interactive_loop_exit_callbacks_, clear_fn);
-}
-
-/**
- * @brief Execute callbacks from one callback vector.
- */
-void AMInteractiveEventRegistry::RunCallbacks_(
-    const std::vector<std::function<void()> *> &callbacks) {
-  for (auto *fn : callbacks) {
-    if (!fn || !(*fn)) {
-      continue;
-    }
-    try {
-      (*fn)();
-    } catch (...) {
-    }
-  }
-}
-
-/**
- * @brief Execute all callbacks for PromptCore-return phase.
- */
-void AMInteractiveEventRegistry::RunOnCorePromptReturn() {
-  std::vector<std::function<void()> *> callbacks;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    callbacks = core_prompt_return_callbacks_;
-  }
-  RunCallbacks_(callbacks);
-}
-
-/**
- * @brief Execute all callbacks for interactive-loop-exit phase.
- */
-void AMInteractiveEventRegistry::RunOnInteractiveLoopExit() {
-  std::vector<std::function<void()> *> callbacks;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    callbacks = interactive_loop_exit_callbacks_;
-  }
-  RunCallbacks_(callbacks);
-}
-
-/**
  * @brief Run the core interactive loop until the user exits.
  */
 int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
@@ -399,7 +326,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     // ctx.task_control_token->ClearInterrupt();
     // monitor.SilenceHook("COREPROMPT");
     // monitor.ResumeHook("GLOBAL");
-    managers.runtime.interactive_event_registry.RunOnCorePromptReturn();
+    managers.runtime.interactive_event_registry.Run(
+        InteractiveEventCategory::CorePromptReturn);
 
     if (!line_opt.has_value()) {
       last_dispatch_result = OK;
@@ -481,7 +409,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   }
 
   if (!skip_loop_exit_callbacks) {
-    managers.runtime.interactive_event_registry.RunOnInteractiveLoopExit();
+    managers.runtime.interactive_event_registry.Run(
+        InteractiveEventCategory::InteractiveLoopExit);
   }
   ctx.is_interactive->store(false, std::memory_order_relaxed);
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;

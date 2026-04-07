@@ -104,7 +104,7 @@ struct CLIServices : public NonCopyableNonMovable {
   };
 
   struct RuntimeLayerServices {
-    mutable AMInteractiveEventRegistry interactive_event_registry = {};
+    mutable InteractiveEventRegistry interactive_event_registry = {};
   };
 
   CLIServices() = default;

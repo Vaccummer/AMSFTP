@@ -19,7 +19,7 @@
 struct ic_completion_env_s;
 using ic_completion_env_t = ic_completion_env_s;
 namespace AMInterface::cli {
-class AMInteractiveEventRegistry;
+class InteractiveEventRegistry;
 }
 namespace AMInterface::completion {
 class ICompletionRuntime;
@@ -248,7 +248,7 @@ struct AMSearchEngineRegistration {
  */
 std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
     std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
-    AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry);
+    AMInterface::cli::InteractiveEventRegistry *interactive_event_registry);
 
 /**
  * @brief Core completion engine that orchestrates parsing, dispatch, and async
@@ -260,7 +260,7 @@ public:
       const AMInterface::parser::CommandNode *command_tree,
       AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer,
       std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
-      AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry =
+      AMInterface::cli::InteractiveEventRegistry *interactive_event_registry =
           nullptr,
       AMApplication::completion::CompleterConfigManager
           *completer_config_manager = nullptr,
@@ -483,7 +483,7 @@ private:
   AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer_ = nullptr;
   std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
       nullptr;
-  AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry_ =
+  AMInterface::cli::InteractiveEventRegistry *interactive_event_registry_ =
       nullptr;
   AMApplication::completion::CompleterConfigManager *completer_config_manager_ =
       nullptr;

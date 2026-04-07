@@ -10,6 +10,7 @@
 
 namespace AMInterface::parser {
 namespace {
+constexpr int kEventIdTokenAnalyzerClearTokenCache = 3001;
 
 using TokenCacheValue = std::vector<TokenTypeAnalyzer::AMToken>;
 std::unordered_map<std::string, TokenCacheValue> g_split_token_cache = {};
@@ -136,12 +137,14 @@ bool IsValidOptionToken_(const std::string &token, const CommandNode *node) {
 } // namespace
 
 void TokenTypeAnalyzer::BindInteractiveEventRegistry(
-    AMInterface::cli::AMInteractiveEventRegistry *registry) {
+    AMInterface::cli::InteractiveEventRegistry *registry) {
   if (!registry || token_cache_hook_registered_) {
     return;
   }
   token_cache_clear_callback_ = []() { TokenTypeAnalyzer::ClearTokenCache(); };
-  registry->RegisterOnCorePromptReturn(&token_cache_clear_callback_);
+  (void)registry->Register(
+      AMInterface::cli::InteractiveEventCategory::CorePromptReturn,
+      kEventIdTokenAnalyzerClearTokenCache, token_cache_clear_callback_);
   token_cache_hook_registered_ = true;
 }
 

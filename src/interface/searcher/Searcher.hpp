@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace AMInterface::cli {
-class AMInteractiveEventRegistry;
+class InteractiveEventRegistry;
 }
 namespace AMInterface::completion {
 class ICompletionRuntime;
@@ -169,7 +169,7 @@ public:
    */
   void RegisterCacheClearOnCorePromptReturn();
   void SetInteractiveEventRegistry(
-      AMInterface::cli::AMInteractiveEventRegistry *registry);
+      AMInterface::cli::InteractiveEventRegistry *registry);
 
 private:
   /**
@@ -278,7 +278,7 @@ private:
       temp_cache_;
   std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
       nullptr;
-  AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry_ =
+  AMInterface::cli::InteractiveEventRegistry *interactive_event_registry_ =
       nullptr;
   std::function<void()> temp_cache_clear_callback_;
   bool temp_cache_hook_registered_ = false;

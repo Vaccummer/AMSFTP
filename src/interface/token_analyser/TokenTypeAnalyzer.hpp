@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace AMInterface::cli {
-class AMInteractiveEventRegistry;
+class InteractiveEventRegistry;
 }
 
 namespace AMInterface::parser {
@@ -38,7 +38,7 @@ public:
     return runtime_;
   }
   void BindInteractiveEventRegistry(
-      AMInterface::cli::AMInteractiveEventRegistry *registry);
+      AMInterface::cli::InteractiveEventRegistry *registry);
 
   /**
    * @brief Build a bbcode-formatted string for isocline highlighting.

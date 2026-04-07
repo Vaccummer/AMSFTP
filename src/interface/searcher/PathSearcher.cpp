@@ -10,6 +10,7 @@ using namespace AMInterface::searcher::detail;
 
 namespace AMInterface::searcher {
 namespace {
+constexpr int kEventIdPathClearTempCache = 2001;
 
 std::string TrimTrailingSep_(std::string text) {
   while (!text.empty() && (text.back() == '/' || text.back() == '\\')) {
@@ -218,7 +219,7 @@ void AMPathSearchEngine::RegisterCacheClearOnCorePromptReturn() {
 }
 
 void AMPathSearchEngine::SetInteractiveEventRegistry(
-    AMInterface::cli::AMInteractiveEventRegistry *registry) {
+    AMInterface::cli::InteractiveEventRegistry *registry) {
   interactive_event_registry_ = registry;
 }
 
@@ -230,10 +231,12 @@ void AMPathSearchEngine::EnsureTempCacheHookRegistered_() {
     return;
   }
   temp_cache_clear_callback_ = [this]() { ClearTempCache_(); };
-  interactive_event_registry_->RegisterOnCorePromptReturn(
-      &temp_cache_clear_callback_);
-  interactive_event_registry_->RegisterOnInteractiveLoopExit(
-      &temp_cache_clear_callback_);
+  (void)interactive_event_registry_->Register(
+      AMInterface::cli::InteractiveEventCategory::CorePromptReturn,
+      kEventIdPathClearTempCache, temp_cache_clear_callback_);
+  (void)interactive_event_registry_->Register(
+      AMInterface::cli::InteractiveEventCategory::InteractiveLoopExit,
+      kEventIdPathClearTempCache, temp_cache_clear_callback_);
   temp_cache_hook_registered_ = true;
 }
 
@@ -502,7 +505,7 @@ void AMPathSearchEngine::StoreTempCache_(const CacheKey &key,
 namespace AMInterface::completer {
 std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
     std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
-    AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry) {
+    AMInterface::cli::InteractiveEventRegistry *interactive_event_registry) {
   std::vector<AMSearchEngineRegistration> out;
 
   auto command_engine = std::make_shared<AMInterface::searcher::AMCommandSearchEngine>();
