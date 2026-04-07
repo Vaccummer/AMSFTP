@@ -8,7 +8,7 @@ using AMInterface::parser::AMCommandArgSemantic;
 using AMInterface::parser::CommandNode;
 
 /**
- * @brief Bind host-related CLI commands.
+ * @brief Bind config-related CLI commands.
  */
 void BindConfigCommands(CommandNode *root, CliArgsPool &args,
                         CliCommands &commands) {
@@ -17,51 +17,25 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
     return;
   }
 
-  CommandNode *config_node = root->AddFunction("host", "Host manager");
+  CommandNode *config_node = root->AddFunction("config", "Config manager");
   if (!config_node) {
     return;
   }
   commands.config.root = config_node->app;
 
   CommandNode *config_ls_node = config_node->AddFunction(
-      "ls", "List hosts", args, &CliArgsPool::config, &CliConfigArgs::ls);
+      "ls", "List project/config file paths", args, &CliArgsPool::config,
+      &CliConfigArgs::ls);
   commands.config.ls = config_ls_node ? config_ls_node->app : nullptr;
-  if (config_ls_node) {
-    config_ls_node->AddFlag("-l", "--list", args.config.ls.detail,
-                            "Show detailed list");
-  }
 
   CommandNode *config_keys_node = config_node->AddFunction(
       "keys", "List keys", args, &CliArgsPool::config, &CliConfigArgs::keys);
   commands.config.keys = config_keys_node ? config_keys_node->app : nullptr;
 
   CommandNode *config_data_node = config_node->AddFunction(
-      "data", "Show project/config file paths", args, &CliArgsPool::config, &CliConfigArgs::data);
+      "data", "Show project/config file paths", args, &CliArgsPool::config,
+      &CliConfigArgs::data);
   commands.config.data = config_data_node ? config_data_node->app : nullptr;
-
-  CommandNode *config_get_node = config_node->AddFunction(
-      "get", "Query host", args, &CliArgsPool::config, &CliConfigArgs::get);
-  commands.config.get = config_get_node ? config_get_node->app : nullptr;
-
-  CommandNode *config_add_node = config_node->AddFunction(
-      "add", "Add host", args, &CliArgsPool::config, &CliConfigArgs::add);
-  commands.config.add = config_add_node ? config_add_node->app : nullptr;
-
-  CommandNode *config_edit_node = config_node->AddFunction(
-      "edit", "Edit host", args, &CliArgsPool::config, &CliConfigArgs::edit);
-  commands.config.edit = config_edit_node ? config_edit_node->app : nullptr;
-
-  CommandNode *config_rn_node = config_node->AddFunction(
-      "rn", "Rename host", args, &CliArgsPool::config, &CliConfigArgs::rn);
-  commands.config.rename = config_rn_node ? config_rn_node->app : nullptr;
-
-  CommandNode *config_rm_node = config_node->AddFunction(
-      "rm", "Remove host", args, &CliArgsPool::config, &CliConfigArgs::rm);
-  commands.config.remove = config_rm_node ? config_rm_node->app : nullptr;
-
-  CommandNode *config_set_node = config_node->AddFunction(
-      "set", "Set host", args, &CliArgsPool::config, &CliConfigArgs::set);
-  commands.config.set = config_set_node ? config_set_node->app : nullptr;
 
   CommandNode *config_save_node = config_node->AddFunction(
       "save", "Save all config files", args, &CliArgsPool::config, &CliConfigArgs::save);
@@ -72,70 +46,143 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
   commands.config.backup =
       config_backup_node ? config_backup_node->app : nullptr;
 
-  if (commands.config.get) {
-    commands.config.get
-        ->add_option("nicknames", args.config.get.request.nicknames,
-                     "Host nicknames")
+  CommandNode *config_export_node = config_node->AddFunction(
+      "export", "Export all config files to local directory", args,
+      &CliArgsPool::config, &CliConfigArgs::export_config);
+  commands.config.export_config =
+      config_export_node ? config_export_node->app : nullptr;
+
+  if (commands.config.export_config) {
+    commands.config.export_config
+        ->add_option("path", args.config.export_config.path,
+                     "Local directory path")
+        ->required()
+        ->expected(1, 1);
+  }
+
+}
+
+/**
+ * @brief Bind host-related CLI commands.
+ */
+void BindHostCommands(CommandNode *root, CliArgsPool &args,
+                      CliCommands &commands) {
+  using Sem = AMCommandArgSemantic;
+  if (!root) {
+    return;
+  }
+
+  CommandNode *host_node = root->AddFunction("host", "Host manager");
+  if (!host_node) {
+    return;
+  }
+  commands.host.root = host_node->app;
+
+  CommandNode *host_ls_node =
+      host_node->AddFunction("ls", "List hosts", args, &CliArgsPool::host,
+                             &CliHostArgs::ls);
+  commands.host.ls = host_ls_node ? host_ls_node->app : nullptr;
+
+  CommandNode *host_get_node =
+      host_node->AddFunction("get", "Query host", args, &CliArgsPool::host,
+                             &CliHostArgs::get);
+  commands.host.get = host_get_node ? host_get_node->app : nullptr;
+
+  CommandNode *host_add_node =
+      host_node->AddFunction("add", "Add host", args, &CliArgsPool::host,
+                             &CliHostArgs::add);
+  commands.host.add = host_add_node ? host_add_node->app : nullptr;
+
+  CommandNode *host_edit_node =
+      host_node->AddFunction("edit", "Edit host", args, &CliArgsPool::host,
+                             &CliHostArgs::edit);
+  commands.host.edit = host_edit_node ? host_edit_node->app : nullptr;
+
+  CommandNode *host_rn_node =
+      host_node->AddFunction("rn", "Rename host", args, &CliArgsPool::host,
+                             &CliHostArgs::rn);
+  commands.host.rename = host_rn_node ? host_rn_node->app : nullptr;
+
+  CommandNode *host_rm_node =
+      host_node->AddFunction("rm", "Remove host", args, &CliArgsPool::host,
+                             &CliHostArgs::rm);
+  commands.host.remove = host_rm_node ? host_rm_node->app : nullptr;
+
+  CommandNode *host_set_node =
+      host_node->AddFunction("set", "Set host", args, &CliArgsPool::host,
+                             &CliHostArgs::set);
+  commands.host.set = host_set_node ? host_set_node->app : nullptr;
+
+  if (commands.host.ls) {
+    commands.host.ls
+        ->add_option("nicknames", args.host.ls.nicknames, "Host nicknames")
         ->expected(0, -1);
+    host_ls_node->AddFlag("-d", "--detail", args.host.ls.detail,
+                          "Show full host details");
   }
-  if (commands.config.add) {
-    commands.config.add
-        ->add_option("nickname", args.config.add.nickname, "Host nickname")
-        ->expected(0, 1);
-  }
-  if (commands.config.edit) {
-    commands.config.edit
-        ->add_option("nickname", args.config.edit.nickname, "Host nickname")
-        ->required();
-  }
-  if (commands.config.rename) {
-    commands.config.rename
-        ->add_option("old", args.config.rn.old_name, "Old nickname")
-        ->required();
-    commands.config.rename
-        ->add_option("new", args.config.rn.new_name, "New nickname")
-        ->required();
-  }
-  if (commands.config.remove) {
-    commands.config.remove
-        ->add_option("nicknames", args.config.rm.names,
-                     "Host nicknames to remove")
+  if (commands.host.get) {
+    commands.host.get
+        ->add_option("nicknames", args.host.get.nicknames, "Host nicknames")
         ->expected(1, -1);
   }
-  if (commands.config.set) {
-    commands.config.set
-        ->add_option("nickname", args.config.set.request.nickname,
-                     "Host nickname")
+  if (commands.host.add) {
+    commands.host.add
+        ->add_option("nickname", args.host.add.nickname, "Host nickname")
+        ->expected(0, 1);
+  }
+  if (commands.host.edit) {
+    commands.host.edit
+        ->add_option("nickname", args.host.edit.nickname, "Host nickname")
         ->required();
-    commands.config.set
-        ->add_option("attrname", args.config.set.request.attrname,
+  }
+  if (commands.host.rename) {
+    commands.host.rename
+        ->add_option("old", args.host.rn.old_name, "Old nickname")
+        ->required();
+    commands.host.rename
+        ->add_option("new", args.host.rn.new_name, "New nickname")
+        ->required();
+  }
+  if (commands.host.remove) {
+    commands.host.remove
+        ->add_option("nicknames", args.host.rm.names, "Host nicknames to remove")
+        ->expected(1, -1);
+  }
+  if (commands.host.set) {
+    commands.host.set
+        ->add_option("nickname", args.host.set.request.nickname, "Host nickname")
+        ->required();
+    commands.host.set
+        ->add_option("attrname", args.host.set.request.attrname,
                      "Host property name")
         ->required();
-    commands.config.set
-        ->add_option("value", args.config.set.request.value,
-                     "Host property value")
+    commands.host.set
+        ->add_option("value", args.host.set.request.value, "Host property value")
         ->required();
   }
 
-  if (config_get_node) {
-    config_get_node->AddPositionalRule(0, Sem::HostNickname, true);
+  if (host_ls_node) {
+    host_ls_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
-  if (config_add_node) {
-    config_add_node->AddPositionalRule(0, Sem::HostNicknameNew, false);
+  if (host_get_node) {
+    host_get_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
-  if (config_edit_node) {
-    config_edit_node->AddPositionalRule(0, Sem::HostNickname, true);
+  if (host_add_node) {
+    host_add_node->AddPositionalRule(0, Sem::HostNicknameNew, false);
   }
-  if (config_rm_node) {
-    config_rm_node->AddPositionalRule(0, Sem::HostNickname, true);
+  if (host_edit_node) {
+    host_edit_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
-  if (config_rn_node) {
-    config_rn_node->AddPositionalRule(0, Sem::HostNickname, false);
-    config_rn_node->AddPositionalRule(1, Sem::HostNicknameNew, false);
+  if (host_rm_node) {
+    host_rm_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
-  if (config_set_node) {
-    config_set_node->AddPositionalRule(0, Sem::HostNickname, false);
-    config_set_node->AddPositionalRule(1, Sem::HostAttr, false);
+  if (host_rn_node) {
+    host_rn_node->AddPositionalRule(0, Sem::HostNickname, false);
+    host_rn_node->AddPositionalRule(1, Sem::HostNicknameNew, false);
+  }
+  if (host_set_node) {
+    host_set_node->AddPositionalRule(0, Sem::HostNickname, false);
+    host_set_node->AddPositionalRule(1, Sem::HostAttr, false);
   }
 }
 
@@ -836,6 +883,7 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args,
   commands.app = &app;
   commands.args = &args;
   BindConfigCommands(&tree, args, commands);
+  BindHostCommands(&tree, args, commands);
   BindProfileCommands(&tree, args, commands);
   BindClientCommands(&tree, args, commands);
   BindVarCommands(&tree, args, commands);
@@ -906,6 +954,8 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     if (cli_commands.complete.root && cli_commands.complete.root->parsed()) {
       msg = "Invalid complete command";
     } else if (cli_commands.config.root && cli_commands.config.root->parsed()) {
+      msg = "Invalid config command";
+    } else if (cli_commands.host.root && cli_commands.host.root->parsed()) {
       msg = "Invalid host command";
     } else if (cli_commands.client.root && cli_commands.client.root->parsed()) {
       msg = "Invalid client command";

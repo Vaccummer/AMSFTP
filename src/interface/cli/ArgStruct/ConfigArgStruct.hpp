@@ -17,7 +17,8 @@ struct ConfigLsArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    return managers.interfaces.client_interface_service->ListHosts(detail);
+    (void)detail;
+    return managers.interfaces.config_interface_service->PrintPaths();
   }
   void reset() override { detail = false; }
 };
@@ -158,6 +159,19 @@ struct ConfigBackupArgs : BaseArgStruct {
     return managers.interfaces.config_interface_service->BackupAll();
   }
   void reset() override {}
+};
+
+/**
+ * @brief CLI argument container for config export.
+ */
+struct ConfigExportArgs : BaseArgStruct {
+  std::string path = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    return managers.interfaces.config_interface_service->Export(path);
+  }
+  void reset() override { path.clear(); }
 };
 
 /**
