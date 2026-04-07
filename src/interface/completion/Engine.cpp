@@ -11,6 +11,7 @@
 
 namespace AMInterface::completer {
 namespace {
+constexpr int kEventIdCompletionCancelPendingAsync = 1001;
 std::atomic<uint64_t> g_completion_task_id{1};
 
 uint64_t NextCompletionTaskId_() {
@@ -479,8 +480,9 @@ void AMCompleteEngine::EnsurePromptReturnCancelHookRegistered_() {
     return;
   }
   prompt_return_cancel_callback_ = [this]() { CancelPendingAsyncRequests_(); };
-  interactive_event_registry_->RegisterOnCorePromptReturn(
-      &prompt_return_cancel_callback_);
+  (void)interactive_event_registry_->Register(
+      AMInterface::cli::InteractiveEventCategory::CorePromptReturn,
+      kEventIdCompletionCancelPendingAsync, prompt_return_cancel_callback_);
   prompt_return_cancel_hook_registered_ = true;
 }
 

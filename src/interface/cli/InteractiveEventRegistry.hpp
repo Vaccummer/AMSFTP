@@ -2,29 +2,34 @@
 
 #include "foundation/core/DataClass.hpp"
 #include <functional>
-#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace AMInterface::cli {
+enum class InteractiveEventCategory {
+  CorePromptReturn = 0,
+  InteractiveLoopExit = 1,
+};
 
-class AMInteractiveEventRegistry : public NonCopyableNonMovable {
+class InteractiveEventRegistry : public NonCopyableNonMovable {
 public:
-  AMInteractiveEventRegistry() = default;
-  ~AMInteractiveEventRegistry() override = default;
+  InteractiveEventRegistry() = default;
+  ~InteractiveEventRegistry() override = default;
 
-  void RegisterOnCorePromptReturn(std::function<void()> *clear_fn);
-  void RegisterOnInteractiveLoopExit(std::function<void()> *clear_fn);
-  void RunOnCorePromptReturn();
-  void RunOnInteractiveLoopExit();
+  bool Register(InteractiveEventCategory category, int id,
+                std::function<void()> fn);
+  bool Unregister(InteractiveEventCategory category, int id);
+  void Run(InteractiveEventCategory category);
 
 private:
-  void RegisterCallback_(std::vector<std::function<void()> *> *callbacks,
-                         std::function<void()> *clear_fn);
-  void RunCallbacks_(const std::vector<std::function<void()> *> &callbacks);
+  struct CallbackEntry {
+    int id = 0;
+    std::function<void()> fn = {};
+  };
 
-  std::mutex mutex_ = {};
-  std::vector<std::function<void()> *> core_prompt_return_callbacks_ = {};
-  std::vector<std::function<void()> *> interactive_loop_exit_callbacks_ = {};
+  using RegistryMap =
+      std::unordered_map<InteractiveEventCategory, std::vector<CallbackEntry>>;
+  mutable AMAtomic<RegistryMap> registry_ = AMAtomic<RegistryMap>();
 };
 
 } // namespace AMInterface::cli
