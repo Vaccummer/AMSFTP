@@ -2,7 +2,6 @@
 
 #include "CLI/App.hpp"
 #include "interface/cli/ArgStruct/ClientArgStruct.hpp"
-#include "interface/cli/ArgStruct/CompleteArgStruct.hpp"
 #include "interface/cli/ArgStruct/ConfigArgStruct.hpp"
 #include "interface/cli/ArgStruct/FilesystemArgStruct.hpp"
 #include "interface/cli/ArgStruct/HostArgStruct.hpp"
@@ -14,8 +13,6 @@ namespace AMInterface::cli {
 
 struct CliConfigArgs {
   ConfigLsArgs ls = {};
-  ConfigKeysArgs keys = {};
-  ConfigDataArgs data = {};
   ConfigSaveArgs save = {};
   ConfigBackupArgs backup = {};
   ConfigExportArgs export_config = {};
@@ -30,6 +27,7 @@ struct CliHostArgs {
   HostRenameArgs rn = {};
   HostRemoveArgs rm = {};
   HostSetArgs set = {};
+  HostKeysArgs keys = {};
 };
 
 struct CliProfileArgs {
@@ -53,6 +51,7 @@ struct CliFilesystemArgs {
   WgetArgs wget = {};
   SftpArgs sftp = {};
   FtpArgs ftp = {};
+  LocalArgs local = {};
   CdArgs cd = {};
   ConnectArgs connect = {};
   CmdArgs cmd = {};
@@ -72,10 +71,6 @@ struct CliVarArgs {
   VarDefArgs def = {};
   VarDelArgs del = {};
   VarLsArgs ls = {};
-};
-
-struct CliCompleteArgs {
-  CompleteCacheClearArgs cache_clear = {};
 };
 
 struct CliTaskArgs {
@@ -100,7 +95,6 @@ struct CliArgsPool {
   CliFilesystemArgs fs = {};
   CliClientArgs client = {};
   CliVarArgs var = {};
-  CliCompleteArgs complete = {};
   CliTaskArgs task = {};
 
   void SetActive(BaseArgStruct *active) { active_ = active; }
@@ -117,8 +111,6 @@ private:
 struct ConfigCommands {
   CLI::App *root = nullptr;
   CLI::App *ls = nullptr;
-  CLI::App *keys = nullptr;
-  CLI::App *data = nullptr;
   CLI::App *save = nullptr;
   CLI::App *backup = nullptr;
   CLI::App *export_config = nullptr;
@@ -135,6 +127,7 @@ struct HostCommands {
   CLI::App *rename = nullptr;
   CLI::App *remove = nullptr;
   CLI::App *set = nullptr;
+  CLI::App *keys = nullptr;
 };
 
 struct ProfileCommands {
@@ -167,6 +160,7 @@ struct FilesystemCommands {
   CLI::App *wget = nullptr;
   CLI::App *sftp = nullptr;
   CLI::App *ftp = nullptr;
+  CLI::App *local = nullptr;
   CLI::App *cd = nullptr;
   CLI::App *connect = nullptr;
   CLI::App *cmd = nullptr;
@@ -180,12 +174,6 @@ struct VarCommands {
   CLI::App *def = nullptr;
   CLI::App *del = nullptr;
   CLI::App *ls = nullptr;
-};
-
-struct CompleteCommands {
-  CLI::App *root = nullptr;
-  CLI::App *cache_root = nullptr;
-  CLI::App *cache_clear = nullptr;
 };
 
 struct TaskCommands {
@@ -213,7 +201,6 @@ struct CliCommands {
   ClientCommands client = {};
   FilesystemCommands fs = {};
   VarCommands var = {};
-  CompleteCommands complete = {};
   TaskCommands task = {};
   CliArgsPool *args = nullptr;
 };
