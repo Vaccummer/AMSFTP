@@ -17,24 +17,41 @@ std::string DisplayPath_(const std::filesystem::path &path) {
   return display.string();
 }
 
-std::string RelativeDisplayPath_(const std::filesystem::path &path,
-                                 const std::filesystem::path &project_dir) {
+std::string AbsoluteDisplayPath_(const std::filesystem::path &path) {
   if (path.empty()) {
     return "";
   }
-  if (project_dir.empty()) {
+  std::error_code ec;
+  const std::filesystem::path abs_path = std::filesystem::absolute(path, ec);
+  if (ec) {
     return DisplayPath_(path.lexically_normal());
   }
+  return DisplayPath_(abs_path.lexically_normal());
+}
 
-  std::error_code ec;
-  const auto relative = std::filesystem::relative(path, project_dir, ec);
-  if (!ec && !relative.empty()) {
-    const auto it = relative.begin();
-    if (it == relative.end() || *it != "..") {
-      return DisplayPath_(relative.lexically_normal());
-    }
+std::string DefaultFileNameForKind_(DocumentKind kind) {
+  switch (kind) {
+  case DocumentKind::Config:
+    return "config.toml";
+  case DocumentKind::Settings:
+    return "settings.toml";
+  case DocumentKind::KnownHosts:
+    return "known_hosts.toml";
+  case DocumentKind::History:
+    return "history.toml";
+  default:
+    return "config.toml";
   }
-  return DisplayPath_(path.lexically_normal());
+}
+
+std::filesystem::path ResolveExportFileName_(
+    AMApplication::config::ConfigAppService &config_service, DocumentKind kind) {
+  std::filesystem::path src_path = {};
+  if (config_service.GetDataPath(kind, &src_path) && !src_path.empty() &&
+      src_path.has_filename()) {
+    return src_path.filename();
+  }
+  return std::filesystem::path(DefaultFileNameForKind_(kind));
 }
 } // namespace
 
@@ -45,25 +62,25 @@ ConfigInterfaceService::ConfigInterfaceService(
 
 ECM ConfigInterfaceService::PrintPaths() const {
   const std::filesystem::path project_dir = config_service_.ProjectRoot();
-  const std::string project_display = RelativeDisplayPath_(project_dir, {});
+  const std::string project_display = AbsoluteDisplayPath_(project_dir);
   std::vector<std::pair<std::string, std::string>> rows = {
-      {"[ProjectDir]", project_display.empty() ? "<empty>" : project_display}};
+      {"\\[ProjectDir]", project_display.empty() ? "<empty>" : project_display}};
 
   const std::array<std::pair<DocumentKind, std::string>, 4> docs = {
-      std::pair{DocumentKind::Config, "[Config]"},
-      std::pair{DocumentKind::Settings, "[Settings]"},
-      std::pair{DocumentKind::KnownHosts, "[KnownHosts]"},
-      std::pair{DocumentKind::History, "[History]"},
+      std::pair{DocumentKind::Config, "\\[Config]"},
+      std::pair{DocumentKind::Settings, "\\[Settings]"},
+      std::pair{DocumentKind::KnownHosts, "\\[KnownHosts]"},
+      std::pair{DocumentKind::History, "\\[History]"},
   };
 
   for (const auto &[kind, label] : docs) {
     std::filesystem::path data_path = {};
     if (!config_service_.GetDataPath(kind, &data_path)) {
-      rows.push_back({label, "<unavailable>"});
+      rows.emplace_back(label, "<unavailable>");
       continue;
     }
-    const std::string display = RelativeDisplayPath_(data_path, project_dir);
-    rows.push_back({label, display.empty() ? "<empty>" : display});
+    const std::string display = AbsoluteDisplayPath_(data_path);
+    rows.emplace_back(label, display.empty() ? "<empty>" : display);
   }
 
   size_t label_width = 0;
@@ -72,8 +89,8 @@ ECM ConfigInterfaceService::PrintPaths() const {
   }
 
   for (const auto &row : rows) {
-    prompt_io_manager_.FmtPrint("{} {}", AMStr::PadRightAscii(row.first, label_width),
-                                row.second);
+    prompt_io_manager_.FmtPrint(
+        "{}   {}", AMStr::PadRightAscii(row.first, label_width), row.second);
   }
   return OK;
 }
@@ -99,6 +116,53 @@ ECM ConfigInterfaceService::BackupAll() const {
   for (const ECM &item : backup_rcms) {
     if (!(item) && (first_error)) {
       first_error = item;
+    }
+  }
+  return first_error;
+}
+
+ECM ConfigInterfaceService::Export(const std::string &path) const {
+  const std::string raw_dir = AMStr::Strip(path);
+  if (raw_dir.empty()) {
+    return Err(EC::InvalidArg, "config export", "", "path is empty");
+  }
+  if (raw_dir.find('@') != std::string::npos) {
+    return Err(EC::InvalidArg, "config export", raw_dir,
+               "path must be a local directory");
+  }
+
+  const std::filesystem::path export_dir =
+      std::filesystem::path(raw_dir).lexically_normal();
+  std::error_code ec = {};
+  if (std::filesystem::exists(export_dir, ec) &&
+      !std::filesystem::is_directory(export_dir, ec)) {
+    return Err(EC::InvalidArg, "config export", DisplayPath_(export_dir),
+               "path exists but is not a directory");
+  }
+
+  ECM rcm = config_service_.FlushDirtyParticipants();
+  if (!(rcm)) {
+    return rcm;
+  }
+  rcm = config_service_.EnsureDirectory(export_dir);
+  if (!(rcm)) {
+    return rcm;
+  }
+
+  const std::array<DocumentKind, 4> docs = {
+      DocumentKind::Config,
+      DocumentKind::Settings,
+      DocumentKind::KnownHosts,
+      DocumentKind::History,
+  };
+
+  ECM first_error = OK;
+  for (DocumentKind kind : docs) {
+    const std::filesystem::path dst_path =
+        export_dir / ResolveExportFileName_(config_service_, kind);
+    const ECM dump_rcm = config_service_.Dump(kind, dst_path.string(), false);
+    if (!(dump_rcm) && (first_error)) {
+      first_error = dump_rcm;
     }
   }
   return first_error;

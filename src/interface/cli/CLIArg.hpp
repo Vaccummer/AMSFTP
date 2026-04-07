@@ -5,6 +5,7 @@
 #include "interface/cli/ArgStruct/CompleteArgStruct.hpp"
 #include "interface/cli/ArgStruct/ConfigArgStruct.hpp"
 #include "interface/cli/ArgStruct/FilesystemArgStruct.hpp"
+#include "interface/cli/ArgStruct/HostArgStruct.hpp"
 #include "interface/cli/ArgStruct/ProfileArgStruct.hpp"
 #include "interface/cli/ArgStruct/TaskArgStruct.hpp"
 #include "interface/cli/ArgStruct/VarArgStruct.hpp"
@@ -15,15 +16,20 @@ struct CliConfigArgs {
   ConfigLsArgs ls = {};
   ConfigKeysArgs keys = {};
   ConfigDataArgs data = {};
-  ConfigGetArgs get = {};
-  ConfigAddArgs add = {};
-  ConfigEditArgs edit = {};
-  ConfigRenameArgs rn = {};
-  ConfigRemoveArgs rm = {};
-  ConfigSetArgs set = {};
   ConfigSaveArgs save = {};
   ConfigBackupArgs backup = {};
+  ConfigExportArgs export_config = {};
   ConfigProfileSetArgs profile_set = {};
+};
+
+struct CliHostArgs {
+  HostLsArgs ls = {};
+  HostGetArgs get = {};
+  HostAddArgs add = {};
+  HostEditArgs edit = {};
+  HostRenameArgs rn = {};
+  HostRemoveArgs rm = {};
+  HostSetArgs set = {};
 };
 
 struct CliProfileArgs {
@@ -89,6 +95,7 @@ struct CliTaskArgs {
  */
 struct CliArgsPool {
   CliConfigArgs config = {};
+  CliHostArgs host = {};
   CliProfileArgs profile = {};
   CliFilesystemArgs fs = {};
   CliClientArgs client = {};
@@ -112,16 +119,22 @@ struct ConfigCommands {
   CLI::App *ls = nullptr;
   CLI::App *keys = nullptr;
   CLI::App *data = nullptr;
+  CLI::App *save = nullptr;
+  CLI::App *backup = nullptr;
+  CLI::App *export_config = nullptr;
+  CLI::App *profile_root = nullptr;
+  CLI::App *profile_set = nullptr;
+};
+
+struct HostCommands {
+  CLI::App *root = nullptr;
+  CLI::App *ls = nullptr;
   CLI::App *get = nullptr;
   CLI::App *add = nullptr;
   CLI::App *edit = nullptr;
   CLI::App *rename = nullptr;
   CLI::App *remove = nullptr;
   CLI::App *set = nullptr;
-  CLI::App *save = nullptr;
-  CLI::App *backup = nullptr;
-  CLI::App *profile_root = nullptr;
-  CLI::App *profile_set = nullptr;
 };
 
 struct ProfileCommands {
@@ -195,6 +208,7 @@ struct TaskCommands {
 struct CliCommands {
   CLI::App *app = nullptr;
   ConfigCommands config = {};
+  HostCommands host = {};
   ProfileCommands profile = {};
   ClientCommands client = {};
   FilesystemCommands fs = {};

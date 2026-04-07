@@ -8,13 +8,15 @@ namespace AMInterface::config {
 
 class ConfigInterfaceService final : public NonCopyableNonMovable {
 public:
-  ConfigInterfaceService(AMApplication::config::ConfigAppService &config_service,
-                         AMInterface::prompt::AMPromptIOManager &prompt_io_manager);
+  ConfigInterfaceService(
+      AMApplication::config::ConfigAppService &config_service,
+      AMInterface::prompt::AMPromptIOManager &prompt_io_manager);
   ~ConfigInterfaceService() override = default;
 
   ECM PrintPaths() const;
   ECM SaveAll() const;
   ECM BackupAll() const;
+  ECM Export(const std::string &path) const;
 
 private:
   AMApplication::config::ConfigAppService &config_service_;
