@@ -590,6 +590,8 @@ ECM FilesystemInterfaceSerivce::GetSize(
     }
     const std::string styled_label = interface_print::BuildStyledPathLabel(
         style_service_, display_target, &pre_stat.data);
+    const std::string refresh_label =
+        interface_print::BuildPathLabel(display_target);
 
     if (pre_stat.data.type != PathType::DIR) {
       prompt_io_manager_.Print(AMStr::fmt(
@@ -603,11 +605,11 @@ ECM FilesystemInterfaceSerivce::GetSize(
     prompt_io_manager_.RefreshBegin(1);
     refresh_started = true;
     prompt_io_manager_.RefreshRender(
-        {AMStr::fmt("{} {}", styled_label, latest_size)});
+        {AMStr::fmt("{} {}", refresh_label, latest_size)});
 
     auto size_result = filesystem_service_.GetSize(
         target, control,
-        [this, &styled_label, &latest_size,
+        [this, &refresh_label, &latest_size,
          &has_progress](const PathTarget &, int64_t current_size) -> bool {
           const std::string formatted = AMStr::FormatSize(current_size);
           if (has_progress && formatted == latest_size) {
@@ -616,7 +618,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
           has_progress = true;
           latest_size = formatted;
           prompt_io_manager_.RefreshRender(
-              {AMStr::fmt("{} {}", styled_label, latest_size)});
+              {AMStr::fmt("{} {}", refresh_label, latest_size)});
           return true;
         },
         [this](const PathTarget &error_path, ECM rcm) {
