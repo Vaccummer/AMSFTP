@@ -10,17 +10,21 @@ namespace fs = std::filesystem;
 
 int main(int argc, char **argv) {
   try {
-    auto time_n = AMTime::miliseconds();
     const std::string app_name =
-        fs::path(argc > 0 ? argv[0] : "amsftp").filename().string();
-    const fs::path root_dir = fs::current_path();
+        argc > 0 ? fs::path(argv[0]).filename().string() : "amsftp";
+    auto root_result = AMBootstrap::ResolveRootDir();
+    if (!root_result.rcm) {
+      AMBootstrap::PrintBootstrapWarn(root_result.rcm.msg());
+      return static_cast<int>(root_result.rcm.code);
+    }
+    const fs::path root_dir = root_result.data;
 
     auto build_result = AMBootstrap::BuildBootstrapServices(app_name, root_dir);
 
-    if (!build_result.ok() || !build_result.data) {
+    if (!build_result.rcm || !build_result.data) {
       const EC ec =
-          build_result.ok() ? EC::InvalidHandle : build_result.rcm.code;
-      const std::string detail = build_result.ok()
+          build_result.rcm ? EC::InvalidHandle : build_result.rcm.code;
+      const std::string detail = build_result.rcm
                                      ? "bootstrap service build returned null"
                                      : build_result.rcm.msg();
       AMBootstrap::PrintBootstrapWarn(detail);
