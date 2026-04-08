@@ -14,6 +14,8 @@ namespace fs = std::filesystem;
 using AMDomain::config::ConfigStoreInitArg;
 
 ConfigStoreInitArg BuildConfigInitArg(const fs::path &root_dir);
+ECMData<fs::path> ResolveRootDir();
+
 void PrintBootstrapWarn(const std::string &msg);
 
 struct BootstrapServices final : public NonCopyableNonMovable {
