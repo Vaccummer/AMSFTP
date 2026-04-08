@@ -688,6 +688,12 @@ void ic_term_set_cursor_visible(bool visible);
 /// Write a string to the console (and process CSI escape sequences).
 void ic_term_write(const char *s);
 
+/// Write a string with bbcode markup to the console.
+///
+/// Unlike `ic_term_write`, this parses bbcode tags first and then renders
+/// styled output through the terminal backend.
+void ic_term_write_bbcode(const char *s);
+
 /// Write a string to the console and end with a newline
 /// (and process CSI escape sequences).
 void ic_term_writeln(const char *s);
