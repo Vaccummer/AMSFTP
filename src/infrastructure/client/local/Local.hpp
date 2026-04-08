@@ -57,6 +57,22 @@ private:
         config_part_->GetRequest(), AMDomain::client::TraceSource::Client));
   }
 
+  [[nodiscard]] static ECM BuildFsError_(EC code, const std::string &operation,
+                                         const std::string &target,
+                                         const std::error_code &ec) {
+    ECM out = {code, operation, target, ec.message()};
+    if (ec) {
+      out.raw_error = RawError{RawErrorSource::Filesystem, ec.value()};
+    }
+    return out;
+  }
+
+  [[nodiscard]] static ECM BuildFsError_(const std::string &operation,
+                                         const std::string &target,
+                                         const std::error_code &ec) {
+    return BuildFsError_(fec(ec), operation, target, ec);
+  }
+
   static fs::perms ToFsPerms_(size_t mode_int) {
     fs::perms perms = fs::perms::none;
     if ((mode_int & 0400U) != 0U) {
@@ -147,7 +163,7 @@ private:
     HANDLE read_pipe = nullptr;
     HANDLE write_pipe = nullptr;
     if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
-      out.rcm = {EC::UnknownError, "CreatePipe failed"};
+      out.rcm = {EC::UnknownError, "unspecified", "<unknown>", "CreatePipe failed"};
       out.data.output = "";
       out.data.exit_code = -1;
       return out;
@@ -175,7 +191,7 @@ private:
 
     if (!created) {
       CloseHandle(read_pipe);
-      out.rcm = {EC::UnknownError, "CreateProcess failed"};
+      out.rcm = {EC::UnknownError, "unspecified", "<unknown>", "CreateProcess failed"};
       out.data.output = "";
       out.data.exit_code = -1;
       return out;
@@ -386,13 +402,13 @@ private:
     }
 
     if (interrupted) {
-      out.rcm = {EC::Terminate, "Command interrupted"};
+      out.rcm = {EC::Terminate, "unspecified", "<unknown>", "Command interrupted"};
       out.data.output = std::move(output);
       out.data.exit_code = exit_status;
       return out;
     }
     if (timed_out) {
-      out.rcm = {EC::OperationTimeout, "Command timed out"};
+      out.rcm = {EC::OperationTimeout, "unspecified", "<unknown>", "Command timed out"};
       out.data.output = std::move(output);
       out.data.exit_code = exit_status;
       return out;
@@ -538,13 +554,13 @@ private:
     }
 
     if (interrupted) {
-      out.rcm = {EC::Terminate, "Command interrupted"};
+      out.rcm = {EC::Terminate, "unspecified", "<unknown>", "Command interrupted"};
       out.data.output = std::move(output);
       out.data.exit_code = exit_status;
       return out;
     }
     if (timed_out) {
-      out.rcm = {EC::OperationTimeout, "Command timed out"};
+      out.rcm = {EC::OperationTimeout, "unspecified", "<unknown>", "Command timed out"};
       out.data.output = std::move(output);
       out.data.exit_code = exit_status;
       return out;
@@ -610,7 +626,7 @@ public:
     (void)args;
     ECMData<AMFSI::UpdateHomeDirResult> out = {};
     if (control.IsTimeout()) {
-      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      out.rcm = ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
       out.data.home_dir = "";
       return out;
     }
@@ -629,11 +645,11 @@ public:
     ECMData<AMFSI::CheckResult> out = {};
     out.data.status = CurrentStatus_();
     if (control.IsTimeout()) {
-      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      out.rcm = {EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
       return out;
     }
     if (control.IsInterrupted()) {
-      out.rcm = {EC::Terminate, "Interrupted by user"};
+      out.rcm = {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
       return out;
     }
     out.rcm = OK;
@@ -649,11 +665,11 @@ public:
     ECMData<AMFSI::ConnectResult> out = {};
     out.data.status = CurrentStatus_();
     if (control.IsTimeout()) {
-      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      out.rcm = {EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
       return out;
     }
     if (control.IsInterrupted()) {
-      out.rcm = {EC::Terminate, "Interrupted by user"};
+      out.rcm = {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
       return out;
     }
     out.rcm = OK;
@@ -669,8 +685,7 @@ public:
     (void)control;
     ECMData<AMFSI::RTTResult> out = {};
     out.data.rtt_ms = 0.0;
-    out.rcm = {EC::UnImplentedMethod,
-               "GetRTT is not supported for local client"};
+    out.rcm = {EC::UnImplentedMethod, "unspecified", "<unknown>", "GetRTT is not supported for local client"};
     return out;
   }
 
@@ -679,13 +694,13 @@ public:
              const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMFSI::RunResult> out = {};
     if (control.IsTimeout()) {
-      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      out.rcm = {EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
       out.data.output = "";
       out.data.exit_code = -1;
       return out;
     }
     if (control.IsInterrupted()) {
-      out.rcm = {EC::Terminate, "Interrupted by user"};
+      out.rcm = {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
       out.data.output = "";
       out.data.exit_code = -1;
       return out;
@@ -702,17 +717,16 @@ public:
        const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMFSI::StatResult> out = {};
     if (args.path.empty()) {
-      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      out.rcm = {EC::InvalidArg, "stat", "<empty>", "Invalid empty path"};
       out.data.info = {};
       return out;
     }
     std::error_code ec;
     if (!fs::exists(fs::path(args.path), ec)) {
       if (ec) {
-        out.rcm = {fec(ec),
-                   AMStr::fmt("stat {} failed: {}", args.path, ec.message())};
+        out.rcm = BuildFsError_("stat", args.path, ec);
       } else {
-        out.rcm = {EC::PathNotExist, "Path not found: " + args.path};
+        out.rcm = {EC::PathNotExist, "stat", args.path, "Path not found"};
       }
       out.data.info = {};
       return out;
@@ -740,8 +754,7 @@ public:
     }
 
     if (ec) {
-      out.rcm = {fec(ec),
-                 AMStr::fmt("Stat {} failed: {}", pathf, ec.message())};
+      out.rcm = BuildFsError_("stat", pathf, ec);
       trace(AMDomain::client::TraceLevel::Error, out.rcm.code, pathf, "stat",
             out.rcm.error);
       out.data.info = info;
@@ -775,8 +788,8 @@ public:
 #else
     struct stat file_stat;
     if (::stat(args.path.c_str(), &file_stat) == -1) {
-      out.rcm = {fec(std::error_code(errno, std::generic_category())),
-                 "Fail to stat file: " + std::string(strerror(errno))};
+      const std::error_code sec(errno, std::generic_category());
+      out.rcm = BuildFsError_("stat", args.path, sec);
       out.data.info = info;
       return out;
     }
@@ -802,7 +815,7 @@ public:
           const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMFSI::ListResult> out = {};
     if (args.path.empty()) {
-      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      out.rcm = {EC::InvalidArg, "listdir", "<empty>", "Invalid empty path"};
       out.data.entries = {};
       return out;
     }
@@ -816,7 +829,7 @@ public:
         out.rcm.raw_error = {RawErrorSource::Filesystem, ec.value()};
       } else {
         out.rcm.code = EC::PathNotExist;
-        out.rcm.error = "Path not found: " + args.path;
+        out.rcm.error = "Path not found";
         out.rcm.target = args.path;
         out.rcm.operation = "listdir";
       }
@@ -858,12 +871,14 @@ public:
 
     for (const auto &entry : it) {
       if (control.IsInterrupted()) {
-        out.rcm = {EC::Terminate, "Listdir interrupted by user"};
+        out.rcm = {EC::Terminate, "listdir", args.path,
+                   "Interrupted by user"};
         out.data.entries = std::move(entries);
         return out;
       }
       if (control.IsTimeout()) {
-        out.rcm = {EC::OperationTimeout, "Listdir operation timed out"};
+        out.rcm = {EC::OperationTimeout, "listdir", args.path,
+                   "Operation timed out"};
         out.data.entries = std::move(entries);
         return out;
       }
@@ -885,15 +900,14 @@ public:
             const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMFSI::ListNamesResult> out = {};
     if (args.path.empty()) {
-      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      out.rcm = {EC::InvalidArg, "listnames", "<empty>", "Invalid empty path"};
       out.data.names = {};
       return out;
     }
     std::error_code ec;
     fs::directory_iterator it(args.path, ec);
     if (ec) {
-      out.rcm = {fec(ec), AMStr::fmt("listnames {} failed: {}", args.path,
-                                     ec.message())};
+      out.rcm = BuildFsError_("listnames", args.path, ec);
       trace(AMDomain::client::TraceLevel::Error, out.rcm.code, args.path,
             "listnames", out.rcm.error);
       out.data.names = {};
@@ -903,12 +917,14 @@ public:
     std::vector<std::string> names = {};
     for (const auto &entry : it) {
       if (control.IsInterrupted()) {
-        out.rcm = {EC::Terminate, "Listnames interrupted by user"};
+        out.rcm = {EC::Terminate, "listnames", args.path,
+                   "Interrupted by user"};
         out.data.names = std::move(names);
         return out;
       }
       if (control.IsTimeout()) {
-        out.rcm = {EC::OperationTimeout, "Listnames operation timed out"};
+        out.rcm = {EC::OperationTimeout, "listnames", args.path,
+                   "Operation timed out"};
         out.data.names = std::move(names);
         return out;
       }
@@ -924,7 +940,7 @@ public:
         const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMFSI::MkdirResult> out = {};
     if (args.path.empty()) {
-      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      out.rcm = {EC::InvalidArg, "mkdir", "<empty>", "Invalid empty path"};
       return out;
     }
     if (fs::exists(fs::path(args.path))) {
@@ -941,8 +957,7 @@ public:
     std::error_code ec;
     fs::create_directory(fs::path(args.path), ec);
     if (ec) {
-      ECM rcm = {fec(ec),
-                 AMStr::fmt("mkdir {} failed: {}", args.path, ec.message())};
+      ECM rcm = BuildFsError_("mkdir", args.path, ec);
       trace(AMDomain::client::TraceLevel::Error, rcm.code, args.path, "mkdir",
             rcm.error);
       out.rcm = rcm;
@@ -958,15 +973,16 @@ public:
     ECMData<AMFSI::MkdirsResult> out = {};
     const std::string raw_path = AMStr::Strip(args.path);
     if (raw_path.empty()) {
-      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      out.rcm = {EC::InvalidArg, "mkdirs", "<empty>", "Invalid empty path"};
       return out;
     }
     if (control.IsInterrupted()) {
-      out.rcm = {EC::Terminate, "Interrupted by user"};
+      out.rcm = {EC::Terminate, "mkdirs", raw_path, "Interrupted by user"};
       return out;
     }
     if (control.IsTimeout()) {
-      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      out.rcm = {EC::OperationTimeout, "mkdirs", raw_path,
+                 "Operation timed out"};
       return out;
     }
 
@@ -980,11 +996,12 @@ public:
     std::string current = "";
     for (const auto &part : parts) {
       if (control.IsInterrupted()) {
-        out.rcm = {EC::Terminate, "Interrupted by user"};
+        out.rcm = {EC::Terminate, "mkdirs", current, "Interrupted by user"};
         return out;
       }
       if (control.IsTimeout()) {
-        out.rcm = {EC::OperationTimeout, "Operation timed out"};
+        out.rcm = {EC::OperationTimeout, "mkdirs", current,
+                   "Operation timed out"};
         return out;
       }
 
@@ -1006,8 +1023,7 @@ public:
     std::error_code ec;
     fs::remove(fs::path(args.path), ec);
     if (ec) {
-      out.rcm = {fec(ec),
-                 AMStr::fmt("rmdir {} failed: {}", args.path, ec.message())};
+      out.rcm = BuildFsError_("rmdir", args.path, ec);
       return out;
     }
     out.rcm = OK;
@@ -1019,14 +1035,14 @@ public:
          const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMFSI::RMResult> out = {};
     if (control.IsTimeout()) {
-      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      out.rcm = {EC::OperationTimeout, "rmfile", args.path,
+                 "Operation timed out"};
       return out;
     }
     std::error_code ec;
     fs::remove(fs::path(args.path), ec);
     if (ec) {
-      out.rcm = {fec(ec),
-                 AMStr::fmt("rmfile {} failed: {}", args.path, ec.message())};
+      out.rcm = BuildFsError_("rmfile", args.path, ec);
       return out;
     }
     out.rcm = OK;
@@ -1040,14 +1056,14 @@ public:
     std::error_code ec;
     fs::rename(fs::path(args.src), fs::path(args.dst), ec);
     if (ec == std::errc::cross_device_link) {
-      out.rcm = {EC::OperationUnsupported,
-                 AMStr::fmt("rename {} to {} failed: cross-device link",
-                            args.src, args.dst)};
+      out.rcm = {EC::OperationUnsupported, "rename",
+                 AMStr::fmt("{} -> {}", args.src, args.dst),
+                 "cross-device link"};
       return out;
     }
     if (ec) {
-      out.rcm = {fec(ec), AMStr::fmt("rename {} to {} failed: {}", args.src,
-                                     args.dst, ec.message())};
+      out.rcm = BuildFsError_("rename", AMStr::fmt("{} -> {}", args.src, args.dst),
+                              ec);
       return out;
     }
     out.rcm = OK;
@@ -1071,7 +1087,7 @@ public:
                int timeout_ms = -1, int64_t start_time = -1,
                amf interrupt_flag = nullptr) {
     if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
-      ECM out = {EC::Terminate, "Interrupted by user"};
+      ECM out = {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -1079,7 +1095,7 @@ public:
       return;
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
-      ECM out = {EC::OperationTimeout, "remove timeout"};
+      ECM out = {EC::OperationTimeout, "unspecified", "<unknown>", "remove timeout"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -1100,7 +1116,7 @@ public:
 
     for (const auto &entry : listing) {
       if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
-        ECM out = {EC::Terminate, "Interrupted by user"};
+        ECM out = {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(entry.path, out);
         }
@@ -1108,7 +1124,7 @@ public:
         return;
       }
       if (IsTimedOut_(timeout_ms, start_time)) {
-        ECM out = {EC::OperationTimeout, "remove timeout"};
+        ECM out = {EC::OperationTimeout, "unspecified", "<unknown>", "remove timeout"};
         if (error_callback && *error_callback) {
           (*error_callback)(entry.path, out);
         }
@@ -1121,8 +1137,7 @@ public:
       } else {
         fs::remove(entry.path, ec);
         if (ec) {
-          ECM out = {fec(ec), AMStr::fmt("remove {} failed: {}", entry.path,
-                                         ec.message())};
+          ECM out = BuildFsError_("remove", entry.path, ec);
           if (error_callback && *error_callback) {
             (*error_callback)(entry.path, out);
           }
@@ -1134,8 +1149,7 @@ public:
 
     fs::remove(fs::path(path), ec);
     if (ec) {
-      ECM out = {fec(ec),
-                 AMStr::fmt("remove {} failed: {}", path, ec.message())};
+      ECM out = BuildFsError_("remove", path, ec);
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -1177,14 +1191,14 @@ public:
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
       if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
-        ECM out = {EC::Terminate, "iwalk interrupted by user"};
+        ECM out = {EC::Terminate, "unspecified", "<unknown>", "iwalk interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
         }
         return {out, {result, errors}};
       }
       if (IsTimedOut_(timeout_ms, start_time)) {
-        ECM out = {EC::OperationTimeout, "iwalk timeout"};
+        ECM out = {EC::OperationTimeout, "unspecified", "<unknown>", "iwalk timeout"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
         }
@@ -1312,9 +1326,8 @@ public:
     }
     if (info.type != PathType::DIR) {
       trace(AMDomain::client::TraceLevel::Error, EC::NotADirectory, path,
-            "walk", AMStr::fmt("Path is not a directory: {}", path));
-      ECM out = {EC::NotADirectory,
-                 AMStr::fmt("Path is not a directory: {}", path)};
+            "walk", "Path is not a directory");
+      ECM out = {EC::NotADirectory, "walk", path, "Path is not a directory"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -1365,7 +1378,7 @@ public:
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
       if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
-        ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
+        ECM out = {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user, no action conducted"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
         }
@@ -1373,7 +1386,7 @@ public:
         return {out, {result, errors}};
       }
       if (IsTimedOut_(timeout_ms, start_time)) {
-        ECM out = {EC::OperationTimeout, "walk timeout"};
+        ECM out = {EC::OperationTimeout, "unspecified", "<unknown>", "walk timeout"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
         }
@@ -1519,20 +1532,19 @@ public:
              int64_t start_time = -1, amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
-      return {EC::InvalidArg, "Invalid empty path"};
+      return {EC::InvalidArg, "unspecified", "<unknown>", "Invalid empty path"};
     }
     if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
-      return {EC::Terminate, "Interrupted by user"};
+      return {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
-      return {EC::OperationTimeout, "mkdirs timeout"};
+      return {EC::OperationTimeout, "unspecified", "<unknown>", "mkdirs timeout"};
     }
 
     std::error_code ec;
     fs::create_directories(fs::path(path), ec);
     if (ec) {
-      ECM rcm = {fec(ec),
-                 AMStr::fmt("mkdirs {} failed: {}", path, ec.message())};
+      ECM rcm = BuildFsError_("mkdirs", path, ec);
       trace(AMDomain::client::TraceLevel::Error, rcm.code, path, "mkdirs",
             rcm.error);
       return rcm;
@@ -1546,7 +1558,7 @@ public:
                              amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, RMR{}};
+      return {ECM{EC::InvalidArg, "unspecified", "<unknown>", "Invalid empty path"}, RMR{}};
     }
 
     auto [error, info] =
@@ -1566,8 +1578,7 @@ public:
     } else {
       fs::remove(fs::path(path), ec);
       if (ec) {
-        ECM out = {fec(ec),
-                   AMStr::fmt("remove {} failed: {}", path, ec.message())};
+        ECM out = BuildFsError_("remove", path, ec);
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
         }
@@ -1576,10 +1587,10 @@ public:
     }
 
     if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
-      return {{EC::Terminate, "Interrupted by user"}, errors};
+      return {{EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"}, errors};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
-      return {{EC::OperationTimeout, "remove timeout"}, errors};
+      return {{EC::OperationTimeout, "unspecified", "<unknown>", "remove timeout"}, errors};
     }
 
     return {ECMOK, errors};
@@ -1589,18 +1600,18 @@ public:
              int64_t start_time = -1, amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
-      return {EC::InvalidArg, "Invalid empty path"};
+      return {EC::InvalidArg, "unspecified", "<unknown>", "Invalid empty path"};
     }
     if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
-      return {EC::Terminate, "Interrupted by user"};
+      return {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
-      return {EC::OperationTimeout, "saferm timeout"};
+      return {EC::OperationTimeout, "unspecified", "<unknown>", "saferm timeout"};
     }
 
     const ConRequest request = request_atomic_.lock().load();
     if (request.trash_dir.empty()) {
-      return {EC::PathNotExist, "Trash directory is not set"};
+      return {EC::PathNotExist, "unspecified", "<unknown>", "Trash directory is not set"};
     }
 
     auto [error, info] =
@@ -1634,8 +1645,7 @@ public:
       std::error_code ec;
       const bool exists = fs::exists(target_path, ec);
       if (ec) {
-        return {fec(ec), AMStr::fmt("saferm check {} failed: {}", target_path,
-                                    ec.message())};
+        return BuildFsError_("saferm.check", target_path, ec);
       }
       if (!exists) {
         break;
