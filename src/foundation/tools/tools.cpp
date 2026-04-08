@@ -1,8 +1,13 @@
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -920,6 +925,21 @@ std::optional<std::string> HexToAnsi(const std::string &value) {
 } // namespace AMStr
 
 namespace AMAuth {
+namespace {
+constexpr unsigned char kPasswordCipherVersion = 1;
+constexpr size_t kNonceSize = 12;
+constexpr size_t kTagSize = 16;
+constexpr size_t kMinPayloadSize = 1 + kNonceSize + kTagSize;
+
+std::array<unsigned char, 32> DerivePasswordKey_() {
+  std::array<unsigned char, 32> key = {};
+  const auto *data =
+      reinterpret_cast<const unsigned char *>(kPasswordKey.data());
+  SHA256(data, kPasswordKey.size(), key.data());
+  return key;
+}
+} // namespace
+
 void SecureZero(std::string &value) {
   std::fill(value.begin(), value.end(), '\0');
   value.clear();
@@ -973,18 +993,6 @@ std::string HexDecode(const std::string &hex) {
   return out;
 }
 
-std::string XorWithKey(const std::string &input) {
-  if (input.empty()) {
-    return {};
-  }
-  std::string out = input;
-  for (size_t i = 0; i < out.size(); ++i) {
-    const char key_ch = kPasswordKey[i % kPasswordKey.size()];
-    out[i] = static_cast<char>(out[i] ^ key_ch);
-  }
-  return out;
-}
-
 std::string EncryptPassword(const std::string &plain) {
   if (plain.empty()) {
     return {};
@@ -992,8 +1000,59 @@ std::string EncryptPassword(const std::string &plain) {
   if (IsEncrypted(plain)) {
     return plain;
   }
-  const std::string xored = XorWithKey(plain);
-  const std::string encoded = HexEncode(xored);
+
+  std::array<unsigned char, 32> key = DerivePasswordKey_();
+  std::array<unsigned char, kNonceSize> nonce = {};
+  std::array<unsigned char, kTagSize> tag = {};
+  if (RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) != 1) {
+    std::fill(key.begin(), key.end(), 0);
+    return {};
+  }
+
+  std::string ciphertext(plain.size(), '\0');
+  EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+  if (!ctx) {
+    std::fill(key.begin(), key.end(), 0);
+    return {};
+  }
+
+  int out_len = 0;
+  int total_len = 0;
+  bool ok = EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr,
+                               nullptr) == 1;
+  ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
+                                 static_cast<int>(nonce.size()), nullptr) == 1;
+  ok = ok && EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(),
+                                nonce.data()) == 1;
+  ok = ok && EVP_EncryptUpdate(
+                 ctx, reinterpret_cast<unsigned char *>(ciphertext.data()),
+                 &out_len, reinterpret_cast<const unsigned char *>(plain.data()),
+                 static_cast<int>(plain.size())) == 1;
+  total_len = out_len;
+  ok = ok && EVP_EncryptFinal_ex(
+                 ctx,
+                 reinterpret_cast<unsigned char *>(ciphertext.data()) + total_len,
+                 &out_len) == 1;
+  total_len += out_len;
+  ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG,
+                                 static_cast<int>(tag.size()), tag.data()) == 1;
+  EVP_CIPHER_CTX_free(ctx);
+  std::fill(key.begin(), key.end(), 0);
+
+  if (!ok) {
+    SecureZero(ciphertext);
+    return {};
+  }
+  ciphertext.resize(static_cast<size_t>(total_len));
+
+  std::string payload;
+  payload.reserve(1 + nonce.size() + tag.size() + ciphertext.size());
+  payload.push_back(static_cast<char>(kPasswordCipherVersion));
+  payload.append(reinterpret_cast<const char *>(nonce.data()), nonce.size());
+  payload.append(reinterpret_cast<const char *>(tag.data()), tag.size());
+  payload.append(ciphertext);
+  SecureZero(ciphertext);
+  const std::string encoded = HexEncode(payload);
   return std::string(kEncryptedPrefix) + encoded;
 }
 
@@ -1007,8 +1066,62 @@ std::string DecryptPassword(const std::string &stored) {
   if (decoded.empty() && !payload.empty()) {
     return {};
   }
-  decoded = XorWithKey(decoded);
-  return decoded;
+  if (decoded.size() < kMinPayloadSize) {
+    SecureZero(decoded);
+    return {};
+  }
+
+  const auto *decoded_u =
+      reinterpret_cast<const unsigned char *>(decoded.data());
+  if (decoded_u[0] != kPasswordCipherVersion) {
+    SecureZero(decoded);
+    return {};
+  }
+
+  const unsigned char *nonce = decoded_u + 1;
+  const unsigned char *tag = nonce + kNonceSize;
+  const unsigned char *ciphertext = tag + kTagSize;
+  const size_t cipher_len = decoded.size() - kMinPayloadSize;
+
+  std::array<unsigned char, 32> key = DerivePasswordKey_();
+  std::string plain(cipher_len, '\0');
+  EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+  if (!ctx) {
+    SecureZero(decoded);
+    std::fill(key.begin(), key.end(), 0);
+    return {};
+  }
+
+  int out_len = 0;
+  int total_len = 0;
+  bool ok = EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr,
+                               nullptr) == 1;
+  ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
+                                 static_cast<int>(kNonceSize), nullptr) == 1;
+  ok = ok && EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce) == 1;
+  ok = ok &&
+       EVP_DecryptUpdate(ctx, reinterpret_cast<unsigned char *>(plain.data()),
+                         &out_len, ciphertext,
+                         static_cast<int>(cipher_len)) == 1;
+  total_len = out_len;
+  ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
+                                 static_cast<int>(kTagSize),
+                                 const_cast<unsigned char *>(tag)) == 1;
+  ok = ok && EVP_DecryptFinal_ex(
+                 ctx, reinterpret_cast<unsigned char *>(plain.data()) + total_len,
+                 &out_len) == 1;
+  total_len += out_len;
+
+  EVP_CIPHER_CTX_free(ctx);
+  SecureZero(decoded);
+  std::fill(key.begin(), key.end(), 0);
+
+  if (!ok) {
+    SecureZero(plain);
+    return {};
+  }
+  plain.resize(static_cast<size_t>(total_len));
+  return plain;
 }
 } // namespace AMAuth
 

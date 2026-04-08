@@ -74,7 +74,10 @@ target_link_libraries(amsftp PRIVATE
   CLI11::CLI11
   
 )
-target_compile_definitions(amsftp PRIVATE NOMINMAX)
+target_compile_definitions(amsftp PRIVATE
+  NOMINMAX
+  AMSFTP_PASSWORD_KEY="AMSFTP_Static_Key_Change_Me_2026"
+)
 # ========= Console Ctrl-C trigger tool =========
 # add_executable(ctrlc_trigger
 #   "${PROJECT_SOURCE_DIR}/src/tools/ConsoleCtrlTrigger.cpp"
