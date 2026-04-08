@@ -1070,6 +1070,15 @@ ic_public void ic_term_write(const char *s) {
   term_write(env->term, s);
 }
 
+ic_public void ic_term_write_bbcode(const char *s) {
+  ic_env_t *env = ic_get_env();
+  if (env == NULL)
+    return;
+  if (env->bbcode == NULL)
+    return;
+  bbcode_print(env->bbcode, s);
+}
+
 ic_public void ic_term_writeln(const char *s) {
   ic_env_t *env = ic_get_env();
   if (env == NULL)
