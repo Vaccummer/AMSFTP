@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <string>
 #include <unordered_map>
 
 namespace AMDomain::config {
@@ -32,7 +31,7 @@ struct ConfigBackupSet {
 struct ConfigDocumentSpec {
   DocumentKind kind = DocumentKind::Config;
   std::filesystem::path data_path = {};
-  std::string schema_json = "{}";
+  const char *schema_json = "{}";
 };
 
 using ConfigStoreLayout = std::unordered_map<DocumentKind, ConfigDocumentSpec>;

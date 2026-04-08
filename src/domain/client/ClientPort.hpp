@@ -442,11 +442,11 @@ public:
 
   [[nodiscard]] bool CheckStop(ECM &rcm) const {
     if (IsInterrupted()) {
-      rcm = ECM{EC::Terminate, "Operation interrupted by user"};
+      rcm = ECM{EC::Terminate, __func__, "<context>", "Operation interrupted by user"};
       return true;
     }
     if (IsTimeout()) {
-      rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      rcm = ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
       return true;
     }
     return false;
@@ -728,3 +728,4 @@ CreateClientMaintainer(int heartbeat_interval_s = 60,
                        DisconnectCallback disconnect_callback = {},
                        std::vector<ClientHandle> init_clients = {});
 } // namespace AMDomain::client
+

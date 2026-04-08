@@ -8,10 +8,6 @@
 #include <string>
 #include <vector>
 
-namespace AMInterface::cli {
-class InteractiveEventRegistry;
-}
-
 namespace AMInterface::parser {
 
 class CommandNode;
@@ -37,8 +33,6 @@ public:
   [[nodiscard]] std::shared_ptr<ITokenAnalyzerRuntime> Runtime() const {
     return runtime_;
   }
-  void BindInteractiveEventRegistry(
-      AMInterface::cli::InteractiveEventRegistry *registry);
 
   /**
    * @brief Build a bbcode-formatted string for isocline highlighting.
@@ -80,8 +74,6 @@ private:
 
   const CommandNode *command_tree_ = nullptr;
   std::shared_ptr<ITokenAnalyzerRuntime> runtime_ = nullptr;
-  bool token_cache_hook_registered_ = false;
-  std::function<void()> token_cache_clear_callback_ = {};
 };
 
 } // namespace AMInterface::parser

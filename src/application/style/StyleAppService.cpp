@@ -20,10 +20,10 @@ StyleConfigArg StyleConfigManager::GetInitArg() const {
 ECM StyleConfigManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+    return Err(EC::InvalidArg, __func__, "<context>", "config service is null");
   }
   if (!config_service->Write<StyleConfigArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, "", "", "failed to flush style config");
+    return Err(EC::ConfigDumpFailed, __func__, "<context>", "failed to flush style config");
   }
   return OK;
 }
@@ -37,3 +37,4 @@ void StyleConfigManager::SetInitArg(StyleConfigArg arg) {
   MarkConfigDirty();
 }
 } // namespace AMApplication::style
+

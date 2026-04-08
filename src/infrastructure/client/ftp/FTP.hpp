@@ -885,11 +885,11 @@ public:
       return ecm;
     };
     if (nb_res.status == WaitResult::Interrupted) {
-      return with_context({EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"});
+      return with_context({EC::Terminate, __func__, "<context>", "Interrupted by user"});
     }
     if (nb_res.status == WaitResult::Timeout) {
       return with_context(
-          {EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"});
+          {EC::OperationTimeout, __func__, "<context>", "Operation timed out"});
     }
     if (nb_res.value == CURLE_OK) {
       return with_context(OK);
@@ -912,7 +912,7 @@ public:
     }
 
     ECM curl_mapped = {
-        detail::CastImportantCurlEC(nb_res.value), "unspecified", "<unknown>",
+        detail::CastImportantCurlEC(nb_res.value), __func__, "<context>",
         curl_easy_strerror(nb_res.value),
         RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
     return with_context(std::move(curl_mapped));
@@ -927,7 +927,7 @@ public:
       return OK;
     }
     if (curl == nullptr) {
-      return {EC::NoConnection, "unspecified", "<unknown>", "curl handle is invalid",
+      return {EC::NoConnection, __func__, "<context>", "curl handle is invalid",
               RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
     }
 
@@ -1003,11 +1003,11 @@ public:
         msg = AMStr::fmt("Unexpected FTP response code {}", response_code);
         break;
       }
-      return {ec, "unspecified", "<unknown>", msg,
+      return {ec, __func__, "<context>", msg,
               RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
     }
 
-    return {detail::CastCurlEC(curl_code), "unspecified", "<unknown>",
+    return {detail::CastCurlEC(curl_code), __func__, "<context>",
             curl_easy_strerror(curl_code),
             RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
   }
@@ -1076,7 +1076,7 @@ public:
       throw std::invalid_argument("AMFTPIOCore only accepts FTP protocol");
     }
     if (!curl) {
-      return {EC::NoConnection, "unspecified", "<unknown>", "CURL not initialized"};
+      return {EC::NoConnection, __func__, "<context>", "CURL not initialized"};
     }
 
     std::string decrypted_password = "";
@@ -1110,7 +1110,7 @@ public:
       return {std::move(rcm), ""};
     }
     if (!curl || !multi) {
-      return {{EC::NoConnection, "unspecified", "<unknown>", "CURL not initialized"}, ""};
+      return {{EC::NoConnection, __func__, "<context>", "CURL not initialized"}, ""};
     }
 
     ECM ecm = SetupPath("", true);
@@ -1167,7 +1167,7 @@ public:
     if (!response.empty()) {
       return {OK, response};
     }
-    return {{EC::CommonFailure, "unspecified", "<unknown>", "SYST returned empty response"}, ""};
+    return {{EC::CommonFailure, __func__, "<context>", "SYST returned empty response"}, ""};
   }
 
   ECMData<AMFSI::StatResult>
@@ -1179,7 +1179,7 @@ public:
     }
     const std::string &path = args.path;
     if (!curl || !multi) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "CURL not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "CURL not initialized"}};
     }
 
     rcm = SetupPath(path, false);
@@ -1333,7 +1333,7 @@ public:
     }
     const std::string &path = args.path;
     if (!curl || !multi) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "CURL not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "CURL not initialized"}};
     }
 
     rcm = SetupPath(path, true);
@@ -1471,7 +1471,7 @@ public:
     }
     const std::string &path = args.path;
     if (!curl || !multi) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "CURL not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "CURL not initialized"}};
     }
 
     rcm = SetupPath(path, true);
@@ -1750,7 +1750,7 @@ public:
 
     curl = curl_easy_init();
     if (!curl) {
-      out.rcm = {EC::NoConnection, "unspecified", "<unknown>", "CURL easy init failed"};
+      out.rcm = {EC::NoConnection, __func__, "<context>", "CURL easy init failed"};
       out.data.status = AMDomain::client::ClientStatus::NoConnection;
       return out;
     }
@@ -1758,7 +1758,7 @@ public:
     if (!multi) {
       curl_easy_cleanup(curl);
       curl = nullptr;
-      out.rcm = {EC::NoConnection, "unspecified", "<unknown>", "CURL multi init failed"};
+      out.rcm = {EC::NoConnection, __func__, "<context>", "CURL multi init failed"};
       out.data.status = AMDomain::client::ClientStatus::NoConnection;
       return out;
     }
@@ -1832,7 +1832,7 @@ public:
     int times = args.times > 0 ? args.times : 1;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!curl || !multi) {
-      return {{-1.0}, ECM{EC::NoConnection, "unspecified", "<unknown>", "CURL not initialized"}};
+      return {{-1.0}, ECM{EC::NoConnection, __func__, "<context>", "CURL not initialized"}};
     }
     std::vector<double> rtts;
     rtts.reserve(static_cast<size_t>(times));
@@ -1866,7 +1866,7 @@ public:
     }
     free(chunk.memory);
     if (rtts.empty()) {
-      return {{-1.0}, ECM{EC::UnknownError, "unspecified", "<unknown>", "RTT measure results empty"}};
+      return {{-1.0}, ECM{EC::UnknownError, __func__, "<context>", "RTT measure results empty"}};
     } else {
       double sum = 0.0;
       for (double rtt : rtts) {
@@ -1883,7 +1883,7 @@ public:
     (void)control;
     ECMData<AMFSI::RunResult> res;
     res.rcm =
-        ECM{EC::OperationUnsupported, "unspecified", "<unknown>", "FTP client does not support ConductCmd"};
+        ECM{EC::OperationUnsupported, __func__, "<context>", "FTP client does not support ConductCmd"};
     res.data.output = "";
     res.data.exit_code = -1;
     return res;
@@ -1899,11 +1899,11 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
     if (!curl) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "CURL not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "CURL not initialized"}};
     }
 
     if (args.trace_link) {
-      return {ECM{EC::UnImplentedMethod, "unspecified", "<unknown>", "Trace link is not supported in FTP Client"}};
+      return {ECM{EC::UnImplentedMethod, __func__, "<context>", "Trace link is not supported in FTP Client"}};
     }
 
     // Prefer MLST (modern method)
@@ -2232,7 +2232,7 @@ public:
     std::string srcf = AMPath::abspath(args.src, true, home_dir, home_dir);
     std::string dstf = AMPath::abspath(args.dst, true, home_dir, home_dir);
     if (srcf.empty() || dstf.empty()) {
-      out.rcm = {EC::InvalidArg, "unspecified", "<unknown>", AMStr::fmt("Invalid path: {} or {}", srcf, dstf)};
+      out.rcm = {EC::InvalidArg, __func__, "<context>", AMStr::fmt("Invalid path: {} or {}", srcf, dstf)};
       return out;
     }
 
@@ -2245,7 +2245,7 @@ public:
     auto dst_stat = stat(AMFSI::StatArgs{dstf, false}, control);
     if (dst_stat.rcm.code == EC::Success) {
       if (dst_stat.data.info.type != src_stat.data.info.type) {
-        out.rcm = {EC::PathAlreadyExists, "unspecified", "<unknown>", AMStr::fmt(
+        out.rcm = {EC::PathAlreadyExists, __func__, "<context>", AMStr::fmt(
                        "Dst already exists and is not the same type as src: "
                        "{} ",
                        dstf)};
@@ -2312,11 +2312,11 @@ public:
   getsize(const AMFSI::GetsizeArgs &args,
           const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"}, -1};
+      return {ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"}, -1};
     }
     const int64_t size = getsize(args.path, args.ignore_special_file, control);
     if (size < 0) {
-      return {{EC::UnknownError, "unspecified", "<unknown>", "getsize failed"}, size};
+      return {{EC::UnknownError, __func__, "<context>", "getsize failed"}, size};
     }
     return {OK, size};
   }
@@ -2325,7 +2325,7 @@ public:
   find(const AMFSI::FindArgs &args,
        const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"}, {}};
+      return {ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"}, {}};
     }
     auto legacy = find(args.path, args.type, control);
     return {OK, std::move(legacy)};
@@ -2334,11 +2334,11 @@ public:
   ECM mkdirs(const AMFSI::MkdirsArgs &args,
              const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
-      return ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
+      return ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
     }
     auto parts = AMPath::split(args.path);
     if (parts.empty()) {
-      return {EC::InvalidArg, "unspecified", "<unknown>", "Invalid empty path"};
+      return {EC::InvalidArg, __func__, "<context>", "Invalid empty path"};
     }
     if (parts.size() == 1) {
       return mkdir(AMFSI::MkdirArgs{args.path}, control);
@@ -2347,10 +2347,10 @@ public:
     std::string current_path = parts.front();
     for (size_t i = 1; i < parts.size(); i++) {
       if (control.IsInterrupted()) {
-        return {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
+        return {EC::Terminate, __func__, "<context>", "Interrupted by user"};
       }
       if (control.IsTimeout()) {
-        return {EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
+        return {EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
       }
       current_path = AMPath::join(current_path, parts[i]);
       ECM ecm = mkdir(AMFSI::MkdirArgs{current_path}, control);
@@ -2365,10 +2365,10 @@ public:
   remove(const AMFSI::RemoveArgs &args,
          const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"}, {}};
+      return {ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"}, {}};
     }
     if (control.IsInterrupted()) {
-      return {ECM{EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"}, {}};
+      return {ECM{EC::Terminate, __func__, "<context>", "Interrupted by user"}, {}};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     RMR errors = {};
@@ -2381,10 +2381,10 @@ public:
     }
     _rm(info, errors, args.error_callback, control);
     if (control.IsInterrupted()) {
-      return {ECM{EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"}, errors};
+      return {ECM{EC::Terminate, __func__, "<context>", "Interrupted by user"}, errors};
     }
     if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"}, errors};
+      return {ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"}, errors};
     }
     return {OK, errors};
   }
@@ -2392,7 +2392,7 @@ public:
   ECM saferm(const AMFSI::SafermArgs &args,
              const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
-      return ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
+      return ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
     }
     auto [rcm, errors] = remove(AMFSI::RemoveArgs{args.path, nullptr}, control);
     if (rcm.code != EC::Success) {
@@ -2409,14 +2409,14 @@ public:
            const AMDomain::client::ClientControlComponent &control) {
     (void)args;
     (void)control;
-    return {EC::OperationUnsupported, "unspecified", "<unknown>", "FTP client does not support server-side copy"};
+    return {EC::OperationUnsupported, __func__, "<context>", "FTP client does not support server-side copy"};
   }
 
   AMFSI::IWalkResult
   iwalk(const AMFSI::IWalkArgs &args,
         const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"}, {}, {}};
+      return {ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"}, {}, {}};
     }
     auto legacy = iwalk(args.path, args.show_all, args.ignore_special_file,
                         args.error_callback, control);
@@ -2427,7 +2427,7 @@ public:
   walk(const AMFSI::WalkArgs &args,
        const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"}, {}, {}};
+      return {ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"}, {}, {}};
     }
     auto legacy = walk(args.path, args.max_depth, args.show_all,
                        args.ignore_special_file, args.error_callback, control);
@@ -2488,14 +2488,14 @@ public:
         const AMPath::WalkErrorCallback &error_callback,
         const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"}, {WRV{}, RMR{}}};
+      return {ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"}, {WRV{}, RMR{}}};
     }
     if (control.IsInterrupted()) {
-      return {ECM{EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"}, {WRV{}, RMR{}}};
+      return {ECM{EC::Terminate, __func__, "<context>", "Interrupted by user"}, {WRV{}, RMR{}}};
     }
 
     if (path.empty()) {
-      ECM out = {EC::InvalidArg, "unspecified", "<unknown>", "Invalid empty path"};
+      ECM out = {EC::InvalidArg, __func__, "<context>", "Invalid empty path"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -2517,14 +2517,14 @@ public:
     _iwalk(info, result, errors, show_all, ignore_special_file, error_callback,
            control);
     if (control.IsInterrupted()) {
-      ECM out = {EC::Terminate, "unspecified", "<unknown>", "iwalk interrupted by user"};
+      ECM out = {EC::Terminate, __func__, "<context>", "iwalk interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
       return {out, {result, errors}};
     }
     if (control.IsTimeout()) {
-      ECM out = {EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
+      ECM out = {EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -2594,11 +2594,11 @@ public:
   walk(const std::string &path, int max_depth, bool show_all,
        bool ignore_special_file, const AMPath::WalkErrorCallback
   &error_callback, const AMDomain::client::ClientControlComponent &control) { if
-  (control.IsTimeout()) { return {ECM{EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed
+  (control.IsTimeout()) { return {ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed
   out"}, {WRD{}, RMR{}}};
     }
     if (control.IsInterrupted()) {
-      return {ECM{EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"}, {WRD{}, RMR{}}};
+      return {ECM{EC::Terminate, __func__, "<context>", "Interrupted by user"}, {WRD{}, RMR{}}};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     auto [rcm, br] = stat(AMFSI::StatArgs{path, false}, control);
@@ -2615,14 +2615,14 @@ public:
     _walk(parts, result_dict, errors, 0, max_depth, show_all,
           ignore_special_file, error_callback, control);
     if (control.IsInterrupted()) {
-      ECM out = {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user, no action conducted"};
+      ECM out = {EC::Terminate, __func__, "<context>", "Interrupted by user, no action conducted"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
       return {out, {result_dict, errors}};
     }
     if (control.IsTimeout()) {
-      ECM out = {EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
+      ECM out = {EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -2754,3 +2754,4 @@ public:
 };
 
 } // namespace AMInfra::client::FTP
+

@@ -2,11 +2,8 @@
 
 #include "application/client/ClientAppService.hpp"
 #include "application/var/VarAppService.hpp"
-#include "domain/var/VarDomainService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "interface/prompt/Prompt.hpp"
-#include <string>
-#include <vector>
 
 namespace AMInterface::var {
 using VarAppService = AMApplication::var::VarAppService;
@@ -18,7 +15,8 @@ using AllVarInfoMap = AMApplication::var::AllVarInfoMap;
 
 class VarInterfaceService final : public NonCopyableNonMovable {
 public:
-  VarInterfaceService(VarAppService &var_service, ClientAppService &client_service,
+  VarInterfaceService(VarAppService &var_service,
+                      ClientAppService &client_service,
                       AMPromptIOManager &prompt_io_manager);
   ~VarInterfaceService() override = default;
 
@@ -45,12 +43,12 @@ private:
   [[nodiscard]] ECMData<std::string>
   LookupVarValue_(const ParsedVarToken &token,
                   const AllVarInfoMap &all_vars) const;
-  [[nodiscard]] std::string SubstitutePathLikeWithSnapshot_(
-      const std::string &raw, const AllVarInfoMap &all_vars) const;
+  [[nodiscard]] std::string
+  SubstitutePathLikeWithSnapshot_(const std::string &raw,
+                                  const AllVarInfoMap &all_vars) const;
 
   VarAppService &var_service_;
   ClientAppService &client_service_;
   AMPromptIOManager &prompt_io_manager_;
 };
 } // namespace AMInterface::var
-

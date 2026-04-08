@@ -21,6 +21,8 @@ inline bool HasParsedCommand(const CLI::App &app) {
 inline int RunCLI(BootstrapServices &runtime, int argc, char **argv) {
   runtime.cli_app = std::make_unique<CLI::App>("AMSFTP CLI", runtime.app_name);
   runtime.cli_app->set_version_flag("-v,--version", "Show version information");
+  // Treat '/path' as positional path instead of Windows-style option.
+  runtime.cli_app->allow_windows_style_options(false);
   runtime.command_tree = {};
   runtime.cli_args_pool = {};
   runtime.cli_commands = AMInterface::cli::BindCliOptions(

@@ -1,7 +1,5 @@
 #include "application/prompt/PromptProfileManager.hpp"
-
 #include "domain/prompt/PromptDomainService.hpp"
-#include "foundation/tools/enum_related.hpp"
 
 namespace AMApplication::prompt {
 namespace {
@@ -33,10 +31,12 @@ PromptProfileArg PromptProfileManager::GetInitArg() const {
 ECM PromptProfileManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+    return Err(EC::InvalidArg, __func__, "<context>",
+               "config service is null");
   }
   if (!config_service->Write<PromptProfileArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, "", "", "failed to flush prompt profile config");
+    return Err(EC::ConfigDumpFailed, __func__, "<context>",
+               "failed to flush prompt profile config");
   }
   return OK;
 }
@@ -84,3 +84,4 @@ PromptProfileManager::GetZoneProfile(const std::string &zone) const {
   return out;
 }
 } // namespace AMApplication::prompt
+

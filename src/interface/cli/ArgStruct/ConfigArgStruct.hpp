@@ -1,12 +1,94 @@
 #pragma once
 
+#include "foundation/tools/auth.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/client/ClientInterfaceService.hpp"
 #include "interface/cli/ArgStruct/BaseArgStruct.hpp"
+#include <cstring>
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace AMInterface::cli {
+
+namespace config_arg_detail {
+
+inline bool NormalizeEncryptedPassword(const std::string &input,
+                                       std::string *out) {
+  if (!out) {
+    return false;
+  }
+  out->clear();
+
+  const std::string raw = AMStr::Strip(input);
+  if (raw.empty()) {
+    return false;
+  }
+
+  std::string payload = raw;
+  if (AMAuth::IsEncrypted(raw)) {
+    payload = raw.substr(std::string(AMAuth::kEncryptedPrefix).size());
+  }
+  if (payload.empty()) {
+    return false;
+  }
+
+  const std::string decoded = AMAuth::HexDecode(payload);
+  if (decoded.empty() && !payload.empty()) {
+    return false;
+  }
+  *out = std::string(AMAuth::kEncryptedPrefix) + payload;
+  return true;
+}
+
+inline bool CopyTextToClipboard(const std::string &text) {
+#ifdef _WIN32
+  const int wide_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                           text.c_str(), -1, nullptr, 0);
+  if (wide_len <= 0) {
+    return false;
+  }
+  std::wstring wide(static_cast<size_t>(wide_len), L'\0');
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), -1,
+                          wide.data(), wide_len) <= 0) {
+    return false;
+  }
+
+  const size_t bytes = wide.size() * sizeof(wchar_t);
+  HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  if (!handle) {
+    return false;
+  }
+  void *buffer = GlobalLock(handle);
+  if (!buffer) {
+    GlobalFree(handle);
+    return false;
+  }
+  std::memcpy(buffer, wide.data(), bytes);
+  GlobalUnlock(handle);
+
+  if (!OpenClipboard(nullptr)) {
+    GlobalFree(handle);
+    return false;
+  }
+  EmptyClipboard();
+  if (SetClipboardData(CF_UNICODETEXT, handle) == nullptr) {
+    CloseClipboard();
+    GlobalFree(handle);
+    return false;
+  }
+  CloseClipboard();
+  return true;
+#else
+  (void)text;
+  return false;
+#endif
+}
+
+} // namespace config_arg_detail
 
 /**
  * @brief CLI argument container for config ls.
@@ -157,6 +239,46 @@ struct ConfigProfileSetArgs : BaseArgStruct {
   void reset() override { nickname.clear(); }
 };
 
+/**
+ * @brief CLI argument container for decrypt utility.
+ */
+struct ConfigDecryptArgs : BaseArgStruct {
+  std::string password = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    const auto report_error = [&managers](const ECM &rcm) -> ECM {
+      managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
+      return rcm;
+    };
+
+    std::string encrypted_input = {};
+    if (!config_arg_detail::NormalizeEncryptedPassword(password,
+                                                       &encrypted_input)) {
+      return report_error(Err(
+          EC::InvalidArg, __func__, "<context>",
+          "decrypt requires encrypted password input: enc:<HEX> or <HEX>"));
+    }
+
+    std::string plain = AMAuth::DecryptPassword(encrypted_input);
+    if (plain.empty()) {
+      return report_error(
+          Err(EC::InvalidArg, __func__, "<context>", "invalid encrypted password"));
+    }
+    if (!config_arg_detail::CopyTextToClipboard(plain)) {
+      AMAuth::SecureZero(plain);
+      return report_error(Err(EC::OperationUnsupported, __func__, "<context>",
+                              "failed to copy password to clipboard"));
+    }
+    AMAuth::SecureZero(plain);
+    managers.interfaces.prompt_io_manager->Print(
+        "✅ Password copied to clipboard!");
+    return OK;
+  }
+  void reset() override { password.clear(); }
+};
+
 } // namespace AMInterface::cli
+
 
 

@@ -91,6 +91,7 @@ public:
   [[nodiscard]] static ECMData<std::string>
   ResolveAbsolutePath(ClientHandle client, const std::string &raw_path,
                       const ClientControlComponent &control);
+  void ClearCache();
 
   [[nodiscard]] ECMData<PathTarget>
   GetCwd(const ClientControlComponent &control);

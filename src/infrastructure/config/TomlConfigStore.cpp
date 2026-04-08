@@ -1,10 +1,10 @@
 #include "infrastructure/config/TomlConfigStore.hpp"
 
-#include "foundation/tools/enum_related.hpp"
 #include "infrastructure/config/SuperTomlHandle.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -15,24 +15,40 @@ constexpr std::array<DocumentKind, 4> kRequiredKinds = {
     DocumentKind::History};
 
 bool IsBackupStampFolder_(const std::string &name) {
-  if (name.size() != 16) {
-    return false;
-  }
-  constexpr std::array<size_t, 4> kDashPos = {4, 7, 10, 13};
-  for (size_t i = 0; i < name.size(); ++i) {
-    const bool is_dash = std::find(kDashPos.begin(), kDashPos.end(), i) !=
-                         kDashPos.end();
-    if (is_dash) {
-      if (name[i] != '-') {
-        return false;
-      }
-      continue;
-    }
-    if (!std::isdigit(static_cast<unsigned char>(name[i]))) {
+  auto match_pattern = [&](const std::array<size_t, 4> &dash_pos,
+                           std::optional<size_t> underscore_pos,
+                           size_t expect_size) -> bool {
+    if (name.size() != expect_size) {
       return false;
     }
+    for (size_t i = 0; i < name.size(); ++i) {
+      if (underscore_pos.has_value() && i == underscore_pos.value()) {
+        if (name[i] != '_') {
+          return false;
+        }
+        continue;
+      }
+      const bool is_dash =
+          std::find(dash_pos.begin(), dash_pos.end(), i) != dash_pos.end();
+      if (is_dash) {
+        if (name[i] != '-') {
+          return false;
+        }
+        continue;
+      }
+      if (!std::isdigit(static_cast<unsigned char>(name[i]))) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Legacy format: YYYY-MM-DD-HH-MM
+  if (match_pattern({4, 7, 10, 13}, std::nullopt, 16)) {
+    return true;
   }
-  return true;
+  // New format: YYYY-MM-DD_HH-MM-SS
+  return match_pattern({4, 7, 13, 16}, 10, 19);
 }
 
 bool LessByFolderName_(const std::filesystem::path &lhs,
@@ -50,7 +66,8 @@ bool IsBackupStampDirectory_(const std::filesystem::directory_entry &entry,
 } // namespace
 
 namespace AMInfra::config {
-ECM AMTomlConfigStore::Configure(const AMDomain::config::ConfigStoreInitArg &arg) {
+ECM AMTomlConfigStore::Configure(
+    const AMDomain::config::ConfigStoreInitArg &arg) {
   Close();
   root_dir_ = arg.root_dir;
   layout_ = arg.layout;
@@ -58,7 +75,7 @@ ECM AMTomlConfigStore::Configure(const AMDomain::config::ConfigStoreInitArg &arg
 
   for (const auto kind : kRequiredKinds) {
     if (layout_.find(kind) == layout_.end()) {
-      return Err(EC::ConfigNotInitialized, "", "", "missing document layout");
+      return Err(EC::ConfigNotInitialized, __func__, "<context>", "missing document layout");
     }
   }
   writer_.Start();
@@ -69,7 +86,8 @@ ECM AMTomlConfigStore::Configure(const AMDomain::config::ConfigStoreInitArg &arg
 ECM AMTomlConfigStore::Load(std::optional<AMDomain::config::DocumentKind> kind,
                             bool force) {
   if (!initialized_) {
-    return Err(EC::ConfigNotInitialized, "", "", "config store is not initialized");
+    return Err(EC::ConfigNotInitialized, __func__, "<context>",
+               "config store is not initialized");
   }
 
   auto load_one = [this, force](AMDomain::config::DocumentKind target) -> ECM {
@@ -106,7 +124,8 @@ ECM AMTomlConfigStore::Dump(AMDomain::config::DocumentKind kind,
 
   auto handle = GetHandle_(kind);
   if (!handle) {
-    ECM rcm = Err(EC::ConfigNotInitialized, "", "", "document handle not initialized");
+    ECM rcm = Err(EC::ConfigNotInitialized, __func__, "<context>",
+                  "document handle not initialized");
     NotifyDumpError_(rcm);
     return rcm;
   }
@@ -168,8 +187,7 @@ bool AMTomlConfigStore::GetDataPath(AMDomain::config::DocumentKind kind,
   return true;
 }
 
-bool AMTomlConfigStore::Read(const std::type_index &type_key,
-                             void *out) const {
+bool AMTomlConfigStore::Read(const std::type_index &type_key, void *out) const {
   if (!out) {
     return false;
   }
@@ -188,8 +206,7 @@ bool AMTomlConfigStore::Read(const std::type_index &type_key,
   return DecodeArg(codec_registry_, type_key, root, out, nullptr);
 }
 
-bool AMTomlConfigStore::Write(const std::type_index &type_key,
-                              const void *in) {
+bool AMTomlConfigStore::Write(const std::type_index &type_key, const void *in) {
   if (!in) {
     return false;
   }
@@ -211,8 +228,7 @@ bool AMTomlConfigStore::Write(const std::type_index &type_key,
   return handle->SetJson(root);
 }
 
-bool AMTomlConfigStore::Erase(const std::type_index &type_key,
-                              const void *in) {
+bool AMTomlConfigStore::Erase(const std::type_index &type_key, const void *in) {
   if (!in) {
     return false;
   }
@@ -265,7 +281,7 @@ ECM AMTomlConfigStore::EnsureDirectory(const std::filesystem::path &dir) {
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
   if (ec) {
-    return Err(EC::ConfigDumpFailed, "", "", ec.message());
+    return Err(EC::ConfigDumpFailed, __func__, "<context>", ec.message());
   }
   return OK;
 }
@@ -326,7 +342,7 @@ ECM AMTomlConfigStore::LoadDocument_(AMDomain::config::DocumentKind kind) {
     std::lock_guard<std::mutex> lock(mtx_);
     auto spec_it = layout_.find(kind);
     if (spec_it == layout_.end()) {
-      return Err(EC::ConfigNotInitialized, "", "", "missing document layout");
+      return Err(EC::ConfigNotInitialized, __func__, "<context>", "missing document layout");
     }
     spec = spec_it->second;
   }
@@ -349,3 +365,4 @@ void AMTomlConfigStore::NotifyDumpError_(const ECM &err) const {
   }
 }
 } // namespace AMInfra::config
+

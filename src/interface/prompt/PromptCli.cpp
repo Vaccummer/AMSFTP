@@ -647,8 +647,34 @@ void PromptIOManager::ErrorFormat(const std::string &error_name,
 }
 
 void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
-  ErrorFormat(AMStr::ToString(rcm.code), rcm.msg(), is_exit,
-              static_cast<int>(rcm.code));
+  std::string reason = AMStr::Strip(rcm.error);
+  if (reason.empty()) {
+    reason = std::string(AMStr::ToString(rcm.code));
+  }
+  std::string operation = AMStr::Strip(rcm.operation);
+  if (operation.empty()) {
+    operation = "unspecified";
+  }
+  std::string target = AMStr::Strip(rcm.target);
+  if (target.empty()) {
+    target = "<context>";
+  }
+  const auto esc = [](std::string v) {
+    AMStr::replace(v, "\\", "\\\\");
+    AMStr::replace(v, "\"", "\\\"");
+    return v;
+  };
+
+  std::ostringstream body;
+  body << "\\[" << AMStr::ToString(rcm.code) << "] " << reason
+       << " (operation=\"" << esc(operation) << "\", target=\"" << esc(target)
+       << "\"";
+  if (rcm.raw_error.has_value()) {
+    body << ", cause=\"" << RawErrorSourceName(rcm.raw_error->source) << ": "
+         << rcm.raw_error->code << "\"";
+  }
+  body << ")";
+  ErrorFormat("", body.str(), is_exit, static_cast<int>(rcm.code));
 }
 
 /** Prompt for a yes/no response. */
@@ -840,8 +866,8 @@ std::optional<std::string> PromptIOManager::LiteralPrompt(
 /**
  * @brief Prompt for a command line using the shared readline handle.
  */
-std::optional<std::string> PromptIOManager::PromptCore(
-    const std::string &prompt) {
+std::optional<std::string>
+PromptIOManager::PromptCore(const std::string &prompt) {
   std::string prompt_header;
   std::string prompt_line;
   SplitPromptForReadline_(prompt, &prompt_header, &prompt_line);
@@ -871,8 +897,8 @@ std::optional<std::string> PromptIOManager::PromptCore(
   return out;
 }
 
-std::optional<std::string> PromptIOManager::SecurePrompt(
-    const std::string &prompt) {
+std::optional<std::string>
+PromptIOManager::SecurePrompt(const std::string &prompt) {
   ScopedAtomicFlag_ secure_phase_guard(&io_state_.secure_phase_);
 
   char *line = ic_readline_secure(prompt.c_str(), nullptr);

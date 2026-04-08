@@ -109,5 +109,16 @@ struct HostSetArgs : BaseArgStruct {
   void reset() override { request = {}; }
 };
 
-} // namespace AMInterface::cli
+/**
+ * @brief CLI argument container for host keys.
+ */
+struct HostKeysArgs : BaseArgStruct {
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    return managers.interfaces.client_interface_service->ListPrivateKeys();
+  }
+  void reset() override {}
+};
 
+} // namespace AMInterface::cli

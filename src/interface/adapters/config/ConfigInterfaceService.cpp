@@ -126,7 +126,7 @@ ECM ConfigInterfaceService::BackupAll() const {
 ECM ConfigInterfaceService::Export(const std::string &path) const {
   const std::string raw_dir = AMStr::Strip(path);
   if (raw_dir.empty()) {
-    return Err(EC::InvalidArg, "config export", "", "path is empty");
+    return Err(EC::InvalidArg, "config export", "<path>", "path is empty");
   }
   if (raw_dir.find('@') != std::string::npos) {
     return Err(EC::InvalidArg, "config export", raw_dir,

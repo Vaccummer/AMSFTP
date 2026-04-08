@@ -254,6 +254,22 @@ struct RawError {
   int code = 0;
 };
 
+[[nodiscard]] inline const char *RawErrorSourceName(RawErrorSource source) {
+  switch (source) {
+  case RawErrorSource::Libssh2:
+    return "Libssh2";
+  case RawErrorSource::Curl:
+    return "Curl";
+  case RawErrorSource::Filesystem:
+    return "Filesystem";
+  case RawErrorSource::WindowsAPI:
+    return "WindowsAPI";
+  case RawErrorSource::Unknown:
+  default:
+    return "Unknown";
+  }
+}
+
 struct AMError {
   ErrorCode code = EC::Success;
   std::string operation = "";
@@ -264,19 +280,55 @@ struct AMError {
   AMError() = default;
 
   AMError(EC ec, std::string err)
-      : code(ec), operation(""), target(""), error(std::move(err)) {}
+      : code(ec), operation(""), target(""), error(std::move(err)) {
+    if (code != EC::Success) {
+      if (operation.empty()) {
+        operation = "unspecified";
+      }
+      if (target.empty()) {
+        target = "<context>";
+      }
+    }
+  }
 
   AMError(EC ec, std::string op, std::string tgt, std::string err)
       : code(ec), operation(std::move(op)), target(std::move(tgt)),
-        error(std::move(err)) {}
+        error(std::move(err)) {
+    if (code != EC::Success) {
+      if (operation.empty()) {
+        operation = "unspecified";
+      }
+      if (target.empty()) {
+        target = "<context>";
+      }
+    }
+  }
 
   AMError(EC ec, std::string err, RawError raw)
       : code(ec), operation(""), target(""), error(std::move(err)),
-        raw_error(raw) {}
+        raw_error(raw) {
+    if (code != EC::Success) {
+      if (operation.empty()) {
+        operation = "unspecified";
+      }
+      if (target.empty()) {
+        target = "<context>";
+      }
+    }
+  }
 
   AMError(EC ec, std::string op, std::string tgt, std::string err, RawError raw)
       : code(ec), operation(std::move(op)), target(std::move(tgt)),
-        error(std::move(err)), raw_error(raw) {}
+        error(std::move(err)), raw_error(raw) {
+    if (code != EC::Success) {
+      if (operation.empty()) {
+        operation = "unspecified";
+      }
+      if (target.empty()) {
+        target = "<context>";
+      }
+    }
+  }
 
   operator bool() const { return code == EC::Success; }
 
@@ -310,6 +362,6 @@ struct AMError {
   }
 };
 
-static const AMError OK = AMError{EC::Success, ""};
+static const AMError OK = AMError{};
 using Err = AMError;
 using ECM = AMError;

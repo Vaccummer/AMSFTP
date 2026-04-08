@@ -49,42 +49,42 @@ template <typename T>
 [[nodiscard]] inline ECM ValidateFieldValue(ConRequest::Attr attr, T value) {
   auto invalid_type = [attr]() -> ECM {
     if (attr == ConRequest::Attr::nickname) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Invalid type for nickname, expected string-like type");
     }
     if (attr == ConRequest::Attr::hostname) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Invalid type for hostname, expected string-like type");
     }
     if (attr == ConRequest::Attr::username) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Invalid type for username, expected string-like type");
     }
     if (attr == ConRequest::Attr::protocol) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Invalid type for protocol, expected ClientProtocol or "
                  "string-like type");
     }
     if (attr == ConRequest::Attr::port) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Invalid type for port, expected integer or string-like type");
     }
     if (attr == ConRequest::Attr::password ||
         attr == ConRequest::Attr::keyfile) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Invalid type for path/text field, expected string-like type");
     }
     if (attr == ConRequest::Attr::buffer_size) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Invalid type for buffer_size, expected integer or "
                  "string-like type");
     }
     if (attr == ConRequest::Attr::compression) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Invalid type for compression, expected bool or "
                  "string-like type");
     }
-    return Err(EC::InvalidArg, "", "",
+    return Err(EC::InvalidArg, __func__, "<context>",
                AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   };
 
@@ -96,7 +96,7 @@ template <typename T>
       return invalid_type();
     }
     if (value == ClientProtocol::UnInitilized) {
-      return Err(EC::InvalidArg, "", "", "Unsupported protocol");
+      return Err(EC::InvalidArg, __func__, "<context>", "Unsupported protocol");
     }
     return OK;
   }
@@ -112,7 +112,7 @@ template <typename T>
     if (attr == ConRequest::Attr::port) {
       const int64_t port_value = static_cast<int64_t>(value);
       if (port_value <= 0 || port_value > 65535) {
-        return Err(EC::InvalidArg, "", "",
+        return Err(EC::InvalidArg, __func__, "<context>",
                    "Port must be an integer between 1 and 65535");
       }
       return OK;
@@ -129,7 +129,7 @@ template <typename T>
     if (attr == ConRequest::Attr::nickname) {
       const std::string text = AMStr::Strip(text_value);
       if (!ValidateNickname(text)) {
-        return Err(EC::InvalidArg, "", "",
+        return Err(EC::InvalidArg, __func__, "<context>",
                    "Invalid nickname: only alphanumeric, underscore, and "
                    "hyphen characters are allowed");
       }
@@ -138,14 +138,14 @@ template <typename T>
 
     if (attr == ConRequest::Attr::hostname) {
       if (AMStr::Strip(text_value).empty()) {
-        return Err(EC::InvalidArg, "", "", "Hostname cannot be empty");
+        return Err(EC::InvalidArg, __func__, "<context>", "Hostname cannot be empty");
       }
       return OK;
     }
 
     if (attr == ConRequest::Attr::username) {
       if (AMStr::Strip(text_value).empty()) {
-        return Err(EC::InvalidArg, "", "", "Username cannot be empty");
+        return Err(EC::InvalidArg, __func__, "<context>", "Username cannot be empty");
       }
       return OK;
     }
@@ -156,7 +156,7 @@ template <typename T>
           text == "http") {
         return OK;
       }
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "Protocol must be sftp, ftp, local, or http");
     }
 
@@ -164,7 +164,7 @@ template <typename T>
       int64_t parsed_port = 0;
       if (!AMStr::GetNumber(text_value, &parsed_port) || parsed_port <= 0 ||
           parsed_port > 65535) {
-        return Err(EC::InvalidArg, "", "",
+        return Err(EC::InvalidArg, __func__, "<context>",
                    "Port must be an integer between 1 and 65535");
       }
       return OK;
@@ -179,7 +179,7 @@ template <typename T>
       int64_t parsed_size = 0;
       if (!AMStr::GetNumber(text_value, &parsed_size)) {
         return Err(
-            EC::InvalidArg, "", "",
+            EC::InvalidArg, __func__, "<context>",
             "No number found in buffer_size text, or value out of range");
       }
       return OK;
@@ -188,12 +188,12 @@ template <typename T>
     if (attr == ConRequest::Attr::compression) {
       bool parsed = false;
       if (!AMStr::GetBool(text_value, &parsed)) {
-        return Err(EC::InvalidArg, "", "", "Compression must be true or false");
+        return Err(EC::InvalidArg, __func__, "<context>", "Compression must be true or false");
       }
       return OK;
     }
 
-    return Err(EC::InvalidArg, "", "",
+    return Err(EC::InvalidArg, __func__, "<context>",
                AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   }
 
@@ -207,10 +207,10 @@ template <typename T>
         attr == ClientMetaData::Attr::login_dir ||
         attr == ClientMetaData::Attr::cwd ||
         attr == ClientMetaData::Attr::cmd_template) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "invalid type: expected string-like value");
     }
-    return Err(EC::InvalidArg, "", "",
+    return Err(EC::InvalidArg, __func__, "<context>",
                AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   };
 
@@ -224,7 +224,7 @@ template <typename T>
         attr == ClientMetaData::Attr::cmd_template) {
       return OK;
     }
-    return Err(EC::InvalidArg, "", "",
+    return Err(EC::InvalidArg, __func__, "<context>",
                AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   }
 
@@ -243,30 +243,30 @@ template <typename T>
                                             T value) {
   auto invalid_type = [attr]() -> ECM {
     if (attr == KnownHostQuery::Attr::port) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "invalid type for port, expected integer or string-like type");
     }
     if (attr == KnownHostQuery::Attr::nickname) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "invalid type for nickname, expected string-like type");
     }
     if (attr == KnownHostQuery::Attr::hostname) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "invalid type for hostname, expected string-like type");
     }
     if (attr == KnownHostQuery::Attr::protocol) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "invalid type for protocol, expected string-like type");
     }
     if (attr == KnownHostQuery::Attr::username) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "invalid type for username, expected string-like type");
     }
     if (attr == KnownHostQuery::Attr::fingerprint) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "invalid type for fingerprint, expected string-like type");
     }
-    return Err(EC::InvalidArg, "", "",
+    return Err(EC::InvalidArg, __func__, "<context>",
                AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   };
 
@@ -279,7 +279,7 @@ template <typename T>
     }
     const int64_t numeric_value = static_cast<int64_t>(value);
     if (numeric_value <= 0 || numeric_value > 65535) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "port must be an integer between 1 and 65535");
     }
     return OK;
@@ -293,7 +293,7 @@ template <typename T>
         return OK;
       }
       if (!HostService::ValidateNickname(text)) {
-        return Err(EC::InvalidArg, "", "",
+        return Err(EC::InvalidArg, __func__, "<context>",
                    "Invalid nickname: only alphanumeric, underscore, and "
                    "hyphen characters are allowed");
       }
@@ -301,7 +301,7 @@ template <typename T>
     }
     if (attr == KnownHostQuery::Attr::hostname) {
       if (AMStr::Strip(text_value).empty()) {
-        return Err(EC::InvalidArg, "", "", "hostname cannot be empty");
+        return Err(EC::InvalidArg, __func__, "<context>", "hostname cannot be empty");
       }
       return OK;
     }
@@ -309,14 +309,14 @@ template <typename T>
       int64_t parsed_port = 0;
       if (!AMStr::GetNumber(text_value, &parsed_port) || parsed_port <= 0 ||
           parsed_port > 65535) {
-        return Err(EC::InvalidArg, "", "",
+        return Err(EC::InvalidArg, __func__, "<context>",
                    "port must be an integer between 1 and 65535");
       }
       return OK;
     }
     if (attr == KnownHostQuery::Attr::protocol) {
       if (AMStr::Strip(text_value).empty()) {
-        return Err(EC::InvalidArg, "", "", "protocol cannot be empty");
+        return Err(EC::InvalidArg, __func__, "<context>", "protocol cannot be empty");
       }
       return OK;
     }
@@ -325,11 +325,11 @@ template <typename T>
     }
     if (attr == KnownHostQuery::Attr::fingerprint) {
       if (AMStr::Strip(text_value).empty()) {
-        return Err(EC::InvalidArg, "", "", "fingerprint cannot be empty");
+        return Err(EC::InvalidArg, __func__, "<context>", "fingerprint cannot be empty");
       }
       return OK;
     }
-    return Err(EC::InvalidArg, "", "",
+    return Err(EC::InvalidArg, __func__, "<context>",
                AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   }
 
@@ -346,3 +346,4 @@ inline KnownHostKey BuildKnownHostKey(const KnownHostQuery &query) {
 
 } // namespace KnownHostRules
 } // namespace AMDomain::host
+

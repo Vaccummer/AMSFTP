@@ -52,7 +52,7 @@ CreateClient(const ConRequest &request,
     UID = ClientService::GenerateID(ClientProtocol::LOCAL);
     break;
   default:
-    return {{EC::InvalidArg, "Unsupported client protocol"}, nullptr};
+    return {{EC::InvalidArg, __func__, "<context>", "Unsupported client protocol"}, nullptr};
   }
 
   return {OK,
@@ -62,3 +62,4 @@ CreateClient(const ConRequest &request,
 }
 
 } // namespace AMDomain::client
+

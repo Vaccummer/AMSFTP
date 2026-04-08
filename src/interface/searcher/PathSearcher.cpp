@@ -1,6 +1,5 @@
 #include "domain/client/ClientPort.hpp"
 #include "foundation/tools/string.hpp"
-#include "interface/cli/InteractiveEventRegistry.hpp"
 #include "interface/completion/CompletionRuntime.hpp"
 #include "interface/searcher/Searcher.hpp"
 #include "interface/searcher/SearcherCommon.hpp"
@@ -10,8 +9,6 @@ using namespace AMInterface::searcher::detail;
 
 namespace AMInterface::searcher {
 namespace {
-constexpr int kEventIdPathClearTempCache = 2001;
-
 std::string TrimTrailingSep_(std::string text) {
   while (!text.empty() && (text.back() == '/' || text.back() == '\\')) {
     text.pop_back();
@@ -209,43 +206,6 @@ AMPathSearchEngine::GetCacheStatusAll() const {
     out.emplace(bucket.first, status);
   }
   return out;
-}
-
-/**
- * @brief Register temp-cache clear callbacks for PromptCore return/exit.
- */
-void AMPathSearchEngine::RegisterCacheClearOnCorePromptReturn() {
-  EnsureTempCacheHookRegistered_();
-}
-
-void AMPathSearchEngine::SetInteractiveEventRegistry(
-    AMInterface::cli::InteractiveEventRegistry *registry) {
-  interactive_event_registry_ = registry;
-}
-
-/**
- * @brief Ensure the prompt-return callback is registered once.
- */
-void AMPathSearchEngine::EnsureTempCacheHookRegistered_() {
-  if (temp_cache_hook_registered_ || interactive_event_registry_ == nullptr) {
-    return;
-  }
-  temp_cache_clear_callback_ = [this]() { ClearTempCache_(); };
-  (void)interactive_event_registry_->Register(
-      AMInterface::cli::InteractiveEventCategory::CorePromptReturn,
-      kEventIdPathClearTempCache, temp_cache_clear_callback_);
-  (void)interactive_event_registry_->Register(
-      AMInterface::cli::InteractiveEventCategory::InteractiveLoopExit,
-      kEventIdPathClearTempCache, temp_cache_clear_callback_);
-  temp_cache_hook_registered_ = true;
-}
-
-/**
- * @brief Clear temporary path cache.
- */
-void AMPathSearchEngine::ClearTempCache_() {
-  std::lock_guard<std::mutex> lock(cache_mtx_);
-  temp_cache_.clear();
 }
 
 /**
@@ -504,8 +464,7 @@ void AMPathSearchEngine::StoreTempCache_(const CacheKey &key,
 
 namespace AMInterface::completer {
 std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
-    std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
-    AMInterface::cli::InteractiveEventRegistry *interactive_event_registry) {
+    std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime) {
   std::vector<AMSearchEngineRegistration> out;
 
   auto command_engine = std::make_shared<AMInterface::searcher::AMCommandSearchEngine>();
@@ -522,9 +481,8 @@ std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
         AMCompletionTarget::TaskId, AMCompletionTarget::VarZone},
        internal_engine});
 
-  auto path_engine = std::make_shared<AMInterface::searcher::AMPathSearchEngine>(runtime);
-  path_engine->SetInteractiveEventRegistry(interactive_event_registry);
-  path_engine->RegisterCacheClearOnCorePromptReturn();
+  auto path_engine =
+      std::make_shared<AMInterface::searcher::AMPathSearchEngine>(runtime);
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }

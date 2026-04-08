@@ -1,5 +1,4 @@
 #include "domain/config/ConfigStorePort.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "infrastructure/config/TomlConfigStore.hpp"
 #include <memory>
 

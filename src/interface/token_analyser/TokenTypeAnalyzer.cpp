@@ -1,7 +1,6 @@
 #include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 
 #include "domain/var/VarDomainService.hpp"
-#include "interface/cli/InteractiveEventRegistry.hpp"
 #include "interface/parser/CommandTree.hpp"
 #include "interface/token_analyser/highlight/HighlightFormatter.hpp"
 #include "interface/token_analyser/lexer/ShellTokenLexer.hpp"
@@ -10,8 +9,6 @@
 
 namespace AMInterface::parser {
 namespace {
-constexpr int kEventIdTokenAnalyzerClearTokenCache = 3001;
-
 using TokenCacheValue = std::vector<TokenTypeAnalyzer::AMToken>;
 std::unordered_map<std::string, TokenCacheValue> g_split_token_cache = {};
 
@@ -136,18 +133,6 @@ bool IsValidOptionToken_(const std::string &token, const CommandNode *node) {
 
 } // namespace
 
-void TokenTypeAnalyzer::BindInteractiveEventRegistry(
-    AMInterface::cli::InteractiveEventRegistry *registry) {
-  if (!registry || token_cache_hook_registered_) {
-    return;
-  }
-  token_cache_clear_callback_ = []() { TokenTypeAnalyzer::ClearTokenCache(); };
-  (void)registry->Register(
-      AMInterface::cli::InteractiveEventCategory::CorePromptReturn,
-      kEventIdTokenAnalyzerClearTokenCache, token_cache_clear_callback_);
-  token_cache_hook_registered_ = true;
-}
-
 void TokenTypeAnalyzer::RefreshNicknameCache() {}
 
 void TokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
@@ -218,4 +203,3 @@ void TokenTypeAnalyzer::HighlightFormatted(const std::string &input,
 }
 
 } // namespace AMInterface::parser
-

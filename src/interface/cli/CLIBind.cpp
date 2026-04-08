@@ -49,6 +49,18 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
         ->required()
         ->expected(1, 1);
   }
+
+  CommandNode *decrypt_node = root->AddFunction(
+      "decrypt", "Decrypt encrypted password and copy plain text to clipboard",
+      args, &CliArgsPool::config, &CliConfigArgs::decrypt);
+  commands.config.decrypt = decrypt_node ? decrypt_node->app : nullptr;
+  if (commands.config.decrypt) {
+    commands.config.decrypt
+        ->add_option("password", args.config.decrypt.password,
+                     "Encrypted password: enc:<HEX> or <HEX>")
+        ->required()
+        ->expected(1, 1);
+  }
 }
 
 /**
@@ -900,14 +912,14 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   if (!cli_commands.args) {
     const std::string msg = "CLI args pool is not initialized";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::UnknownError, msg};
+    ctx.rcm = {EC::UnknownError, __func__, "<context>", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     return;
   }
   if (!ctx.task_control_token) {
     const std::string msg = "CLI session task control token is not initialized";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, msg};
+    ctx.rcm = {EC::InvalidArg, __func__, "<context>", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     if (cli_commands.args) {
       cli_commands.args->ClearActive();
@@ -929,7 +941,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   if (!any_parsed) {
     std::string msg = "No valid command provided";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, msg};
+    ctx.rcm = {EC::InvalidArg, __func__, "<context>", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     args.ClearActive();
     return;
@@ -947,7 +959,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
       msg = "Invalid client command";
     }
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, msg};
+    ctx.rcm = {EC::InvalidArg, __func__, "<context>", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     args.ClearActive();
     return;
@@ -969,6 +981,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
+
 
 
 

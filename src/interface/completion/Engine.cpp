@@ -1,8 +1,7 @@
 #include "interface/completion/Engine.hpp"
-#include "application/completion/CompleterAppService.hpp"
 #include "Isocline/isocline.h"
+#include "application/completion/CompleterAppService.hpp"
 #include "interface/style/StyleManager.hpp"
-#include "interface/cli/InteractiveEventRegistry.hpp"
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -11,7 +10,6 @@
 
 namespace AMInterface::completer {
 namespace {
-constexpr int kEventIdCompletionCancelPendingAsync = 1001;
 std::atomic<uint64_t> g_completion_task_id{1};
 
 uint64_t NextCompletionTaskId_() {
@@ -119,10 +117,12 @@ public:
       state_.store(CompletionTaskState::Canceled, std::memory_order_release);
       return;
     }
+    const std::string task_target =
+        ctx_.input.empty() ? std::string("<completion-input>") : ctx_.input;
     if (engine_ == nullptr) {
       {
         std::lock_guard<std::mutex> lock(result_mtx_);
-        result_.rcm = Err(EC::InvalidHandle, "completion task", "",
+        result_.rcm = Err(EC::InvalidHandle, "completion task", task_target,
                           "search engine is null");
       }
       state_.store(CompletionTaskState::Failed, std::memory_order_release);
@@ -155,7 +155,8 @@ public:
     } catch (const std::exception &e) {
       {
         std::lock_guard<std::mutex> lock(result_mtx_);
-        result_.rcm = Err(EC::UnknownError, "completion task", "", e.what());
+        result_.rcm =
+            Err(EC::UnknownError, "completion task", task_target, e.what());
       }
       if (cancel_requested_.load(std::memory_order_acquire)) {
         state_.store(CompletionTaskState::Canceled, std::memory_order_release);
@@ -166,7 +167,8 @@ public:
       {
         std::lock_guard<std::mutex> lock(result_mtx_);
         result_.rcm =
-            Err(EC::UnknownError, "completion task", "", "unknown error");
+            Err(EC::UnknownError, "completion task", task_target,
+                "unknown error");
       }
       if (cancel_requested_.load(std::memory_order_acquire)) {
         state_.store(CompletionTaskState::Canceled, std::memory_order_release);
@@ -182,8 +184,8 @@ public:
       ctx_.control_token->RequestInterrupt();
     }
     CompletionTaskState expected = CompletionTaskState::Pending;
-    (void)state_.compare_exchange_strong(expected, CompletionTaskState::Canceled,
-                                         std::memory_order_acq_rel);
+    (void)state_.compare_exchange_strong(
+        expected, CompletionTaskState::Canceled, std::memory_order_acq_rel);
   }
 
   [[nodiscard]] CompletionTaskState State() const override {
@@ -264,6 +266,8 @@ void AMCompleteEngine::ClearCache() {
     }
   }
 }
+
+void AMCompleteEngine::CancelPendingAsync() { CancelPendingAsyncRequests_(); }
 
 /**
  * @brief Handle a completion request from isocline.
@@ -471,22 +475,6 @@ void AMCompleteEngine::RestartAsyncWorkers_() {
 }
 
 /**
- * @brief Register callback to cancel async completion tasks after each
- * PromptCore return.
- */
-void AMCompleteEngine::EnsurePromptReturnCancelHookRegistered_() {
-  if (prompt_return_cancel_hook_registered_ ||
-      interactive_event_registry_ == nullptr) {
-    return;
-  }
-  prompt_return_cancel_callback_ = [this]() { CancelPendingAsyncRequests_(); };
-  (void)interactive_event_registry_->Register(
-      AMInterface::cli::InteractiveEventCategory::CorePromptReturn,
-      kEventIdCompletionCancelPendingAsync, prompt_return_cancel_callback_);
-  prompt_return_cancel_hook_registered_ = true;
-}
-
-/**
  * @brief Push an async task into the worker queue.
  */
 void AMCompleteEngine::ScheduleAsyncTask_(AMCompletionAsyncTask request) {
@@ -553,7 +541,8 @@ void AMCompleteEngine::CancelPendingAsyncRequests_() {
 
   {
     std::lock_guard<std::mutex> lock(async_on_air_mtx_);
-    tasks_to_cancel.reserve(tasks_to_cancel.size() + async_on_air_tasks_.size());
+    tasks_to_cancel.reserve(tasks_to_cancel.size() +
+                            async_on_air_tasks_.size());
     for (const auto &entry : async_on_air_tasks_) {
       if (entry.second) {
         tasks_to_cancel.push_back(entry.second);

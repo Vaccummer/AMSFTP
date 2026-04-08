@@ -17,7 +17,7 @@ public:
   /**
    * @brief Release RustToml resources.
    */
-  ~AMInfraSuperTomlHandle() { Close(); }
+  ~AMInfraSuperTomlHandle() override { Close(); }
 
   /**
    * @brief Initialize handle with document kind, path and schema.

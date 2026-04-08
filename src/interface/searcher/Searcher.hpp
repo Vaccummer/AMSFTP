@@ -9,9 +9,6 @@
 #include <unordered_map>
 #include <vector>
 
-namespace AMInterface::cli {
-class InteractiveEventRegistry;
-}
 namespace AMInterface::completion {
 class ICompletionRuntime;
 }
@@ -164,13 +161,6 @@ public:
    */
   std::unordered_map<std::string, CacheStatus> GetCacheStatusAll() const;
 
-  /**
-   * @brief Register temp-cache clear callbacks for PromptCore return/exit.
-   */
-  void RegisterCacheClearOnCorePromptReturn();
-  void SetInteractiveEventRegistry(
-      AMInterface::cli::InteractiveEventRegistry *registry);
-
 private:
   /**
    * @brief Cache key for path results.
@@ -218,16 +208,6 @@ private:
     char sep = '/';
     bool trailing_sep = false;
   };
-
-  /**
-   * @brief Ensure the prompt-return callback is registered once.
-   */
-  void EnsureTempCacheHookRegistered_();
-
-  /**
-   * @brief Clear temporary path cache.
-   */
-  void ClearTempCache_();
 
   /**
    * @brief Style a path entry for display.
@@ -278,10 +258,6 @@ private:
       temp_cache_;
   std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
       nullptr;
-  AMInterface::cli::InteractiveEventRegistry *interactive_event_registry_ =
-      nullptr;
-  std::function<void()> temp_cache_clear_callback_;
-  bool temp_cache_hook_registered_ = false;
 };
 
 } // namespace AMInterface::searcher
