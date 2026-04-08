@@ -96,6 +96,7 @@ ECM ConfigInterfaceService::PrintPaths() const {
 }
 
 ECM ConfigInterfaceService::SaveAll() const {
+  prompt_io_manager_.SyncCurrentHistory();
   ECM rcm = config_service_.FlushDirtyParticipants();
   if (!(rcm)) {
     return rcm;
@@ -104,6 +105,7 @@ ECM ConfigInterfaceService::SaveAll() const {
 }
 
 ECM ConfigInterfaceService::BackupAll() const {
+  prompt_io_manager_.SyncCurrentHistory();
   ECM rcm = config_service_.FlushDirtyParticipants();
   if (!(rcm)) {
     return rcm;
@@ -140,6 +142,7 @@ ECM ConfigInterfaceService::Export(const std::string &path) const {
                "path exists but is not a directory");
   }
 
+  prompt_io_manager_.SyncCurrentHistory();
   ECM rcm = config_service_.FlushDirtyParticipants();
   if (!(rcm)) {
     return rcm;

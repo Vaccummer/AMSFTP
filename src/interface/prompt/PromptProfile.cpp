@@ -156,6 +156,10 @@ void IsoclineProfileManager::RemoveLastHistoryEntry() {
   (void)profile->RemoveLastHistoryEntry();
 }
 
+void IsoclineProfileManager::SyncCurrentHistory() {
+  WriteBackCurrentProfile_();
+}
+
 ECM IsoclineProfileManager::ChangeClient(const std::string &nickname) {
   const AMDomain::style::StyleConfigArg style_arg =
       style_config_manager_.GetStyleRef().lock().load();

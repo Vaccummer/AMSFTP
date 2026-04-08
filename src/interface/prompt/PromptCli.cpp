@@ -340,6 +340,16 @@ bool PromptIOManager::IsAsciiText_(const std::string &text) {
   });
 }
 
+namespace {
+bool HasBbcodeMarkup_(const std::string &text) {
+  const size_t open = text.find('[');
+  if (open == std::string::npos) {
+    return false;
+  }
+  return text.find(']', open + 1) != std::string::npos;
+}
+} // namespace
+
 size_t PromptIOManager::CommonPrefixAscii_(const std::string &lhs,
                                            const std::string &rhs) {
   const size_t limit = std::min(lhs.size(), rhs.size());
@@ -420,6 +430,15 @@ void PromptIOManager::AppendRowDiffUpdate_(std::string *frame,
     return;
   }
 
+  // BBCode tags do not occupy terminal columns, so byte-based cursor
+  // diffs can leave stale text. Redraw the whole row when markup exists.
+  if (HasBbcodeMarkup_(old_line) || HasBbcodeMarkup_(new_line)) {
+    *frame += "\x1b[2K\r";
+    *frame += new_line;
+    *frame += "\x1b[1B\r";
+    return;
+  }
+
   if (!IsAsciiText_(old_line) || !IsAsciiText_(new_line)) {
     *frame += "\x1b[2K\r";
     *frame += new_line;
@@ -452,10 +471,19 @@ void PromptIOManager::PrintSyncLocked_(const std::string &text) {
   ic_term_flush();
 }
 
+void PromptIOManager::PrintSyncRefreshLocked_(const std::string &text) {
+  if (text.find('\x1b') != std::string::npos) {
+    ic_term_write_bbcode(text.c_str());
+  } else {
+    ic_print(text.c_str());
+  }
+  ic_term_flush();
+}
+
 void PromptIOManager::PrintInsertAndRepaintLocked_(const std::string &msg) {
   const int old_rows = painted_refresh_rows_;
   if (old_rows <= 0) {
-    PrintSyncLocked_(msg);
+    PrintSyncRefreshLocked_(msg);
     return;
   }
 
@@ -485,7 +513,7 @@ void PromptIOManager::PrintInsertAndRepaintLocked_(const std::string &msg) {
     frame += "\x1b[1B\r";
   }
   AppendMoveUpRows_(&frame, total_rows - new_rows);
-  PrintSyncLocked_(frame);
+  PrintSyncRefreshLocked_(frame);
   painted_refresh_rows_ = new_rows;
   painted_refresh_lines_ = refresh_lines_;
 }
@@ -520,7 +548,7 @@ void PromptIOManager::RepaintRefreshLocked_() {
     frame += "\x1b[1B\r";
   }
   AppendMoveUpRows_(&frame, total_rows - new_rows);
-  PrintSyncLocked_(frame);
+  PrintSyncRefreshLocked_(frame);
   painted_refresh_rows_ = new_rows;
   painted_refresh_lines_ = refresh_lines_;
 }
@@ -535,7 +563,7 @@ void PromptIOManager::ClearRefreshLocked_() {
   std::string frame;
   AppendMoveUpRows_(&frame, painted_refresh_rows_);
   AppendClearRows_(&frame, painted_refresh_rows_);
-  PrintSyncLocked_(frame);
+  PrintSyncRefreshLocked_(frame);
 
   painted_refresh_rows_ = 0;
   refresh_lines_.clear();
@@ -661,6 +689,10 @@ void PromptIOManager::SetCursorVisible(bool visible) {
     (void)profile->Use();
   }
   ic_term_set_cursor_visible(visible);
+}
+
+void PromptIOManager::SyncCurrentHistory() {
+  isocline_profile_manager_.SyncCurrentHistory();
 }
 
 /** Prompt for a line of input with optional defaults.

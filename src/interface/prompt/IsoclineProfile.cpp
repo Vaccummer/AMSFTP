@@ -460,6 +460,17 @@ bool IsoclineProfile::AddHistoryEntry(const std::string &line) const {
   if (profile_ == nullptr || line.empty()) {
     return false;
   }
+  ScopedProfileUse guard(profile_);
+  if (!guard.Switched()) {
+    return false;
+  }
+  const long count = ic_history_count();
+  if (count > 0) {
+    const char *last = ic_history_get(count - 1);
+    if (last != nullptr && line == last) {
+      return true;
+    }
+  }
   ic_history_add_p(profile_, line.c_str());
   return true;
 }
