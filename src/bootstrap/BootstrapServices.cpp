@@ -237,7 +237,7 @@ void BuildCliRuntimeState_(BootstrapServices *runtime,
 ECM BuildRunContext_(AMInterface::cli::CliRunContext *run_ctx) {
   run_ctx->task_control_token = AMDomain::client::CreateClientControlToken();
   if (!run_ctx->task_control_token) {
-    return Err(EC::InvalidHandle, __func__, "<context>",
+    return Err(EC::InvalidHandle, __func__, "",
                "failed to create task control token");
   }
   run_ctx->exit_code = std::make_shared<std::atomic<int>>(0);
@@ -524,7 +524,8 @@ ECM BuildClientInterfaceServices_(
   }
   state->config_interface_service =
       std::make_unique<AMInterface::config::ConfigInterfaceService>(
-          *app_state.config_service, *app_state.prompt_io_manager);
+          *app_state.config_service, *app_state.host_service,
+          *app_state.prompt_io_manager);
 
   state->client_interface_service =
       std::make_unique<AMInterface::client::ClientInterfaceService>(
@@ -561,7 +562,7 @@ ECM BuildTransferInterfaceService_(
   state->transfer_pool = AMDomain::transfer::CreateTransferPoolPort(
       app_state.transfer_manager_arg);
   if (!state->transfer_pool) {
-    return Err(EC::InvalidHandle, __func__, "<context>", "failed to create transfer pool");
+    return Err(EC::InvalidHandle, __func__, "", "failed to create transfer pool");
   }
 
   state->transfer_service =
@@ -846,4 +847,3 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 }
 
 } // namespace AMBootstrap
-

@@ -1,15 +1,32 @@
 #include "interface/adapters/config/ConfigInterfaceService.hpp"
 
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/string.hpp"
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace AMInterface::config {
 namespace {
 using DocumentKind = AMDomain::config::DocumentKind;
+using AMDomain::host::HostService::IsLocalNickname;
+using AMDomain::host::HostService::NormalizeNickname;
+using AMDomain::host::HostService::ValidateNickname;
+
+std::string NormalizeProfileNickname_(const std::string &nickname) {
+  const std::string stripped = AMStr::Strip(nickname);
+  if (stripped.empty()) {
+    return "";
+  }
+  std::string normalized = NormalizeNickname(stripped);
+  if (IsLocalNickname(normalized)) {
+    normalized = AMDomain::host::klocalname;
+  }
+  return normalized;
+}
 
 std::string DisplayPath_(const std::filesystem::path &path) {
   std::filesystem::path display = path;
@@ -57,8 +74,10 @@ std::filesystem::path ResolveExportFileName_(
 
 ConfigInterfaceService::ConfigInterfaceService(
     AMApplication::config::ConfigAppService &config_service,
+    AMApplication::host::HostAppService &host_service,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager)
-    : config_service_(config_service), prompt_io_manager_(prompt_io_manager) {}
+    : config_service_(config_service), host_service_(host_service),
+      prompt_io_manager_(prompt_io_manager) {}
 
 ECM ConfigInterfaceService::PrintPaths() const {
   const std::filesystem::path project_dir = config_service_.ProjectRoot();
@@ -169,6 +188,66 @@ ECM ConfigInterfaceService::Export(const std::string &path) const {
     }
   }
   return first_error;
+}
+
+ECM ConfigInterfaceService::EditProfile(const std::string &nickname) const {
+  const std::string stripped = AMStr::Strip(nickname);
+  if (stripped.empty()) {
+    return Err(EC::InvalidArg, "profile edit", "",
+               "empty profile nickname");
+  }
+  if (!ValidateNickname(stripped)) {
+    return Err(EC::InvalidArg, "profile edit", stripped,
+               "invalid profile nickname literal");
+  }
+  const std::string target = NormalizeProfileNickname_(stripped);
+  if (target == AMDomain::prompt::kPromptProfileDefault) {
+    return Err(EC::InvalidArg, "profile edit", target,
+               "profile nickname must be a host nickname");
+  }
+  const auto host_query = host_service_.GetClientConfig(target, true);
+  if (!(host_query)) {
+    return Err(EC::HostConfigNotFound, "profile edit", target,
+               AMStr::fmt("host nickname not found: {}", target));
+  }
+  return prompt_io_manager_.Edit(target);
+}
+
+ECM ConfigInterfaceService::GetProfile(
+    const std::vector<std::string> &nicknames) const {
+  if (nicknames.empty()) {
+    return Err(EC::InvalidArg, "profile get", "",
+               "profile get requires at least one nickname");
+  }
+
+  std::vector<std::string> targets = {};
+  std::unordered_set<std::string> seen = {};
+  targets.reserve(nicknames.size());
+  for (const auto &name : nicknames) {
+    const std::string stripped = AMStr::Strip(name);
+    if (stripped.empty()) {
+      return Err(EC::InvalidArg, "profile get", "",
+                 "empty profile nickname");
+    }
+    if (!ValidateNickname(stripped)) {
+      return Err(EC::InvalidArg, "profile get", stripped,
+                 "invalid profile nickname literal");
+    }
+    const std::string target = NormalizeProfileNickname_(stripped);
+    if (target == AMDomain::prompt::kPromptProfileDefault) {
+      return Err(EC::InvalidArg, "profile get", target,
+                 "profile nickname must be a host nickname");
+    }
+    const auto host_query = host_service_.GetClientConfig(target, true);
+    if (!(host_query)) {
+      return Err(EC::HostConfigNotFound, "profile get", target,
+                 AMStr::fmt("host nickname not found: {}", target));
+    }
+    if (seen.insert(target).second) {
+      targets.push_back(target);
+    }
+  }
+  return prompt_io_manager_.Get(targets);
 }
 
 } // namespace AMInterface::config
