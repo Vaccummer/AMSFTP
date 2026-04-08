@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <deque>
 #include <foundation/core/Enum.hpp>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,9 +17,6 @@
 
 struct ic_completion_env_s;
 using ic_completion_env_t = ic_completion_env_s;
-namespace AMInterface::cli {
-class InteractiveEventRegistry;
-}
 namespace AMInterface::completion {
 class ICompletionRuntime;
 }
@@ -247,8 +243,7 @@ struct AMSearchEngineRegistration {
  * @brief Build the default completion search-engine registration set.
  */
 std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
-    std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
-    AMInterface::cli::InteractiveEventRegistry *interactive_event_registry);
+    std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime);
 
 /**
  * @brief Core completion engine that orchestrates parsing, dispatch, and async
@@ -260,14 +255,11 @@ public:
       const AMInterface::parser::CommandNode *command_tree,
       AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer,
       std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
-      AMInterface::cli::InteractiveEventRegistry *interactive_event_registry =
-          nullptr,
       AMApplication::completion::CompleterConfigManager
           *completer_config_manager = nullptr,
       AMInterface::style::AMStyleService *style_service = nullptr)
       : command_tree_(command_tree), token_type_analyzer_(token_type_analyzer),
         runtime_(std::move(runtime)),
-        interactive_event_registry_(interactive_event_registry),
         completer_config_manager_(completer_config_manager),
         style_service_(style_service) {
     StartAsyncWorkers_();
@@ -283,11 +275,10 @@ public:
       engines_.clear();
       engines_by_target_.clear();
     }
-    for (const auto &registration : AMBuildDefaultSearchEngineRegistrations(
-             runtime_, interactive_event_registry_)) {
+    for (const auto &registration :
+         AMBuildDefaultSearchEngineRegistrations(runtime_)) {
       RegisterSearchEngine(registration.targets, registration.engine);
     }
-    EnsurePromptReturnCancelHookRegistered_();
   }
 
   /**
@@ -304,6 +295,7 @@ public:
    * @brief Clear completion caches managed by registered search engines.
    */
   void ClearCache();
+  void CancelPendingAsync();
 
   /**
    * @brief Handle a completion request from isocline.
@@ -403,12 +395,6 @@ private:
   void RestartAsyncWorkers_();
 
   /**
-   * @brief Register callback to cancel async completion tasks after each
-   * PromptCore return.
-   */
-  void EnsurePromptReturnCancelHookRegistered_();
-
-  /**
    * @brief Async worker loop body.
    */
   void AsyncWorkerLoop_();
@@ -483,8 +469,6 @@ private:
   AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer_ = nullptr;
   std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
       nullptr;
-  AMInterface::cli::InteractiveEventRegistry *interactive_event_registry_ =
-      nullptr;
   AMApplication::completion::CompleterConfigManager *completer_config_manager_ =
       nullptr;
   AMInterface::style::AMStyleService *style_service_ = nullptr;
@@ -496,10 +480,6 @@ private:
   std::mutex async_on_air_mtx_;
   std::unordered_map<AMCompletionTarget, std::shared_ptr<ICompletionTask>>
       async_on_air_tasks_;
-
-  std::function<void()> prompt_return_cancel_callback_;
-  bool prompt_return_cancel_hook_registered_ = false;
 };
 
 } // namespace AMInterface::completer
-

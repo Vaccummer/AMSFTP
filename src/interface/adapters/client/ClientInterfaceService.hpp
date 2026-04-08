@@ -92,6 +92,9 @@ public:
   ECM ConnectFtp(
       const ProtocolConnectRequest &request,
       const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM ConnectLocal(
+      const ProtocolConnectRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
   ECM RemoveClients(
       const RemoveClientsRequest &request,
       const std::optional<ClientControlComponent> &component = std::nullopt);
@@ -129,4 +132,3 @@ private:
   amf default_control_token_ = nullptr;
 };
 } // namespace AMInterface::client
-

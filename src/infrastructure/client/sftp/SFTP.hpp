@@ -215,7 +215,7 @@ private:
   ECM TerminalInitInternal(const TerminalWindowInfo &window,
                            TerminalOutputCallback output_cb = {}, int timeout_ms
 = -1, int64_t start_time = -1) { std::lock_guard<std::recursive_mutex>
-lock(mtx); if (!session) { return {EC::NoSession, "unspecified", "<unknown>", "Session not initialized"};
+lock(mtx); if (!session) { return {EC::NoSession, __func__, "<context>", "Session not initialized"};
     }
 
     terminal_window = window;
@@ -228,7 +228,7 @@ lock(mtx); if (!session) { return {EC::NoSession, "unspecified", "<unknown>", "S
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     if (this->LegacyInterruptCheck_(flag)) {
       terminal_channel.reset();
-      return {EC::Terminate, "unspecified", "<unknown>", "Terminal init interrupted"};
+      return {EC::Terminate, __func__, "<context>", "Terminal init interrupted"};
     }
 
     terminal_channel.reset();
@@ -376,7 +376,7 @@ public:
             int64_t start_time = -1) {
     amf flag = interrupt_flag;
     if (this->LegacyInterruptCheck_(flag)) {
-      ECM rcm = {EC::Terminate, "unspecified", "<unknown>", "Check interrupted"};
+      ECM rcm = {EC::Terminate, __func__, "<context>", "Check interrupted"};
       SetState({rcm, AMDomain::client::ClientStatus::ConnectionBroken});
       return rcm;
     }
@@ -384,13 +384,13 @@ public:
     (void)start_time;
     if (!session || sock == INVALID_SOCKET ||
         !has_connected.load(std::memory_order_relaxed)) {
-      ECM rcm = {EC::NoConnection, "unspecified", "<unknown>", "Session not connected"};
+      ECM rcm = {EC::NoConnection, __func__, "<context>", "Session not connected"};
       SetState({rcm, AMDomain::client::ClientStatus::NoConnection});
       return rcm;
     }
 
     if (!IsTerminalAlive()) {
-      ECM rcm = {EC::NoConnection, "unspecified", "<unknown>", "Terminal not initialized"};
+      ECM rcm = {EC::NoConnection, __func__, "<context>", "Terminal not initialized"};
       SetState({rcm, AMDomain::client::ClientStatus::NoConnection});
       return rcm;
     }
@@ -483,13 +483,13 @@ public:
                     int timeout_ms = -1, int64_t start_time = -1) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!terminal_channel || !terminal_channel->channel) {
-      return {EC::NoConnection, "unspecified", "<unknown>", "Terminal not initialized"};
+      return {EC::NoConnection, __func__, "<context>", "Terminal not initialized"};
     }
 
     amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     if (this->LegacyInterruptCheck_(flag)) {
-      return {EC::Terminate, "unspecified", "<unknown>", "Terminal interrupted"};
+      return {EC::Terminate, __func__, "<context>", "Terminal interrupted"};
     }
 
     libssh2_session_set_blocking(session, 0);
@@ -591,10 +591,10 @@ public:
     (void)timeout_ms;
     (void)start_time;
     if (false) {
-      return {EC::Terminate, "unspecified", "<unknown>", "Check interrupted"};
+      return {EC::Terminate, __func__, "<context>", "Check interrupted"};
     }
     if (closed.load(std::memory_order_relaxed)) {
-      return {EC::NoConnection, "unspecified", "<unknown>", "Terminal closed"};
+      return {EC::NoConnection, __func__, "<context>", "Terminal closed"};
     }
     return OK;
   }
@@ -630,10 +630,10 @@ public:
   ECM TerminalWrite(const std::string &msg,
                     int timeout_ms = -1, int64_t start_time = -1) {
     if (closed.load(std::memory_order_relaxed)) {
-      return {EC::NoConnection, "unspecified", "<unknown>", "Terminal closed"};
+      return {EC::NoConnection, __func__, "<context>", "Terminal closed"};
     }
     if (msg.empty()) {
-      return {EC::InvalidArg, "unspecified", "<unknown>", "Empty command"};
+      return {EC::InvalidArg, __func__, "<context>", "Empty command"};
     }
 
     std::string cmd = msg;
@@ -641,7 +641,7 @@ public:
       cmd.pop_back();
     }
     if (cmd.empty()) {
-      return {EC::InvalidArg, "unspecified", "<unknown>", "Empty command"};
+      return {EC::InvalidArg, __func__, "<context>", "Empty command"};
     }
 
     if (timeout_ms <= 0) {
@@ -650,23 +650,23 @@ public:
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
     if (false) {
-      return {EC::Terminate, "unspecified", "<unknown>", "Terminal interrupted"};
+      return {EC::Terminate, __func__, "<context>", "Terminal interrupted"};
     }
 
     FILE *pipe = OpenPipe(cmd);
     if (!pipe) {
-      return {EC::LocalFileOpenError, "unspecified", "<unknown>", "Local terminal pipe open failed"};
+      return {EC::LocalFileOpenError, __func__, "<context>", "Local terminal pipe open failed"};
     }
 
     std::array<char, 4096> buffer;
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
       if (false) {
         ClosePipe(pipe);
-        return {EC::Terminate, "unspecified", "<unknown>", "Terminal interrupted"};
+        return {EC::Terminate, __func__, "<context>", "Terminal interrupted"};
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
         ClosePipe(pipe);
-        return {EC::OperationTimeout, "unspecified", "<unknown>", "Terminal write timed out"};
+        return {EC::OperationTimeout, __func__, "<context>", "Terminal write timed out"};
       }
 
       if (!paused.load(std::memory_order_relaxed)) {
@@ -683,7 +683,7 @@ public:
 
     int rc = ClosePipe(pipe);
     if (rc != 0) {
-      return {EC::UnknownError, "unspecified", "<unknown>", "Local command failed"};
+      return {EC::UnknownError, __func__, "<context>", "Local command failed"};
     }
     return OK;
   }
@@ -1473,7 +1473,7 @@ public:
     StoreInitContext_(std::move(is_interrupted_cb), timeout_ms, start_time);
     if (!session) {
       is_init = false;
-      return {EC::NoSession, "unspecified", "<unknown>", "Session is null"};
+      return {EC::NoSession, __func__, "<context>", "Session is null"};
     }
     if (channel) {
       if (!closed) {
@@ -1816,7 +1816,7 @@ private:
     }
     ECMData<AMDomain::filesystem::CheckResult> res;
     res.data = AMDomain::filesystem::CheckResult{};
-    res.rcm = {EC::NoConnection, "unspecified", "<unknown>", "Connection closed"};
+    res.rcm = {EC::NoConnection, __func__, "<context>", "Connection closed"};
     res.data.status = AMDomain::client::ClientStatus::NoConnection;
     state_atomic_.lock().store(res);
   }
@@ -2114,10 +2114,10 @@ public:
                   const AMDomain::client::ClientControlComponent &control) {
     const int timeout_ms = ResolveTimeoutMs_(control);
     if (control.IsTimeout()) {
-      return {EC::OperationTimeout, "unspecified", "<unknown>", "Operation timed out"};
+      return {EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
     }
     if (control.IsInterrupted()) {
-      return {EC::Terminate, "unspecified", "<unknown>", "Interrupted by user"};
+      return {EC::Terminate, __func__, "<context>", "Interrupted by user"};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     ConRequest request = request_atomic_.lock().load();
@@ -2166,17 +2166,17 @@ public:
     sock = connector.sock;
 
     if (control.IsInterrupted()) {
-      return {EC::Terminate, "unspecified", "<unknown>", "Connection interrupted"};
+      return {EC::Terminate, __func__, "<context>", "Connection interrupted"};
     }
     if (control.IsTimeout()) {
-      return {EC::OperationTimeout, "unspecified", "<unknown>", "Connection timed out"};
+      return {EC::OperationTimeout, __func__, "<context>", "Connection timed out"};
     }
 
     session = libssh2_session_init();
     if (!session) {
       trace(TraceLevel::Critical, EC::SessionCreateFailed, "",
             "libssh2_session_init", "Session initialization failed");
-      return {EC::SessionCreateFailed, "unspecified", "<unknown>", "Libssh2 Session initialization failed"};
+      return {EC::SessionCreateFailed, __func__, "<context>", "Libssh2 Session initialization failed"};
     }
     libssh2_session_set_blocking(session, 0);
 
@@ -2196,13 +2196,13 @@ public:
         Disconnect();
         switch (wr) {
         case WaitResult::Timeout:
-          return {EC::OperationTimeout, "unspecified", "<unknown>", "Connection timed out during handshake"};
+          return {EC::OperationTimeout, __func__, "<context>", "Connection timed out during handshake"};
         case WaitResult::Interrupted:
-          return {EC::Terminate, "unspecified", "<unknown>", "Connection interrupted during handshake"};
+          return {EC::Terminate, __func__, "<context>", "Connection interrupted during handshake"};
         case WaitResult::Error:
-          return {EC::SocketRecvError, "unspecified", "<unknown>", "Socket error during handshake"};
+          return {EC::SocketRecvError, __func__, "<context>", "Socket error during handshake"};
         default:
-          return {EC::UnknownError, "unspecified", "<unknown>", "Connection interrupted during handshake"};
+          return {EC::UnknownError, __func__, "<context>", "Connection interrupted during handshake"};
         }
       }
     }
@@ -2238,7 +2238,7 @@ public:
     }
     auth_list = auth_list_res.value;
     if (auth_list == nullptr) {
-      rcm = {EC::AuthFailed, "unspecified", "<unknown>", "Failed to query supported auth methods"};
+      rcm = {EC::AuthFailed, __func__, "<context>", "Failed to query supported auth methods"};
       trace(TraceLevel::Critical, rcm.code, request.username,
             "libssh2_userauth_list", rcm.error);
       Disconnect();
@@ -2253,7 +2253,7 @@ public:
 
     if (!request.keyfile.empty()) {
       if (control.IsInterrupted()) {
-        return {EC::Terminate, "unspecified", "<unknown>", "Authentication interrupted"};
+        return {EC::Terminate, __func__, "<context>", "Authentication interrupted"};
       }
       auto auth_res = nb_call(control, [&]() {
         return libssh2_userauth_publickey_fromfile(
@@ -2284,7 +2284,7 @@ public:
 
     if (!stored_password_enc.empty() && password_auth) {
       if (control.IsInterrupted()) {
-        return {EC::Terminate, "unspecified", "<unknown>", "Authentication interrupted"};
+        return {EC::Terminate, __func__, "<context>", "Authentication interrupted"};
       }
       std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
       auto auth_res = nb_call(control, [&]() {
@@ -2316,7 +2316,7 @@ public:
     if (!private_keys.empty()) {
       for (const auto &private_key : private_keys) {
         if (control.IsInterrupted()) {
-          return {EC::Terminate, "unspecified", "<unknown>", "Authentication interrupted"};
+          return {EC::Terminate, __func__, "<context>", "Authentication interrupted"};
         }
         if (private_key == request.keyfile) {
           continue;
@@ -2354,7 +2354,7 @@ public:
       int trial_times = 0;
       while (trial_times < 2) {
         if (control.IsInterrupted()) {
-          return {EC::Terminate, "unspecified", "<unknown>", "Authentication interrupted"};
+          return {EC::Terminate, __func__, "<context>", "Authentication interrupted"};
         }
         auto [password_opt, cb_ecm] =
             CallCallbackSafeRet<std::optional<std::string>>(
@@ -2767,7 +2767,7 @@ public:
 
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "SFTP not initialized"}};
     }
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     NBResult<int> stat_res;
@@ -2803,7 +2803,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "SFTP not initialized"}};
     }
 
     LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -2892,7 +2892,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "SFTP not initialized"}};
     }
 
     LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
@@ -2998,7 +2998,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "SFTP not initialized"}};
     }
     auto nb_res = nb_call(control, [&] {
       return libssh2_sftp_mkdir_ex(sftp, args.path.c_str(), args.path.size(),
@@ -3092,7 +3092,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "SFTP not initialized"}};
     }
     auto nb_res = nb_call(
         control, [&] { return libssh2_sftp_rmdir(sftp, args.path.c_str()); });
@@ -3116,7 +3116,7 @@ public:
 
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "SFTP not initialized"}};
     }
     auto nb_res = nb_call(
         control, [&] { return libssh2_sftp_unlink(sftp, args.path.c_str()); });
@@ -3150,7 +3150,7 @@ public:
       }
     }
     if (!sftp) {
-      return {ECM{EC::NoConnection, "unspecified", "<unknown>", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, __func__, "<context>", "SFTP not initialized"}};
     }
     auto nb_res = nb_call(control, [&] {
       return libssh2_sftp_rename_ex(
@@ -3421,3 +3421,4 @@ public:
    */
 };
 } // namespace AMInfra::client::SFTP
+

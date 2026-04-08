@@ -460,7 +460,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     } catch (const CLI::ParseError &e) {
       const std::string parse_msg = e.what();
       managers.interfaces.prompt_io_manager->Print(parse_msg);
-      ECM parse_rcm = {EC::InvalidArg, "unspecified", "<unknown>", parse_msg};
+      ECM parse_rcm = {EC::InvalidArg, __func__, "<context>", parse_msg};
       store_exit_code(static_cast<int>(parse_rcm.code));
       prompt_arg.result = parse_rcm;
       prompt_arg.elapsed_time_ms = std::max<int64_t>(
@@ -489,3 +489,4 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
+

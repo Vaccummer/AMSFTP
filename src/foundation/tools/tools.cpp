@@ -1254,6 +1254,6 @@ ECM fecm(const std::error_code &ec) {
   if (!ec) {
     return OK;
   }
-  return {fec(ec), "", "", ec.message(),
+  return {fec(ec), "filesystem.error", ec.category().name(), ec.message(),
           RawError{RawErrorSource::Filesystem, ec.value()}};
 }

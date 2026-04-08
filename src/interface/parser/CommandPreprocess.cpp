@@ -122,7 +122,7 @@ AMInputPreprocess::Preprocess(const std::string &input) const {
   if (!trimmed.empty() && trimmed.front() == '!') {
     const std::string command = AMStr::Strip(trimmed.substr(1));
     if (command.empty()) {
-      return {{}, Err(EC::InvalidArg, "", "", "Empty shell command")};
+      return {{}, Err(EC::InvalidArg, __func__, "<context>", "Empty shell command")};
     }
     return {{"cmd", command}, OK};
   }
@@ -154,4 +154,5 @@ AMInputPreprocess::ResolveStringMeta(const std::string &input) {
 }
 
 } // namespace AMInterface::parser
+
 

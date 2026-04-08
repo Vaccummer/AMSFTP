@@ -1,6 +1,4 @@
 #include "application/prompt/PromptHistoryManager.hpp"
-
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
 namespace AMApplication::prompt {
@@ -47,10 +45,12 @@ PromptHistoryArg PromptHistoryManager::GetInitArg() const {
 ECM PromptHistoryManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+    return Err(EC::InvalidArg, __func__, "<context>",
+               "config service is null");
   }
   if (!config_service->Write<PromptHistoryArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, "", "", "failed to flush prompt history config");
+    return Err(EC::ConfigDumpFailed, __func__, "<context>",
+               "failed to flush prompt history config");
   }
   return OK;
 }
@@ -86,7 +86,8 @@ PromptHistoryManager::GetZoneHistory(const std::string &zone) const {
   out.from_fallback = false;
   out.history = {};
   return {std::move(out),
-          Err(EC::PathNotExist, "", "", AMStr::fmt("Prompt history not found for zone: {}", zone))};
+          Err(EC::PathNotExist, __func__, "<context>",
+              AMStr::fmt("Prompt history not found for zone: {}", zone))};
 }
 
 ECM PromptHistoryManager::SetZoneHistory(const std::string &zone,
@@ -101,7 +102,8 @@ ECM PromptHistoryManager::SetZoneHistory(const std::string &zone,
 ECM PromptHistoryManager::AppendZoneHistory(const std::string &zone,
                                             const std::string &entry) {
   if (entry.empty()) {
-    return Err(EC::InvalidArg, "", "", "Prompt history entry is empty");
+    return Err(EC::InvalidArg, __func__, "<context>",
+               "Prompt history entry is empty");
   }
   auto guard = init_arg_.lock();
   auto &bucket = guard->set[zone];
@@ -117,7 +119,8 @@ ECM PromptHistoryManager::ClearZoneHistory(const std::string &zone) {
   auto guard = init_arg_.lock();
   auto it = guard->set.find(zone);
   if (it == guard->set.end()) {
-    return Err(EC::PathNotExist, "", "", AMStr::fmt("Prompt history zone not found: {}", zone));
+    return Err(EC::PathNotExist, __func__, "<context>",
+               AMStr::fmt("Prompt history zone not found: {}", zone));
   }
   it->second.clear();
   MarkConfigDirty();
@@ -125,3 +128,4 @@ ECM PromptHistoryManager::ClearZoneHistory(const std::string &zone) {
 }
 
 } // namespace AMApplication::prompt
+

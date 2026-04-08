@@ -812,11 +812,12 @@ listdir(const std::string &path, int timeout_ms = -1,
   std::vector<PathInfo> result = {};
   fs::path p(pathf);
   if (!fs::exists(p)) {
-    return {ECM{EC::PathNotExist, AMStr::fmt("Path not found: {}", pathf)},
+    return {ECM{EC::PathNotExist, "path.listdir", pathf,
+                AMStr::fmt("Path not found: {}", pathf)},
             result};
   }
   if (!fs::is_directory(p)) {
-    return {ECM{EC::NotADirectory,
+    return {ECM{EC::NotADirectory, "path.listdir", pathf,
                 AMStr::fmt("Path is not a directory: {}", pathf)},
             result};
   }
@@ -831,11 +832,12 @@ listdir(const std::string &path, int timeout_ms = -1,
   }
   for (const auto &entry : dir_iter) {
     // if (interrupt_flag && !interrupt_flag->IsRunning()) {
-    //   return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
+    //   return {ECM{EC::Terminate, __func__, "<context>", "Listdir interrupted by user"}, result};
     // }
     if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
                               std::chrono::milliseconds(timeout_ms)) {
-      return {ECM{EC::OperationTimeout, "Listdir timeout"}, result};
+      return {ECM{EC::OperationTimeout, "path.listdir", pathf, "Listdir timeout"},
+              result};
     }
     auto [error, info] = stat(entry.path().string(), false);
     if (error.code != EC::Success) {
@@ -846,3 +848,4 @@ listdir(const std::string &path, int timeout_ms = -1,
   return {OK, result};
 }
 } // namespace AMPath
+

@@ -31,13 +31,13 @@ public:
   [[nodiscard]] ECM AddSrcClient(const std::string &nickname,
                                  ClientHandle client) {
     if (!client) {
-      return Err(ErrorCode::InvalidHandle, "", "",
+      return Err(ErrorCode::InvalidHandle, __func__, "<context>",
                  "Source client handle is null");
     }
     const std::string key = NormalizeNickname_(nickname);
     auto &slot = holders_[key];
     if (slot.dst && slot.dst == client) {
-      return Err(ErrorCode::InvalidArg, "", "",
+      return Err(ErrorCode::InvalidArg, __func__, "<context>",
                  AMStr::fmt("Source and destination clients must be different "
                             "for host {}",
                             key));
@@ -51,13 +51,13 @@ public:
   [[nodiscard]] ECM AddDstClient(const std::string &nickname,
                                  ClientHandle client) {
     if (!client) {
-      return Err(ErrorCode::InvalidHandle, "", "",
+      return Err(ErrorCode::InvalidHandle, __func__, "<context>",
                  "Destination client handle is null");
     }
     const std::string key = NormalizeNickname_(nickname);
     auto &slot = holders_[key];
     if (slot.src && slot.src == client) {
-      return Err(ErrorCode::InvalidArg, "", "",
+      return Err(ErrorCode::InvalidArg, __func__, "<context>",
                  AMStr::fmt("Source and destination clients must be different "
                             "for host {}",
                             key));
@@ -255,12 +255,12 @@ struct TransferCallback {
       return progress_cb(info);
     } catch (const std::exception &e) {
       if (cb_error) {
-        *cb_error = {EC::PyCBError, e.what()};
+        *cb_error = {EC::PyCBError, __func__, "<context>", e.what()};
       }
       return TransferControl::Terminate;
     } catch (...) {
       if (cb_error) {
-        *cb_error = {EC::PyCBError, "Unknown progress callback error"};
+        *cb_error = {EC::PyCBError, __func__, "<context>", "Unknown progress callback error"};
       }
       return TransferControl::Terminate;
     }
@@ -276,7 +276,7 @@ struct TransferTask {
   PathType path_type = PathType::FILE;
   bool overwrite = false;
   bool IsFinished = false;
-  ECM rcm = ECM(EC::Success, "");
+  ECM rcm = ECM{};
   size_t transferred = 0; // Current file transferred size
   TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
   TransferTask(std::string src, std::string dst, std::string src_host,
@@ -560,3 +560,4 @@ using TaskHistory = std::unordered_map<TaskInfo::ID, sptr<TaskInfo>>;
 using ProgressCallback =
     std::function<void(std::shared_ptr<TaskInfo>, bool force)>;
 } // namespace AMDomain::transfer
+

@@ -16,9 +16,7 @@ struct ClientsArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    auto req = request;
-    req.check = false;
-    return managers.interfaces.client_interface_service->ListClients(req);
+    return managers.interfaces.client_interface_service->ListClients(request);
   }
   void reset() override { request = {}; }
 };

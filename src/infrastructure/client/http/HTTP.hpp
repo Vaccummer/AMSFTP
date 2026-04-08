@@ -539,7 +539,7 @@ public:
     (void)args;
     (void)control;
     return {AMFSI::UpdateHomeDirResult{""},
-            Err(EC::OperationUnsupported, "http.update_home", "",
+            Err(EC::OperationUnsupported, "http.update_home", ClientTarget_(),
                 "HTTP source has no home directory")};
   }
 
@@ -549,11 +549,13 @@ public:
     (void)args;
     if (control.IsInterrupted()) {
       return {AMFSI::CheckResult{ClientStatus::ConnectionBroken},
-              Err(EC::Terminate, "http.check", "", "Operation interrupted")};
+              Err(EC::Terminate, "http.check", ClientTarget_(),
+                  "Operation interrupted")};
     }
     if (control.IsTimeout()) {
       return {AMFSI::CheckResult{ClientStatus::ConnectionBroken},
-              Err(EC::OperationTimeout, "http.check", "", "Operation timeout")};
+              Err(EC::OperationTimeout, "http.check", ClientTarget_(),
+                  "Operation timeout")};
     }
     return {AMFSI::CheckResult{ClientStatus::OK}, OK};
   }
@@ -564,12 +566,14 @@ public:
     (void)args;
     if (control.IsInterrupted()) {
       return {AMFSI::ConnectResult{ClientStatus::ConnectionBroken},
-              Err(EC::Terminate, "http.connect", "", "Operation interrupted")};
+              Err(EC::Terminate, "http.connect", ClientTarget_(),
+                  "Operation interrupted")};
     }
     if (control.IsTimeout()) {
       return {
           AMFSI::ConnectResult{ClientStatus::ConnectionBroken},
-          Err(EC::OperationTimeout, "http.connect", "", "Operation timeout")};
+          Err(EC::OperationTimeout, "http.connect", ClientTarget_(),
+              "Operation timeout")};
     }
     return {AMFSI::ConnectResult{ClientStatus::OK}, OK};
   }
@@ -580,7 +584,7 @@ public:
     (void)args;
     (void)control;
     return {AMFSI::RTTResult{-1.0},
-            Err(EC::OperationUnsupported, "http.rtt", "",
+            Err(EC::OperationUnsupported, "http.rtt", ClientTarget_(),
                 "HTTP source does not support RTT test")};
   }
 
@@ -590,7 +594,7 @@ public:
     (void)args;
     (void)control;
     return {AMFSI::RunResult{"", -1},
-            Err(EC::OperationUnsupported, "http.cmd", "",
+            Err(EC::OperationUnsupported, "http.cmd", ClientTarget_(),
                 "HTTP source does not support shell command")};
   }
 
@@ -733,7 +737,7 @@ public:
     (void)args;
     (void)control;
     return {AMFSI::ListResult{},
-            Err(EC::OperationUnsupported, "http.listdir", "",
+            Err(EC::OperationUnsupported, "http.listdir", ClientTarget_(),
                 "HTTP source does not support directory listing")};
   }
 
@@ -743,7 +747,7 @@ public:
     (void)args;
     (void)control;
     return {AMFSI::ListNamesResult{},
-            Err(EC::OperationUnsupported, "http.listnames", "",
+            Err(EC::OperationUnsupported, "http.listnames", ClientTarget_(),
                 "HTTP source does not support directory listing")};
   }
 
@@ -752,8 +756,9 @@ public:
         const ClientControlComponent &control = {}) override {
     (void)args;
     (void)control;
-    return {AMFSI::MkdirResult{}, Err(EC::OperationUnsupported, "http.mkdir",
-                                      "", "HTTP source is read-only")};
+    return {AMFSI::MkdirResult{},
+            Err(EC::OperationUnsupported, "http.mkdir", ClientTarget_(),
+                "HTTP source is read-only")};
   }
 
   ECMData<AMFSI::MkdirsResult>
@@ -761,8 +766,9 @@ public:
          const ClientControlComponent &control = {}) override {
     (void)args;
     (void)control;
-    return {AMFSI::MkdirsResult{}, Err(EC::OperationUnsupported, "http.mkdirs",
-                                       "", "HTTP source is read-only")};
+    return {AMFSI::MkdirsResult{},
+            Err(EC::OperationUnsupported, "http.mkdirs", ClientTarget_(),
+                "HTTP source is read-only")};
   }
 
   ECMData<AMFSI::RMResult>
@@ -770,8 +776,9 @@ public:
         const ClientControlComponent &control = {}) override {
     (void)args;
     (void)control;
-    return {AMFSI::RMResult{}, Err(EC::OperationUnsupported, "http.rmdir", "",
-                                   "HTTP source is read-only")};
+    return {AMFSI::RMResult{},
+            Err(EC::OperationUnsupported, "http.rmdir", ClientTarget_(),
+                "HTTP source is read-only")};
   }
 
   ECMData<AMFSI::RMResult>
@@ -779,8 +786,9 @@ public:
          const ClientControlComponent &control = {}) override {
     (void)args;
     (void)control;
-    return {AMFSI::RMResult{}, Err(EC::OperationUnsupported, "http.rmfile", "",
-                                   "HTTP source is read-only")};
+    return {AMFSI::RMResult{},
+            Err(EC::OperationUnsupported, "http.rmfile", ClientTarget_(),
+                "HTTP source is read-only")};
   }
 
   ECMData<AMFSI::MoveResult>
@@ -788,11 +796,29 @@ public:
          const ClientControlComponent &control = {}) override {
     (void)args;
     (void)control;
-    return {AMFSI::MoveResult{}, Err(EC::OperationUnsupported, "http.rename",
-                                     "", "HTTP source is read-only")};
+    return {AMFSI::MoveResult{},
+            Err(EC::OperationUnsupported, "http.rename", ClientTarget_(),
+                "HTTP source is read-only")};
   }
 
 private:
+  [[nodiscard]] std::string ClientTarget_() const {
+    if (!config_part_) {
+      return "<http-client>";
+    }
+    const ConRequest req = config_part_->GetRequest();
+    if (!AMStr::Strip(req.nickname).empty()) {
+      return req.nickname;
+    }
+    if (!AMStr::Strip(req.hostname).empty()) {
+      return req.hostname;
+    }
+    if (!AMStr::Strip(req.server_url).empty()) {
+      return req.server_url;
+    }
+    return "<http-client>";
+  }
+
   [[nodiscard]] std::string ResolveProxy_() const {
     if (!metadata_part_) {
       return {};

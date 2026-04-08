@@ -19,12 +19,12 @@ inline ECM ResolveTransferEndpoint(const CLIServices &managers,
                                    const std::string &raw,
                                    PathTarget *out_endpoint) {
   if (!out_endpoint) {
-    return Err(EC::InvalidArg, "", "", "null transfer endpoint output");
+    return Err(EC::InvalidArg, __func__, "<context>", "null transfer endpoint output");
   }
 
   const std::string token = AMStr::Strip(raw);
   if (token.empty()) {
-    return Err(EC::InvalidArg, "", "", "Transfer path is empty");
+    return Err(EC::InvalidArg, __func__, "<context>", "Transfer path is empty");
   }
 
   auto split_result =
@@ -57,7 +57,7 @@ inline TransferCliBuildResult BuildTransferArgsFromCli(
   }
 
   if (src_tokens.empty()) {
-    out.rcm = Err(EC::InvalidArg, "", "", "cp requires at least one source");
+    out.rcm = Err(EC::InvalidArg, __func__, "<context>", "cp requires at least one source");
     return out;
   }
 
@@ -68,7 +68,7 @@ inline TransferCliBuildResult BuildTransferArgsFromCli(
   std::string normalized_dst_token = {};
   if (output_token.empty()) {
     if (src_tokens.size() != 2) {
-      out.rcm = Err(EC::InvalidArg, "", "",
+      out.rcm = Err(EC::InvalidArg, __func__, "<context>",
                     "cp requires exactly 2 paths when --output is omitted");
       return out;
     }
@@ -323,7 +323,7 @@ struct CloneArgs : BaseArgStruct {
     const std::string suffix = AMStr::Strip(async_suffix);
     if (!suffix.empty()) {
       if (suffix != "&") {
-        return Err(EC::InvalidArg, "", "", "clone async suffix must be '&'");
+        return Err(EC::InvalidArg, __func__, "<context>", "clone async suffix must be '&'");
       }
       raw_srcs.push_back(suffix);
     }
@@ -375,7 +375,7 @@ struct WgetArgs : BaseArgStruct {
     AMInterface::transfer::HttpGetArg arg = {};
     arg.src_url = AMStr::Strip(src_token);
     if (arg.src_url.empty()) {
-      return Err(EC::InvalidArg, "", "", "wget requires one source URL");
+      return Err(EC::InvalidArg, __func__, "<context>", "wget requires one source URL");
     }
 
     dst_token = AMStr::Strip(dst_token);
@@ -434,7 +434,7 @@ struct SftpArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.empty() || targets.size() > 2) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "sftp requires user@host or nickname user@host");
     }
     auto req = request;
@@ -445,6 +445,9 @@ struct SftpArgs : BaseArgStruct {
       req.user_at_host = targets[0];
     }
     ECM rcm = managers.interfaces.client_interface_service->ConnectSftp(req);
+    if (!(rcm)) {
+      managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
+    }
     argstruct_common::SetEnterInteractive(ctx, rcm);
     return rcm;
   }
@@ -465,7 +468,7 @@ struct FtpArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.empty() || targets.size() > 2) {
-      return Err(EC::InvalidArg, "", "",
+      return Err(EC::InvalidArg, __func__, "<context>",
                  "ftp requires user@host or nickname user@host");
     }
 
@@ -477,6 +480,9 @@ struct FtpArgs : BaseArgStruct {
       req.user_at_host = targets[0];
     }
     ECM rcm = managers.interfaces.client_interface_service->ConnectFtp(req);
+    if (!(rcm)) {
+      managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
+    }
     argstruct_common::SetEnterInteractive(ctx, (rcm));
     return rcm;
   }
@@ -484,6 +490,32 @@ struct FtpArgs : BaseArgStruct {
     targets.clear();
     request = {};
     request.port = 21;
+  }
+};
+
+struct LocalArgs : BaseArgStruct {
+  std::vector<std::string> targets = {};
+  AMInterface::client::ProtocolConnectRequest request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    if (targets.size() > 1) {
+      return Err(EC::InvalidArg, __func__, "<context>",
+                 "local accepts at most one nickname");
+    }
+    auto req = request;
+    if (!targets.empty()) {
+      req.nickname = targets[0];
+    }
+    ECM rcm = managers.interfaces.client_interface_service->ConnectLocal(req);
+    if (!(rcm)) {
+      managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
+    }
+    argstruct_common::SetEnterInteractive(ctx, rcm);
+    return rcm;
+  }
+  void reset() override {
+    targets.clear();
+    request = {};
   }
 };
 
@@ -520,10 +552,10 @@ struct CmdArgs : BaseArgStruct {
     (void)ctx;
     const std::string command = AMStr::Strip(request.cmd);
     if (command.empty()) {
-      return Err(EC::InvalidArg, "", "", "cmd cannot be empty");
+      return Err(EC::InvalidArg, __func__, "<context>", "cmd cannot be empty");
     }
     if (timeout_ms == 0) {
-      return Err(EC::InvalidArg, "", "", "timeout_ms cannot be 0");
+      return Err(EC::InvalidArg, __func__, "<context>", "timeout_ms cannot be 0");
     }
     auto arg = request;
     arg.cmd = command;
@@ -560,5 +592,6 @@ struct ExitArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
+
 
 

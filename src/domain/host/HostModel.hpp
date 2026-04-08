@@ -90,7 +90,7 @@ struct ClientMetaData {
   bool GetFieldValue(Attr attr, T *out_value, ECM *rcm = nullptr) const {
     if (!out_value) {
       if (rcm) {
-        *rcm = {EC::InvalidArg, "null output pointer"};
+        *rcm = {EC::InvalidArg, __func__, "<context>", "null output pointer"};
       }
       return false;
     }
@@ -101,7 +101,7 @@ struct ClientMetaData {
 
     auto fail = [rcm](const std::string &msg) -> bool {
       if (rcm) {
-        *rcm = {EC::InvalidArg, msg};
+        *rcm = {EC::InvalidArg, __func__, "<context>", msg};
       }
       return false;
     };
@@ -235,14 +235,14 @@ struct ConRequest {
   bool GetFieldValue(Attr attr, T *out_value, ECM *rcm = nullptr) const {
     if (!out_value) {
       if (rcm)
-        *rcm = {EC::InvalidArg, "null output pointer"};
+        *rcm = {EC::InvalidArg, __func__, "<context>", "null output pointer"};
       return false;
     }
 
     auto idx = magic_enum::enum_index(attr);
     if (!idx) {
       if (rcm)
-        *rcm = {EC::InvalidArg, "invalid attr"};
+        *rcm = {EC::InvalidArg, __func__, "<context>", "invalid attr"};
       return false;
     }
 
@@ -268,7 +268,7 @@ struct ConRequest {
         mp);
 
     if (!ok && rcm) {
-      *rcm = {EC::InvalidArg, "type mismatch"};
+      *rcm = {EC::InvalidArg, __func__, "<context>", "type mismatch"};
     }
 
     return ok;
@@ -414,7 +414,7 @@ public:
   bool GetFieldValue(Attr attr, T *out_value, ECM *rcm = nullptr) const {
     if (!out_value) {
       if (rcm) {
-        *rcm = {EC::InvalidArg, "null output pointer"};
+        *rcm = {EC::InvalidArg, __func__, "<context>", "null output pointer"};
       }
       return false;
     }
@@ -425,7 +425,7 @@ public:
 
     auto fail = [rcm](const std::string &msg) -> bool {
       if (rcm) {
-        *rcm = {EC::InvalidArg, msg};
+        *rcm = {EC::InvalidArg, __func__, "<context>", msg};
       }
       return false;
     };
@@ -483,3 +483,4 @@ struct KnownHostEntryArg {
   KnownHostMap entries = {};
 };
 } // namespace AMDomain::host
+

@@ -43,7 +43,8 @@ SnapshotDisconnectCallback(AMAtomic<DisconnectCallback> &disconnect_cb) {
 
 [[nodiscard]] ECM CheckClientNow(const ClientHandle &client, int timeout_ms) {
   if (!client) {
-    return {EC::InvalidHandle, "Client handle is null"};
+    return {EC::InvalidHandle, "maintainer.check_client", "<client>",
+            "Client handle is null"};
   }
   return client->IOPort()
       .Check({}, AMDomain::client::ClientControlComponent(nullptr, timeout_ms))
@@ -76,7 +77,8 @@ ECM ClientMaintainer::CheckClient(const ClientName &name) {
   const ClientName normalized = NormalizeClientName(name);
   auto client = GetClient(normalized);
   if (!client) {
-    return {EC::ClientNotFound, "Client not found: " + normalized};
+    return {EC::ClientNotFound, "maintainer.get_client", normalized,
+            "Client not found"};
   }
   return CheckClientNow(client,
                         check_timeout_ms_.load(std::memory_order_acquire));

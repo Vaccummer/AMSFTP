@@ -19,6 +19,7 @@ namespace AMDomain::host {
 struct HostConfigArg;
 struct KnownHostEntryArg;
 } // namespace AMDomain::host
+
 namespace AMDomain::client {
 struct ClientServiceArg;
 }
@@ -56,7 +57,9 @@ public:
     return config_dirty_.load(std::memory_order_acquire);
   }
 
-  void MarkConfigDirty() { config_dirty_.store(true, std::memory_order_release); }
+  void MarkConfigDirty() {
+    config_dirty_.store(true, std::memory_order_release);
+  }
 
   void ClearConfigDirty() {
     config_dirty_.store(false, std::memory_order_release);
@@ -287,4 +290,3 @@ private:
   bool sync_flush_running_ = false;
 };
 } // namespace AMApplication::config
-

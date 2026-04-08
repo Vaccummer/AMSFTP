@@ -237,7 +237,7 @@ void BuildCliRuntimeState_(BootstrapServices *runtime,
 ECM BuildRunContext_(AMInterface::cli::CliRunContext *run_ctx) {
   run_ctx->task_control_token = AMDomain::client::CreateClientControlToken();
   if (!run_ctx->task_control_token) {
-    return Err(EC::InvalidHandle, "", "",
+    return Err(EC::InvalidHandle, __func__, "<context>",
                "failed to create task control token");
   }
   run_ctx->exit_code = std::make_shared<std::atomic<int>>(0);
@@ -254,11 +254,15 @@ ECM InitAndLoadConfigService_(AMApplication::config::ConfigAppService *service,
   service->SetInitArg(BuildConfigInitArg(root_dir));
   ECM rcm = service->Init();
   if (!rcm) {
-    return Err(rcm.code, "bootstrap init config", root_dir.string(), rcm.msg());
+    return Err(rcm.code, "bootstrap init config", root_dir.string(),
+               rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                 : rcm.error);
   }
   rcm = service->Load(std::nullopt, true);
   if (!rcm) {
-    return Err(rcm.code, "bootstrap load config", root_dir.string(), rcm.msg());
+    return Err(rcm.code, "bootstrap load config", root_dir.string(),
+               rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                 : rcm.error);
   }
   return OK;
 }
@@ -282,7 +286,7 @@ ReadConfigSnapshots_(AMApplication::config::ConfigAppService *service) {
 ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
                                   AppServiceBuildState *state) {
   if (state == nullptr) {
-    return Err(EC::InvalidArg, "bootstrap build core services", "",
+    return Err(EC::InvalidArg, "bootstrap build core services", "<state>",
                "state is null");
   }
   state->transfer_manager_arg = snapshots.transfer_manager_arg;
@@ -290,7 +294,9 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm = state->host_service->Init(snapshots.host_config_arg);
     if (!rcm) {
-      return Err(rcm.code, "bootstrap init host service", "", rcm.msg());
+      return Err(rcm.code, "bootstrap init host service", "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
 
@@ -300,7 +306,9 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
     const ECM rcm =
         state->known_hosts_service->Init(snapshots.known_hosts_arg.entries);
     if (!(rcm)) {
-      return Err(rcm.code, "bootstrap init known hosts service", "", rcm.msg());
+      return Err(rcm.code, "bootstrap init known hosts service", "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
 
@@ -319,7 +327,9 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm = state->var_service->Init();
     if (!(rcm)) {
-      return Err(rcm.code, "bootstrap init var service", "", rcm.msg());
+      return Err(rcm.code, "bootstrap init var service", "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
   return OK;
@@ -328,7 +338,8 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
 ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
                                  AppServiceBuildState *state) {
   if (state == nullptr) {
-    return Err(EC::InvalidArg, "bootstrap build prompt/style services", "",
+    return Err(EC::InvalidArg, "bootstrap build prompt/style services",
+               "<state>",
                "state is null");
   }
   state->completer_config_manager =
@@ -337,7 +348,9 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm = state->completer_config_manager->Init();
     if (!(rcm)) {
-      return Err(rcm.code, "bootstrap init completer config", "", rcm.msg());
+      return Err(rcm.code, "bootstrap init completer config", "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
 
@@ -347,7 +360,9 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm = state->prompt_profile_manager->Init();
     if (!(rcm)) {
-      return Err(rcm.code, "bootstrap init prompt profile", "", rcm.msg());
+      return Err(rcm.code, "bootstrap init prompt profile", "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
 
@@ -357,7 +372,9 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm = state->prompt_history_manager->Init();
     if (!(rcm)) {
-      return Err(rcm.code, "bootstrap init prompt history", "", rcm.msg());
+      return Err(rcm.code, "bootstrap init prompt history", "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
 
@@ -366,7 +383,9 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm = state->style_service->Init();
     if (!(rcm)) {
-      return Err(rcm.code, "bootstrap init style service", "", rcm.msg());
+      return Err(rcm.code, "bootstrap init style service", "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
 
@@ -377,8 +396,10 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm = state->prompt_profile_history_manager->Init();
     if (!(rcm)) {
-      return Err(rcm.code, "bootstrap init isocline profile manager", "",
-                 rcm.msg());
+      return Err(rcm.code, "bootstrap init isocline profile manager",
+                 "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
 
@@ -388,7 +409,9 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm = state->prompt_io_manager->Init();
     if (!(rcm)) {
-      return Err(rcm.code, "bootstrap init prompt io manager", "", rcm.msg());
+      return Err(rcm.code, "bootstrap init prompt io manager", "<bootstrap>",
+                 rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                   : rcm.error);
     }
   }
   return OK;
@@ -396,7 +419,8 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
 
 ECM RegisterConfigSyncPorts_(AppServiceBuildState *state) {
   if (state == nullptr || state->config_service == nullptr) {
-    return Err(EC::InvalidHandle, "bootstrap register config sync ports", "",
+    return Err(EC::InvalidHandle, "bootstrap register config sync ports",
+               "<state>",
                "state or config service is null");
   }
 
@@ -409,7 +433,9 @@ ECM RegisterConfigSyncPorts_(AppServiceBuildState *state) {
     auto result = state->config_service->RegisterSyncPort(port);
     if (!(result.rcm)) {
       return Err(result.rcm.code, "bootstrap register sync port", name,
-                 result.rcm.msg());
+                 result.rcm.error.empty()
+                     ? std::string(AMStr::ToString(result.rcm.code))
+                     : result.rcm.error);
     }
     return OK;
   };
@@ -492,7 +518,8 @@ ECM BuildClientInterfaceServices_(
       app_state.known_hosts_service == nullptr ||
       app_state.prompt_io_manager == nullptr ||
       app_state.style_service == nullptr || app_state.var_service == nullptr) {
-    return Err(EC::InvalidHandle, "bootstrap build interface services", "",
+    return Err(EC::InvalidHandle, "bootstrap build interface services",
+               "<dependencies>",
                "required service dependency is null");
   }
   state->config_interface_service =
@@ -527,13 +554,14 @@ ECM BuildTransferInterfaceService_(
   if (state == nullptr || app_state.filesystem_service == nullptr ||
       app_state.prompt_io_manager == nullptr ||
       app_state.style_service == nullptr) {
-    return Err(EC::InvalidHandle, "bootstrap build transfer interface", "",
+    return Err(EC::InvalidHandle, "bootstrap build transfer interface",
+               "<dependencies>",
                "required service dependency is null");
   }
   state->transfer_pool = AMDomain::transfer::CreateTransferPoolPort(
       app_state.transfer_manager_arg);
   if (!state->transfer_pool) {
-    return Err(EC::InvalidHandle, "", "", "failed to create transfer pool");
+    return Err(EC::InvalidHandle, __func__, "<context>", "failed to create transfer pool");
   }
 
   state->transfer_service =
@@ -553,7 +581,7 @@ ECM BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
   if (app_state.host_service == nullptr ||
       app_state.client_service == nullptr ||
       app_state.filesystem_service == nullptr) {
-    return Err(EC::InvalidHandle, "bootstrap local client", "",
+    return Err(EC::InvalidHandle, "bootstrap local client", "<dependencies>",
                "required service dependency is null");
   }
   auto local_cfg_result = app_state.host_service->GetLocalConfig();
@@ -565,35 +593,46 @@ ECM BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
     if ((local_client_result.rcm) && local_client_result.data) {
       ECM rcm = app_state.client_service->Init(local_client_result.data);
       if (!(rcm)) {
-        return Err(rcm.code, "bootstrap init local client", "local", rcm.msg());
+        return Err(rcm.code, "bootstrap init local client", "local",
+                   rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                     : rcm.error);
       } else {
         const ECM ensure_rcm =
             app_state.filesystem_service->EnsureClientWorkdir(
                 local_client_result.data, control);
         if (!ensure_rcm) {
           return Err(ensure_rcm.code, "bootstrap ensure local workdir", "local",
-                     ensure_rcm.msg());
+                     ensure_rcm.error.empty()
+                         ? std::string(AMStr::ToString(ensure_rcm.code))
+                         : ensure_rcm.error);
         }
       }
     } else if (!(local_client_result.rcm)) {
       return Err(local_client_result.rcm.code, "bootstrap create local client",
-                 "local", local_client_result.rcm.msg());
+                 "local",
+                 local_client_result.rcm.error.empty()
+                     ? std::string(AMStr::ToString(local_client_result.rcm.code))
+                     : local_client_result.rcm.error);
     }
     return OK;
   }
   return Err(local_cfg_result.rcm.code, "bootstrap resolve local config",
-             "local", local_cfg_result.rcm.msg());
+             "local",
+             local_cfg_result.rcm.error.empty()
+                 ? std::string(AMStr::ToString(local_cfg_result.rcm.code))
+                 : local_cfg_result.rcm.error);
 }
 
 ECM BuildAndInitSignalMonitor_(const AMInterface::cli::amf &task_control_token,
                                InterfaceServiceBuildState *state) {
   if (state == nullptr) {
-    return Err(EC::InvalidArg, "bootstrap init signal monitor", "",
+    return Err(EC::InvalidArg, "bootstrap init signal monitor", "<state>",
                "state is null");
   }
   state->signal_monitor = AMDomain::signal::BuildSignalMonitorPort();
   if (!state->signal_monitor) {
-    return Err(EC::InvalidHandle, "bootstrap init signal monitor", "",
+    return Err(EC::InvalidHandle, "bootstrap init signal monitor",
+               "<signal-monitor>",
                "failed to build signal monitor");
   }
 
@@ -617,7 +656,9 @@ ECM BuildAndInitSignalMonitor_(const AMInterface::cli::amf &task_control_token,
   state->signal_monitor->RegisterHook("ControlToken", hook);
   const ECM rcm = state->signal_monitor->Init();
   if (!rcm) {
-    return Err(rcm.code, "bootstrap init signal monitor", "", rcm.msg());
+    return Err(rcm.code, "bootstrap init signal monitor", "<bootstrap>",
+               rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                 : rcm.error);
   }
   return OK;
 }
@@ -695,20 +736,23 @@ ECMData<fs::path> ResolveRootDir() {
   std::string env_root = {};
   if (!AMStr::GetEnv(kRootEnvKey, &env_root)) {
     return {fs::path{},
-            Err(EC::ConfigNotInitialized, "bootstrap resolve root", "",
+            Err(EC::ConfigNotInitialized, "bootstrap resolve root",
+                "$AMSFTP_ROOT",
                 "env variable $AMSFTP_ROOT is not set")};
   }
   AMStr::VStrip(env_root);
   if (env_root.empty()) {
     return {fs::path{},
-            Err(EC::ConfigNotInitialized, "bootstrap resolve root", "",
+            Err(EC::ConfigNotInitialized, "bootstrap resolve root",
+                "$AMSFTP_ROOT",
                 "AMSFTP_ROOT is empty")};
   }
 
   fs::path root_dir = NormalizeRootPath_(env_root);
   if (root_dir.empty()) {
-    return {fs::path{}, Err(EC::InvalidArg, "bootstrap resolve root", "",
-                            "resolved root directory is empty")};
+    return {fs::path{},
+            Err(EC::InvalidArg, "bootstrap resolve root", env_root,
+                "resolved root directory is empty")};
   }
   std::error_code ec;
   if (std::filesystem::exists(root_dir, ec) && !ec &&
@@ -792,7 +836,9 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
     const ECM rcm = runtime->managers.Init(runtime->run_ctx.task_control_token);
     if (!(rcm)) {
       return {nullptr,
-              Err(rcm.code, "bootstrap init cli managers", "", rcm.msg())};
+              Err(rcm.code, "bootstrap init cli managers", "<bootstrap>",
+                  rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                    : rcm.error)};
     }
   }
 
@@ -800,3 +846,4 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 }
 
 } // namespace AMBootstrap
+

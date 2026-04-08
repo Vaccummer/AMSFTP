@@ -112,7 +112,7 @@ ECMData<PathInfo> TokenAnalyzerRuntimeAdapter::StatPath(
     AMDomain::client::ClientHandle client, const std::string &abs_path,
     int timeout_ms) const {
   if (!client) {
-    return {PathInfo{}, Err(EC::InvalidHandle, "", "", "client is null")};
+    return {PathInfo{}, Err(EC::InvalidHandle, __func__, "<context>", "client is null")};
   }
   auto control =
       AMDomain::client::ClientControlComponent(nullptr, timeout_ms);
@@ -199,4 +199,5 @@ std::string TokenAnalyzerRuntimeAdapter::ResolvePathHighlightStyle(
 }
 
 } // namespace AMInterface::parser
+
 

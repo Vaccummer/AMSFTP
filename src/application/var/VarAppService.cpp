@@ -22,10 +22,10 @@ VarSetArg VarAppService::GetInitArg() const { return init_arg_.lock().load(); }
 ECM VarAppService::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+    return Err(EC::InvalidArg, __func__, "<context>", "config service is null");
   }
   if (!config_service->Write<VarSetArg>(store_.lock().load())) {
-    return Err(EC::ConfigDumpFailed, "", "", "failed to flush var config");
+    return Err(EC::ConfigDumpFailed, __func__, "<context>", "failed to flush var config");
   }
   return OK;
 }
@@ -33,18 +33,18 @@ ECM VarAppService::FlushTo(
 ECMData<VarInfo> VarAppService::GetVar(const std::string &zone_name,
                                        const std::string &varname) const {
   if (zone_name.empty() || varname.empty()) {
-    return {{}, Err(EC::InvalidArg, "", "", "zone_name and varname are required")};
+    return {{}, Err(EC::InvalidArg, __func__, "<context>", "zone_name and varname are required")};
   }
 
   const auto store = store_.lock();
   const auto zone_it = store->set.find(zone_name);
   if (zone_it == store->set.end()) {
-    return {{}, Err(EC::InvalidArg, "", "", "target zone not found")};
+    return {{}, Err(EC::InvalidArg, __func__, "<context>", "target zone not found")};
   }
 
   const auto var_it = zone_it->second.find(varname);
   if (var_it == zone_it->second.end()) {
-    return {{}, Err(EC::InvalidArg, "", "", "variable not found in target zone")};
+    return {{}, Err(EC::InvalidArg, __func__, "<context>", "variable not found in target zone")};
   }
 
   return {{zone_name, varname, var_it->second}, OK};
@@ -52,7 +52,7 @@ ECMData<VarInfo> VarAppService::GetVar(const std::string &zone_name,
 
 ECMData<VarInfoList> VarAppService::SearchVar(const std::string &varname) const {
   if (varname.empty()) {
-    return {{}, Err(EC::InvalidArg, "", "", "varname is required")};
+    return {{}, Err(EC::InvalidArg, __func__, "<context>", "varname is required")};
   }
 
   VarInfoList out = {};
@@ -70,13 +70,13 @@ ECMData<VarInfoList> VarAppService::SearchVar(const std::string &varname) const 
 ECMData<ZoneVarInfoMap>
 VarAppService::EnumerateZone(const std::string &zone_name) const {
   if (zone_name.empty()) {
-    return {{}, Err(EC::InvalidArg, "", "", "zone_name is required")};
+    return {{}, Err(EC::InvalidArg, __func__, "<context>", "zone_name is required")};
   }
 
   const auto store = store_.lock();
   const auto zone_it = store->set.find(zone_name);
   if (zone_it == store->set.end()) {
-    return {{}, Err(EC::InvalidArg, "", "", "target zone not found")};
+    return {{}, Err(EC::InvalidArg, __func__, "<context>", "target zone not found")};
   }
 
   ZoneVarInfoMap out = {};
@@ -102,7 +102,7 @@ ECMData<AllVarInfoMap> VarAppService::GetAllVar() const {
 ECMData<bool> VarAppService::VarExists(const std::string &zone_name,
                                        const std::string &varname) const {
   if (zone_name.empty() || varname.empty()) {
-    return {false, Err(EC::InvalidArg, "", "", "zone_name and varname are required")};
+    return {false, Err(EC::InvalidArg, __func__, "<context>", "zone_name and varname are required")};
   }
 
   const auto store = store_.lock();
@@ -115,7 +115,7 @@ ECMData<bool> VarAppService::VarExists(const std::string &zone_name,
 
 ECM VarAppService::AddVar(const VarInfo &info) {
   if (info.domain.empty() || info.varname.empty()) {
-    return Err(EC::InvalidArg, "", "", "domain and varname are required");
+    return Err(EC::InvalidArg, __func__, "<context>", "domain and varname are required");
   }
   auto store = store_.lock();
   store->set[info.domain][info.varname] = info.varvalue;
@@ -126,18 +126,18 @@ ECM VarAppService::AddVar(const VarInfo &info) {
 ECM VarAppService::DelVar(const std::string &zone_name,
                           const std::string &varname) {
   if (zone_name.empty() || varname.empty()) {
-    return Err(EC::InvalidArg, "", "", "zone_name and varname are required");
+    return Err(EC::InvalidArg, __func__, "<context>", "zone_name and varname are required");
   }
 
   auto store = store_.lock();
   const auto zone_it = store->set.find(zone_name);
   if (zone_it == store->set.end()) {
-    return Err(EC::InvalidArg, "", "", "target zone not found");
+    return Err(EC::InvalidArg, __func__, "<context>", "target zone not found");
   }
 
   const auto var_it = zone_it->second.find(varname);
   if (var_it == zone_it->second.end()) {
-    return Err(EC::InvalidArg, "", "", "variable not found in target zone");
+    return Err(EC::InvalidArg, __func__, "<context>", "variable not found in target zone");
   }
 
   zone_it->second.erase(var_it);
@@ -145,3 +145,4 @@ ECM VarAppService::DelVar(const std::string &zone_name,
   return OK;
 }
 } // namespace AMApplication::var
+

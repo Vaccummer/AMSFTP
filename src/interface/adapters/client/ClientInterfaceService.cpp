@@ -412,7 +412,7 @@ void PrintClientDetail(
   if (include_status) {
     const ECM rcm = check_result.has_value()
                         ? check_result->rcm
-                        : Err(EC::ClientNotFound, "unspecified", "<unknown>", "Client not found");
+                        : Err(EC::ClientNotFound, __func__, "<context>", "Client not found");
     print_field("status", (rcm) ? "✅" : "❌");
   }
   for (const auto &field : fields) {
@@ -597,12 +597,12 @@ bool PromptHostInt64_(AMPromptIOManager &prompt, const std::string &label,
     }
     int64_t parsed = 0;
     if (!ParseInt64_(stripped, &parsed)) {
-      prompt.ErrorFormat(Err(EC::InvalidArg, "unspecified", "<unknown>", "invalid integer value"));
+      prompt.ErrorFormat(Err(EC::InvalidArg, __func__, "<context>", "invalid integer value"));
       continue;
     }
     if (parsed < min_v || parsed > max_v) {
       prompt.ErrorFormat(
-          Err(EC::InvalidArg, "unspecified", "<unknown>",
+          Err(EC::InvalidArg, __func__, "<context>",
               AMStr::fmt("value out of range [{}, {}]", min_v, max_v)));
       continue;
     }
@@ -614,7 +614,7 @@ bool PromptHostInt64_(AMPromptIOManager &prompt, const std::string &label,
 ECM ResolveHostConfig_(AMHostConfigManager &host_config_manager,
                        const std::string &nickname, HostConfig *out) {
   if (!out) {
-    return Err(EC::InvalidArg, "unspecified", "<unknown>", "null host config output");
+    return Err(EC::InvalidArg, __func__, "<context>", "null host config output");
   }
   ECMData<HostConfig> result = {};
   if (IsLocalNickname(nickname)) {
@@ -718,7 +718,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
                          AMHostConfigManager &host_config_manager,
                          const std::string &nickname, HostConfig *out) {
   if (!out) {
-    return Err(EC::InvalidArg, "unspecified", "<unknown>", "null host config output");
+    return Err(EC::InvalidArg, __func__, "<context>", "null host config output");
   }
   HostConfig entry = {};
 
@@ -735,7 +735,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     if (nickname_input.empty()) {
       auto input = prompt.Prompt("Nickname: ", "", nickname_checker, {});
       if (!input.has_value()) {
-        return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+        return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
       }
       nickname_input = AMStr::Strip(*input);
     }
@@ -752,7 +752,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
   while (true) {
     if (!PromptHostProtocol_(prompt, ClientProtocol::SFTP,
                              &entry.request.protocol)) {
-      return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+      return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
     }
     const std::string protocol =
         AMStr::lowercase(AMStr::ToString(entry.request.protocol));
@@ -760,7 +760,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
       break;
     }
     prompt.ErrorFormat(
-        Err(EC::InvalidArg, "unspecified", "<unknown>", "protocol must be sftp, ftp or local"));
+        Err(EC::InvalidArg, __func__, "<context>", "protocol must be sftp, ftp or local"));
   }
 
   const bool hostname_required =
@@ -769,7 +769,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     std::string hostname = entry.request.hostname;
     if (!PromptHostText_(prompt, "Hostname: ", hostname, &hostname,
                          !hostname_required)) {
-      return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+      return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
     }
     hostname = AMStr::Strip(hostname);
     if (hostname.empty()) {
@@ -778,7 +778,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
         break;
       }
       prompt.ErrorFormat(
-          Err(EC::InvalidArg, "unspecified", "<unknown>", "hostname cannot be empty"));
+          Err(EC::InvalidArg, __func__, "<context>", "hostname cannot be empty"));
       continue;
     }
     entry.request.hostname = hostname;
@@ -792,7 +792,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     std::string username = entry.request.username;
     if (!PromptHostText_(prompt, "Username: ", default_username, &username,
                          !hostname_required)) {
-      return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+      return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
     }
     username = AMStr::Strip(username);
     if (username.empty()) {
@@ -800,7 +800,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     }
     if (hostname_required && username.empty()) {
       prompt.ErrorFormat(
-          Err(EC::InvalidArg, "unspecified", "<unknown>", "username cannot be empty"));
+          Err(EC::InvalidArg, __func__, "<context>", "username cannot be empty"));
       continue;
     }
     entry.request.username = username;
@@ -810,7 +810,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
   int64_t port = DefaultPortForProtocol_(entry.request.protocol);
   if (!PromptHostInt64_(prompt, AMStr::fmt("Port(default {}): ", port), port, 1,
                         65535, &port, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
   entry.request.port = static_cast<int>(port);
 
@@ -819,7 +819,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     auto first_opt = prompt.SecurePrompt("password(optional): ");
     if (!first_opt.has_value()) {
       AMAuth::SecureZero(first);
-      return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+      return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
     }
     first = *first_opt;
     if (first.empty()) {
@@ -832,13 +832,13 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     if (!second_opt.has_value()) {
       AMAuth::SecureZero(first);
       AMAuth::SecureZero(second);
-      return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+      return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
     }
     second = *second_opt;
     if (first != second) {
       AMAuth::SecureZero(first);
       AMAuth::SecureZero(second);
-      prompt.ErrorFormat(Err(EC::InvalidArg, "unspecified", "<unknown>", "Passwords do not match"));
+      prompt.ErrorFormat(Err(EC::InvalidArg, __func__, "<context>", "Passwords do not match"));
       continue;
     }
     entry.request.password = AMAuth::EncryptPassword(first);
@@ -849,30 +849,30 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
 
   if (!PromptHostText_(prompt, "keyfile(optional): ", entry.request.keyfile,
                        &entry.request.keyfile, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
 
   entry.request.buffer_size = 24 * AMMB;
 
   if (!PromptHostBool_(prompt, "compression: ", false,
                        &entry.request.compression)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
 
   if (!PromptHostText_(prompt,
                        "trash_dir(optional): ", entry.metadata.trash_dir,
                        &entry.metadata.trash_dir, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
   if (!PromptHostText_(prompt,
                        "login_dir(optional): ", entry.metadata.login_dir,
                        &entry.metadata.login_dir, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
   if (!PromptHostText_(prompt,
                        "cmd_template(optional): ", entry.metadata.cmd_template,
                        &entry.metadata.cmd_template, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
 
   *out = entry;
@@ -882,7 +882,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
 ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
                             const std::string &nickname, HostConfig *inout) {
   if (!inout) {
-    return Err(EC::InvalidArg, "unspecified", "<unknown>", "null host config");
+    return Err(EC::InvalidArg, __func__, "<context>", "null host config");
   }
   HostConfig entry = *inout;
   const ClientProtocol original_protocol = entry.request.protocol;
@@ -890,7 +890,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
   while (true) {
     if (!PromptHostProtocol_(prompt, entry.request.protocol,
                              &entry.request.protocol)) {
-      return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+      return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
     }
     const std::string protocol =
         AMStr::lowercase(AMStr::ToString(entry.request.protocol));
@@ -898,7 +898,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
       break;
     }
     prompt.ErrorFormat(
-        Err(EC::InvalidArg, "unspecified", "<unknown>", "protocol must be sftp, ftp or local"));
+        Err(EC::InvalidArg, __func__, "<context>", "protocol must be sftp, ftp or local"));
   }
 
   const ClientProtocol selected_protocol = entry.request.protocol;
@@ -912,7 +912,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
     std::string hostname = entry.request.hostname;
     if (!PromptHostText_(prompt, "Hostname: ", hostname, &hostname,
                          !hostname_required)) {
-      return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+      return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
     }
     hostname = AMStr::Strip(hostname);
     if (hostname.empty()) {
@@ -921,7 +921,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
         break;
       }
       prompt.ErrorFormat(
-          Err(EC::InvalidArg, "unspecified", "<unknown>", "hostname cannot be empty"));
+          Err(EC::InvalidArg, __func__, "<context>", "hostname cannot be empty"));
       continue;
     }
     entry.request.hostname = hostname;
@@ -934,7 +934,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
                                : entry.request.username;
     if (!PromptHostText_(prompt, "Username: ", username, &username,
                          !hostname_required)) {
-      return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+      return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
     }
     username = AMStr::Strip(username);
     if (username.empty()) {
@@ -942,7 +942,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
     }
     if (hostname_required && username.empty()) {
       prompt.ErrorFormat(
-          Err(EC::InvalidArg, "unspecified", "<unknown>", "username cannot be empty"));
+          Err(EC::InvalidArg, __func__, "<context>", "username cannot be empty"));
       continue;
     }
     entry.request.username = username;
@@ -955,7 +955,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
                      : entry.request.port;
   if (!PromptHostInt64_(prompt, AMStr::fmt("Port(default {}): ", default_port),
                         port, 1, 65535, &port, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
   entry.request.port = static_cast<int>(port);
 
@@ -963,7 +963,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
   const bool change_password =
       prompt.PromptYesNo("Change password? (y/N): ", &canceled);
   if (canceled) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
   if (change_password) {
     while (true) {
@@ -971,7 +971,7 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
       auto first_opt = prompt.SecurePrompt("password(optional): ");
       if (!first_opt.has_value()) {
         AMAuth::SecureZero(first);
-        return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+        return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
       }
       first = *first_opt;
       if (first.empty()) {
@@ -984,14 +984,14 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
       if (!second_opt.has_value()) {
         AMAuth::SecureZero(first);
         AMAuth::SecureZero(second);
-        return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+        return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
       }
       second = *second_opt;
       if (first != second) {
         AMAuth::SecureZero(first);
         AMAuth::SecureZero(second);
         prompt.ErrorFormat(
-            Err(EC::InvalidArg, "unspecified", "<unknown>", "Passwords do not match"));
+            Err(EC::InvalidArg, __func__, "<context>", "Passwords do not match"));
         continue;
       }
       entry.request.password = AMAuth::EncryptPassword(first);
@@ -1003,27 +1003,27 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
 
   if (!PromptHostText_(prompt, "keyfile(optional): ", entry.request.keyfile,
                        &entry.request.keyfile, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
 
   if (!PromptHostBool_(prompt, "Compression (true/false): ",
                        entry.request.compression, &entry.request.compression)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
   if (!PromptHostText_(prompt,
                        "trash_dir(optional): ", entry.metadata.trash_dir,
                        &entry.metadata.trash_dir, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
   if (!PromptHostText_(prompt,
                        "login_dir(optional): ", entry.metadata.login_dir,
                        &entry.metadata.login_dir, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
   if (!PromptHostText_(prompt,
                        "cmd_template(optional): ", entry.metadata.cmd_template,
                        &entry.metadata.cmd_template, true)) {
-    return Err(EC::ConfigCanceled, "unspecified", "<unknown>", "input canceled");
+    return Err(EC::ConfigCanceled, __func__, "<context>", "input canceled");
   }
 
   entry.request.nickname = nickname;
@@ -1083,7 +1083,7 @@ void ClientInterfaceService::BindInteractionCallbacks() {
       spinner_->StopForPrompt();
     }
     if (!AMDomain::host::KnownHostRules::ValidateConfig(query)) {
-      return Err(EC::InvalidArg, "unspecified", "<unknown>", "invalid known host query");
+      return Err(EC::InvalidArg, __func__, "<context>", "invalid known host query");
     }
 
     auto stored = query;
@@ -1106,7 +1106,7 @@ void ClientInterfaceService::BindInteractionCallbacks() {
       const bool accepted = prompt_io_manager_.PromptYesNo(
           "Trust this host key? (y/N): ", &canceled);
       if (canceled || !accepted) {
-        return Err(EC::ConfigCanceled, "unspecified", "<unknown>",
+        return Err(EC::ConfigCanceled, __func__, "<context>",
                    "Known host fingerprint add canceled");
       }
       return known_hosts_manager_.UpsertKnownHost(query, true);
@@ -1115,7 +1115,7 @@ void ClientInterfaceService::BindInteractionCallbacks() {
     const std::string expected = AMStr::Strip(stored.GetFingerprint());
     const std::string actual = AMStr::Strip(query.GetFingerprint());
     if (expected != actual) {
-      return Err(EC::HostFingerprintMismatch, "unspecified", "<unknown>",
+      return Err(EC::HostFingerprintMismatch, __func__, "<context>",
                  AMStr::fmt("{}:{} {} fingerprint mismatches", query.hostname,
                             query.port, query.protocol));
     }
@@ -1190,7 +1190,7 @@ ECM ClientInterfaceService::Connect(
     const ConnectRequest &request,
     const std::optional<ClientControlComponent> &component) {
   if (request.nicknames.empty()) {
-    return Err(EC::InvalidArg, "unspecified", "<unknown>",
+    return Err(EC::InvalidArg, __func__, "<context>",
                "connect requires at least one nickname");
   }
   const std::vector<std::string> targets =
@@ -1200,19 +1200,19 @@ ECM ClientInterfaceService::Connect(
 
   for (const auto &raw : targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "unspecified", "<unknown>", "Interrupted by user");
+      return Err(EC::Terminate, __func__, "<context>", "Interrupted by user");
     }
 
     const std::string nickname = AMStr::Strip(raw);
     if (nickname.empty()) {
       status =
-          MergeStatus_(status, Err(EC::InvalidArg, "unspecified", "<unknown>", "Empty nickname"));
+          MergeStatus_(status, Err(EC::InvalidArg, __func__, "<context>", "Empty nickname"));
       continue;
     }
     if (!IsLocalNickname(nickname) &&
         !AMDomain::host::HostService::ValidateNickname(nickname)) {
       status =
-          MergeStatus_(status, Err(EC::InvalidArg, "unspecified", "<unknown>", "Invalid nickname"));
+          MergeStatus_(status, Err(EC::InvalidArg, __func__, "<context>", "Invalid nickname"));
       continue;
     }
     if (IsLocalNickname(nickname)) {
@@ -1797,7 +1797,7 @@ ECM ClientInterfaceService::AddHost(const std::string &nickname) {
 
 ECM ClientInterfaceService::ModifyHost(const std::string &nickname) {
   if (!host_config_manager_.HostExists(nickname)) {
-    const ECM rcm = Err(EC::HostConfigNotFound, "unspecified", "<unknown>", "host not found");
+    const ECM rcm = Err(EC::HostConfigNotFound, __func__, "<context>", "host not found");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1831,28 +1831,28 @@ ECM ClientInterfaceService::RenameHost(const std::string &old_nickname,
                                        const std::string &new_nickname) {
   ECM rcm = OK;
   if (old_nickname.empty() || new_nickname.empty()) {
-    rcm = Err(EC::InvalidArg, "unspecified", "<unknown>", "empty nickname");
+    rcm = Err(EC::InvalidArg, __func__, "<context>", "empty nickname");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (old_nickname == new_nickname) {
-    rcm = Err(EC::InvalidArg, "unspecified", "<unknown>", "new nickname same as old nickname");
+    rcm = Err(EC::InvalidArg, __func__, "<context>", "new nickname same as old nickname");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (!ValidateNickname(new_nickname)) {
-    rcm = Err(EC::InvalidArg, "unspecified", "<unknown>",
+    rcm = Err(EC::InvalidArg, __func__, "<context>",
               "invalid new nickname, pattern is [a-zA-Z0-9_-]+");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (host_config_manager_.HostExists(new_nickname)) {
-    rcm = Err(EC::KeyAlreadyExists, "unspecified", "<unknown>", "new nickname already exists");
+    rcm = Err(EC::KeyAlreadyExists, __func__, "<context>", "new nickname already exists");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (!host_config_manager_.HostExists(old_nickname)) {
-    rcm = Err(EC::HostConfigNotFound, "unspecified", "<unknown>", "old nickname not found");
+    rcm = Err(EC::HostConfigNotFound, __func__, "<context>", "old nickname not found");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1894,17 +1894,17 @@ ECM ClientInterfaceService::RemoveHosts(
   for (const auto &name : uniq_targets) {
     const std::string normalized = NormalizeNickname(name);
     if (normalized.empty()) {
-      rcm = Err(EC::InvalidArg, "unspecified", "<unknown>", "invalid empty host nickname");
+      rcm = Err(EC::InvalidArg, __func__, "<context>", "invalid empty host nickname");
       prompt_io_manager_.ErrorFormat(rcm);
       continue;
     }
     if (IsLocalNickname(normalized)) {
-      rcm = Err(EC::InvalidArg, "unspecified", "<unknown>", "local host cannot be removed");
+      rcm = Err(EC::InvalidArg, __func__, "<context>", "local host cannot be removed");
       prompt_io_manager_.ErrorFormat(rcm);
       continue;
     }
     if (!host_config_manager_.HostExists(normalized)) {
-      rcm = Err(EC::InvalidArg, "unspecified", "<unknown>",
+      rcm = Err(EC::InvalidArg, __func__, "<context>",
                 AMStr::fmt("invalid host nickname: {}", normalized));
       prompt_io_manager_.ErrorFormat(rcm);
       continue;
@@ -1949,7 +1949,7 @@ ECM ClientInterfaceService::RemoveHosts(
   if (removing_current) {
     auto local_result = client_service_.EnsureClient("local", true, true);
     if (!(local_result.rcm) || !local_result.data) {
-      const ECM rcm = (local_result.rcm) ? Err(EC::InvalidHandle, "unspecified", "<unknown>",
+      const ECM rcm = (local_result.rcm) ? Err(EC::InvalidHandle, __func__, "<context>",
                                                "local client unavailable")
                                          : local_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1983,12 +1983,12 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   const std::string nickname = AMStr::Strip(request.nickname);
   const std::string field = AMStr::lowercase(AMStr::Strip(request.attrname));
   if (nickname.empty()) {
-    const ECM err = Err(EC::InvalidArg, "unspecified", "<unknown>", "empty nickname");
+    const ECM err = Err(EC::InvalidArg, __func__, "<context>", "empty nickname");
     prompt_io_manager_.ErrorFormat(err);
     return err;
   }
   if (!host_config_manager_.HostExists(nickname)) {
-    const ECM err = Err(EC::HostConfigNotFound, "unspecified", "<unknown>", "host not found");
+    const ECM err = Err(EC::HostConfigNotFound, __func__, "<context>", "host not found");
     prompt_io_manager_.ErrorFormat(err);
     return err;
   }
@@ -2005,7 +2005,7 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
     }
   }
   if (!field_validated) {
-    const ECM err = Err(EC::InvalidArg, "unspecified", "<unknown>", "unsupported property name");
+    const ECM err = Err(EC::InvalidArg, __func__, "<context>", "unsupported property name");
     prompt_io_manager_.ErrorFormat(err);
     return err;
   }
@@ -2023,7 +2023,7 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
     auto resolved = prompt_io_manager_.SecurePrompt("Password: ");
     if (!resolved.has_value()) {
       const ECM err =
-          Err(EC::ConfigCanceled, "unspecified", "<unknown>", "password input canceled");
+          Err(EC::ConfigCanceled, __func__, "<context>", "password input canceled");
       prompt_io_manager_.ErrorFormat(err);
       return err;
     }
@@ -2040,7 +2040,7 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   } else if (field == "port") {
     int64_t port = 0;
     if (!AMStr::GetNumber(resolved_value, &port)) {
-      set_rcm = Err(EC::InvalidArg, "unspecified", "<unknown>", "invalid port");
+      set_rcm = Err(EC::InvalidArg, __func__, "<context>", "invalid port");
     } else {
       updated.request.port = port;
     }
@@ -2054,14 +2054,14 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   } else if (field == "buffer_size") {
     int64_t buffer_size = 0;
     if (!AMStr::GetNumber(resolved_value, &buffer_size)) {
-      set_rcm = Err(EC::InvalidArg, "unspecified", "<unknown>", "invalid buffer_size");
+      set_rcm = Err(EC::InvalidArg, __func__, "<context>", "invalid buffer_size");
     } else {
       updated.request.buffer_size = buffer_size;
     }
   } else if (field == "compression") {
     bool compression = false;
     if (!AMStr::GetBool(resolved_value, &compression)) {
-      set_rcm = Err(EC::InvalidArg, "unspecified", "<unknown>", "invalid compression value");
+      set_rcm = Err(EC::InvalidArg, __func__, "<context>", "invalid compression value");
     } else {
       updated.request.compression = compression;
     }
@@ -2072,7 +2072,7 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   } else if (field == "cmd_template") {
     updated.metadata.cmd_template = resolved_value;
   } else {
-    set_rcm = Err(EC::InvalidArg, "unspecified", "<unknown>", "unsupported property name");
+    set_rcm = Err(EC::InvalidArg, __func__, "<context>", "unsupported property name");
   }
   if ((set_rcm)) {
     set_rcm = host_config_manager_.AddHost(updated, true);
@@ -2180,3 +2180,4 @@ ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
   return OK;
 }
 } // namespace AMInterface::client
+

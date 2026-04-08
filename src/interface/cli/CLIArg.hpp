@@ -17,6 +17,7 @@ struct CliConfigArgs {
   ConfigBackupArgs backup = {};
   ConfigExportArgs export_config = {};
   ConfigProfileSetArgs profile_set = {};
+  ConfigDecryptArgs decrypt = {};
 };
 
 struct CliHostArgs {
@@ -114,6 +115,7 @@ struct ConfigCommands {
   CLI::App *save = nullptr;
   CLI::App *backup = nullptr;
   CLI::App *export_config = nullptr;
+  CLI::App *decrypt = nullptr;
   CLI::App *profile_root = nullptr;
   CLI::App *profile_set = nullptr;
 };

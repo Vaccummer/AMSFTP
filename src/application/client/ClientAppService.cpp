@@ -18,8 +18,9 @@ ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
                                        const std::string &nickname,
                                        bool case_sensitive) {
   if (!host_config_manager) {
-    return {HostConfig{},
-            Err(EC::InvalidHandle, "", "", "Host config manager is not bound")};
+    return {HostConfig{}, Err(EC::InvalidHandle, "resolve_host_config",
+                              "<host_service>",
+                              "Host config manager is not bound")};
   }
 
   auto cfg_result =
@@ -27,13 +28,14 @@ ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
   if (cfg_result) {
     return cfg_result;
   }
-  return {HostConfig{}, Err(EC::ClientNotFound, "", "",
-                            AMStr::fmt("Host config not found: {}", nickname))};
+  return {HostConfig{}, Err(EC::ClientNotFound, "resolve_host_config", nickname,
+                            "Host config not found")};
 }
 
 ECM AcquireTransferLease_(const ClientHandle &client) {
   if (!client) {
-    return Err(EC::InvalidHandle, "", "", "Client handle is null");
+    return Err(EC::InvalidHandle, "acquire_transfer_lease", "<client>",
+               "Client handle is null");
   }
 
   auto &meta = client->MetaDataPort();
@@ -61,7 +63,7 @@ ECM AcquireTransferLease_(const ClientHandle &client) {
     if (meta.StoreNamedData(kTransferLeaseKey, std::any(true), true)) {
       return OK;
     }
-    return Err(EC::CommonFailure, "", "",
+    return Err(EC::CommonFailure, "acquire_transfer_lease", "<client>",
                "transfer.lease metadata type is invalid");
   }
   if (lease_acquired) {
@@ -89,7 +91,7 @@ ECM AcquireTransferLease_(const ClientHandle &client) {
           }
         });
     if (retry_type_mismatch) {
-      return Err(EC::CommonFailure, "", "",
+      return Err(EC::CommonFailure, "acquire_transfer_lease", "<client>",
                  "transfer.lease metadata type is invalid");
     }
     if (retry_acquired) {
@@ -97,7 +99,8 @@ ECM AcquireTransferLease_(const ClientHandle &client) {
     }
   }
 
-  return Err(EC::PathUsingByOthers, "", "", "Client is already leased");
+  return Err(EC::PathUsingByOthers, "acquire_transfer_lease", "<client>",
+             "Client is already leased");
 }
 } // namespace
 
@@ -119,7 +122,8 @@ ECM ClientAppService::Init(ClientHandle local_client) {
     }
     return OK;
   }
-  return {EC::InvalidArg, "Client handle is null"};
+  return {EC::InvalidArg, "client_init", "<local_client>",
+          "Client handle is null"};
 }
 
 ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
@@ -128,12 +132,13 @@ ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
     ClientHandle local = GetLocalClient();
     if (!local) {
       return {nullptr,
-              Err(EC::ClientNotFound, "", "", "Local client not found")};
+              Err(EC::ClientNotFound, "get_client", "local",
+                  "Local client not found")};
     }
     return {local, OK};
   }
   if (!maintainer_) {
-    return {nullptr, Err(EC::InvalidHandle, "", "",
+    return {nullptr, Err(EC::InvalidHandle, "get_client", nickname,
                          "Client maintainer is not initialized")};
   }
   ClientHandle client = maintainer_->GetClient(nickname);
@@ -156,13 +161,13 @@ ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
     }
     if (matched_names.size() > 1) {
       return {nullptr,
-              Err(EC::ClientNotFound, "", "",
-                  AMStr::fmt("Ambiguous client nickname [{}], candidates: {}",
-                             nickname, AMStr::join(matched_names, ", ")))};
+              Err(EC::ClientNotFound, "get_client", nickname,
+                  AMStr::fmt("Ambiguous nickname, candidates: {}",
+                             AMStr::join(matched_names, ", ")))}; 
     }
   }
-  return {nullptr, Err(EC::ClientNotFound, "", "",
-                       AMStr::fmt("Client not found: {}", nickname))};
+  return {nullptr,
+          Err(EC::ClientNotFound, "get_client", nickname, "Client not found")};
 }
 
 ClientHandle ClientAppService::GetLocalClient() const {
@@ -244,7 +249,7 @@ ClientAppService::CreateClient(const HostConfig &config,
     return {nullptr, create_rcm};
   }
   if (!client) {
-    return {nullptr, Err(EC::InvalidHandle, "", "",
+    return {nullptr, Err(EC::InvalidHandle, __func__, "<context>",
                          "CreateClient returned null client")};
   }
   ApplyCallbacksToClient_(client, callbacks);
@@ -334,13 +339,15 @@ ClientAppService::ChangeClient(const std::string &nickname,
 
 ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
   if (!client) {
-    return {EC::InvalidHandle, "Client handle is null"};
+    return {EC::InvalidHandle, "add_client", "<client>",
+            "Client handle is null"};
   }
 
   ApplyCallbacksToClient_(client, GetMaintainerCallbacks());
   const std::string nickname = client->ConfigPort().GetNickname();
   if (nickname.empty()) {
-    return {EC::InvalidArg, "Client nickname is empty"};
+    return {EC::InvalidArg, "add_client", "<empty>",
+            "Client nickname is empty"};
   }
 
   if (IsLocalNickname(nickname)) {
@@ -359,12 +366,13 @@ ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
   }
 
   if (!maintainer_) {
-    return {EC::InvalidHandle, "Client maintainer is not initialized"};
+    return {EC::InvalidHandle, "add_client", nickname,
+            "Client maintainer is not initialized"};
   }
   const bool added = maintainer_->AddClient(client, overwrite);
   if (!added) {
-    return {EC::TargetAlreadyExists,
-            AMStr::fmt("Client already exists: {}", nickname)};
+    return {EC::TargetAlreadyExists, "add_client", nickname,
+            "Client already exists"};
   }
 
   auto runtime_clients = runtime_clients_.lock();
@@ -408,10 +416,11 @@ ECM ClientAppService::RemoveClient(const std::string &nickname) {
   const std::string key = nickname;
 
   if (!maintainer_) {
-    return {EC::InvalidHandle, "Client maintainer is not initialized"};
+    return {EC::InvalidHandle, "remove_client", key,
+            "Client maintainer is not initialized"};
   }
   if (!maintainer_->RemoveClient(key)) {
-    return {EC::ClientNotFound, AMStr::fmt("Client not found: {}", key)};
+    return {EC::ClientNotFound, "remove_client", key, "Client not found"};
   }
 
   {
@@ -437,8 +446,8 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
     auto bucket_it = public_clients->find(nickname);
     if (bucket_it == public_clients->end() || bucket_it->second.empty()) {
       return {nullptr,
-              {EC::ClientNotFound,
-               AMStr::fmt("No public client found for {}", nickname)}};
+              {EC::ClientNotFound, "get_public_client", nickname,
+               "No public client found"}};
     }
     candidates.reserve(bucket_it->second.size());
     for (const auto &entry : bucket_it->second) {
@@ -493,27 +502,30 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
 
   if (has_leased_client) {
     return {nullptr,
-            Err(EC::PathUsingByOthers, "", "",
-                AMStr::fmt("All public clients for {} are leased", nickname))};
+            Err(EC::PathUsingByOthers, "get_public_client", nickname,
+                "All public clients are leased")};
   }
   if (!(status)) {
     return {nullptr, status};
   }
-  return {nullptr, Err(EC::ClientNotFound, "", "",
-                       AMStr::fmt("No public client found for {}", nickname))};
+  return {nullptr, Err(EC::ClientNotFound, "get_public_client", nickname,
+                       "No public client found")};
 }
 
 ECM ClientAppService::AddPublicClient(const ClientHandle &client) {
   if (!client) {
-    return {EC::InvalidHandle, "Client handle is null"};
+    return {EC::InvalidHandle, "add_public_client", "<client>",
+            "Client handle is null"};
   }
   const std::string nickname = client->ConfigPort().GetNickname();
   const ClientID id = client->GetUID();
   if (nickname.empty()) {
-    return {EC::InvalidArg, "Client nickname is empty"};
+    return {EC::InvalidArg, "add_public_client", "<empty>",
+            "Client nickname is empty"};
   }
   if (id.empty()) {
-    return {EC::InvalidArg, "Client UID is empty"};
+    return {EC::InvalidArg, "add_public_client", nickname,
+            "Client UID is empty"};
   }
 
   auto managed_result = GetClient(nickname, true);
@@ -565,11 +577,13 @@ ClientAppService::GetClientMetadata(const ClientHandle &client) {
 ECM ClientAppService::SetClientMetadata(const ClientHandle &client,
                                         const ClientMetaData &metadata) {
   if (!client) {
-    return {EC::InvalidHandle, "", "", "Client handle is null"};
+    return {EC::InvalidHandle, "set_client_metadata", "<client>",
+            "Client handle is null"};
   }
   const bool ok = client->MetaDataPort().StoreTypedValue(metadata, true);
   if (!ok) {
-    return {EC::CommonFailure, "", "", "Failed to store client metadata"};
+    return {EC::CommonFailure, "set_client_metadata", "<client>",
+            "Failed to store client metadata"};
   }
   return OK;
 }
@@ -577,11 +591,13 @@ ECM ClientAppService::SetClientMetadata(const ClientHandle &client,
 ECMData<std::string>
 ClientAppService::GetClientCwd(const ClientHandle &client) {
   if (!client) {
-    return {"", {EC::InvalidHandle, "", "", "Client handle is null"}};
+    return {"", {EC::InvalidHandle, "get_client_cwd", "<client>",
+                 "Client handle is null"}};
   }
   auto meta_opt = GetClientMetadata(client);
   if (!meta_opt.has_value()) {
-    return {"", Err(EC::CommonFailure, "", "", "Client metadata not found")};
+    return {"", Err(EC::CommonFailure, "get_client_cwd", "<client>",
+                    "Client metadata not found")};
   }
   return {meta_opt->cwd, OK};
 }
@@ -589,7 +605,8 @@ ClientAppService::GetClientCwd(const ClientHandle &client) {
 ECM ClientAppService::SetClientCwd(const ClientHandle &client,
                                    const std::string &cwd) {
   if (!client) {
-    return Err(EC::InvalidHandle, "", "", "Client handle is null");
+    return Err(EC::InvalidHandle, "set_client_cwd", "<client>",
+               "Client handle is null");
   }
   bool updated = false;
   client->MetaDataPort().MutateTypeValue<ClientMetaData>(
@@ -615,7 +632,8 @@ ECM ClientAppService::TryLeaseClient(const ClientHandle &client) {
 
 ECM ClientAppService::TryReturnClient(const ClientHandle &client) {
   if (!client) {
-    return Err(EC::InvalidHandle, "", "", "Client handle is null");
+    return Err(EC::InvalidHandle, "release_transfer_lease", "<client>",
+               "Client handle is null");
   }
   auto &meta = client->MetaDataPort();
   bool released = false;
@@ -640,7 +658,7 @@ ECM ClientAppService::TryReturnClient(const ClientHandle &client) {
     if (meta.StoreNamedData(kTransferLeaseKey, std::any(false), true)) {
       return OK;
     }
-    return Err(EC::CommonFailure, "", "",
+    return Err(EC::CommonFailure, "release_transfer_lease", "<client>",
                "transfer.lease metadata type is invalid");
   }
   if (released || lease_missing) {
@@ -691,7 +709,8 @@ ECMData<CheckResult> ClientAppService::CheckClientInternal_(
   ECMData<CheckResult> result = {};
   if (!client) {
     result.data.status = ClientStatus::NullHandle;
-    result.rcm = {EC::InvalidHandle, "Client handle is null"};
+    result.rcm = {EC::InvalidHandle, "check_client", "<client>",
+                  "Client handle is null"};
     return result;
   }
   if (!update) {
@@ -714,3 +733,4 @@ ECMData<CheckResult> ClientAppService::CheckClientInternal_(
 }
 
 } // namespace AMApplication::client
+

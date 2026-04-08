@@ -62,9 +62,10 @@ ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
     fn(std::forward<Args>(args)...);
     return OK;
   } catch (const std::exception &e) {
-    return {EC::PyCBError, e.what()};
+    return {EC::PyCBError, "callback.invoke", "<callback>", e.what()};
   } catch (...) {
-    return {EC::PyCBError, "Unknown callback error"};
+    return {EC::PyCBError, "callback.invoke", "<callback>",
+            "Unknown callback error"};
   }
 }
 
@@ -76,9 +77,11 @@ std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
   try {
     return {fn(std::forward<Args>(args)...), OK};
   } catch (const std::exception &e) {
-    return {Ret{}, {EC::PyCBError, e.what()}};
+    return {Ret{},
+            {EC::PyCBError, "callback.invoke", "<callback>", e.what()}};
   } catch (...) {
-    return {Ret{}, {EC::PyCBError, "Unknown callback error"}};
+    return {Ret{}, {EC::PyCBError, "callback.invoke", "<callback>",
+                    "Unknown callback error"}};
   }
 }
 
