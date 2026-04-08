@@ -42,6 +42,7 @@ public:
   ECM Init();
   void AddHistoryEntry(const std::string &line);
   void RemoveLastHistoryEntry();
+  void SyncCurrentHistory();
   ECM ChangeClient(const std::string &nickname);
   [[nodiscard]] std::shared_ptr<IsoclineProfile> CurrentProfile() const;
   [[nodiscard]] std::string CurrentNickname() const;
@@ -113,6 +114,7 @@ public:
   void ClearScreen(bool clear_scrollback = false);
   void UseAlternateScreen(bool enable);
   void SetCursorVisible(bool visible);
+  void SyncCurrentHistory();
 
   std::optional<std::string> SecurePrompt(const std::string &prompt);
   bool PromptYesNo(const std::string &prompt, bool *canceled);
@@ -170,6 +172,7 @@ private:
   [[nodiscard]] bool ShouldReplayPromptHeader_() const;
   [[nodiscard]] std::string BuildReplayFrame_(const std::string &msg);
   void PrintSyncLocked_(const std::string &text);
+  void PrintSyncRefreshLocked_(const std::string &text);
   void PrintInsertAndRepaintLocked_(const std::string &msg);
   void RepaintRefreshLocked_();
   void ClearRefreshLocked_();
