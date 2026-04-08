@@ -4,6 +4,7 @@
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <deque>
 #include <iomanip>
@@ -247,7 +248,8 @@ private:
 
     const std::string raw_prefix =
         ResolveTemplate_(style_.prefix_template, vars);
-    const std::string bar_text = ResolveTemplate_(style_.bar_template, vars);
+    const std::string bar_text =
+        EscapeLiteralBrackets_(ResolveTemplate_(style_.bar_template, vars));
     const std::string prefix = BuildPrefixFieldLocked_(raw_prefix);
     if (prefix.empty()) {
       return bar_text;
@@ -267,8 +269,31 @@ private:
     for (const auto &it : vars) {
       out = AMStr::replace_all(out, AMStr::fmt("{{${}}}", it.first), it.second);
     }
-    out = AMStr::replace_all(out, "\\[", "[");
-    out = AMStr::replace_all(out, "\\]", "]");
+    return out;
+  }
+
+  static std::string EscapeLiteralBrackets_(const std::string &in) {
+    if (in.empty()) {
+      return in;
+    }
+    std::string out = {};
+    out.reserve(in.size() + 8);
+    for (size_t i = 0; i < in.size(); ++i) {
+      const char c = in[i];
+      if (c == '[') {
+        const bool escaped = (i > 0 && in[i - 1] == '\\');
+        if (!escaped) {
+          const char next = (i + 1 < in.size()) ? in[i + 1] : '\0';
+          const bool looks_like_bbcode_tag =
+              (next == '#') || (next == '/') ||
+              std::isalpha(static_cast<unsigned char>(next));
+          if (!looks_like_bbcode_tag) {
+            out.push_back('\\');
+          }
+        }
+      }
+      out.push_back(c);
+    }
     return out;
   }
 
