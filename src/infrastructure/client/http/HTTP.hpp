@@ -334,7 +334,8 @@ public:
                 Err(EC::OperationUnsupported, "http.redirect", normalized,
                     AMStr::fmt("Redirect exceeds limit {}", redirect_limit))};
       }
-      const std::string next = AMUrl::ResolveRedirectUrl(out.final_url, location);
+      const std::string next =
+          AMUrl::ResolveRedirectUrl(out.final_url, location);
       if (!AMUrl::IsHttpUrl(next)) {
         return {out,
                 Err(EC::InvalidArg, "http.redirect", normalized,
@@ -570,11 +571,11 @@ public:
                   "Operation interrupted")};
     }
     if (control.IsTimeout()) {
-      return {
-          AMFSI::ConnectResult{ClientStatus::ConnectionBroken},
-          Err(EC::OperationTimeout, "http.connect", ClientTarget_(),
-              "Operation timeout")};
+      return {AMFSI::ConnectResult{ClientStatus::ConnectionBroken},
+              Err(EC::OperationTimeout, "http.connect", ClientTarget_(),
+                  "Operation timeout")};
     }
+    connect_state("initialize HTTP source", ClientTarget_());
     return {AMFSI::ConnectResult{ClientStatus::OK}, OK};
   }
 
@@ -794,11 +795,10 @@ public:
   ECMData<AMFSI::MoveResult>
   rename(const AMFSI::RenameArgs &args,
          const ClientControlComponent &control = {}) override {
-    (void)args;
     (void)control;
     return {AMFSI::MoveResult{},
-            Err(EC::OperationUnsupported, "http.rename", ClientTarget_(),
-                "HTTP source is read-only")};
+            Err(EC::OperationUnsupported, "http.rename", "",
+                "HTTP client does not support rename")};
   }
 
 private:
@@ -812,9 +812,6 @@ private:
     }
     if (!AMStr::Strip(req.hostname).empty()) {
       return req.hostname;
-    }
-    if (!AMStr::Strip(req.server_url).empty()) {
-      return req.server_url;
     }
     return "<http-client>";
   }
@@ -867,9 +864,8 @@ CreateTransientHttpSourceClient(const std::string &url,
   auto config_port =
       std::make_unique<AMInfra::client::ClientConfigStore>(request);
   auto control_port = std::make_unique<AMInfra::client::ClientControlToken>();
-  auto io_port = std::make_unique<AMHTTPIOCore>(config_port.get(),
-                                                 control_port.get(),
-                                                 metadata_port.get());
+  auto io_port = std::make_unique<AMHTTPIOCore>(
+      config_port.get(), control_port.get(), metadata_port.get());
   auto client = std::make_shared<AMInfra::client::BaseClient>(
       std::move(metadata_port), std::move(config_port), std::move(control_port),
       std::move(io_port),

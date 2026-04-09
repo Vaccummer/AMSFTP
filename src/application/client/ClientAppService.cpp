@@ -18,9 +18,9 @@ ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
                                        const std::string &nickname,
                                        bool case_sensitive) {
   if (!host_config_manager) {
-    return {HostConfig{}, Err(EC::InvalidHandle, "resolve_host_config",
-                              "<host_service>",
-                              "Host config manager is not bound")};
+    return {HostConfig{},
+            Err(EC::InvalidHandle, "resolve_host_config", "<host_service>",
+                "Host config manager is not bound")};
   }
 
   auto cfg_result =
@@ -115,6 +115,11 @@ ECM ClientAppService::Init(ClientHandle local_client) {
   this->maintainer_ = CreateClientMaintainer(init_arg.heartbeat_interval_s,
                                              init_arg.heartbeat_timeout_ms,
                                              public_callbacks.disconnect, {});
+  if (!maintainer_) {
+    return {EC::InvalidHandle, "ClientAppService::Init", "maintainer",
+            "Client maintainer is nullptr"};
+  }
+  this->maintainer_->StartHeartbeat();
   if (local_client) {
     ECM add_local_rcm = AddClient(local_client, true);
     if (!add_local_rcm) {
@@ -122,8 +127,8 @@ ECM ClientAppService::Init(ClientHandle local_client) {
     }
     return OK;
   }
-  return {EC::InvalidArg, "client_init", "<local_client>",
-          "Client handle is null"};
+  return {EC::InvalidArg, "ClientAppService::Init", "local_client",
+          "Local Client handle is null"};
 }
 
 ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
@@ -131,9 +136,8 @@ ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
   if (IsLocalNickname(nickname)) {
     ClientHandle local = GetLocalClient();
     if (!local) {
-      return {nullptr,
-              Err(EC::ClientNotFound, "get_client", "local",
-                  "Local client not found")};
+      return {nullptr, Err(EC::ClientNotFound, "get_client", "local",
+                           "Local client not found")};
     }
     return {local, OK};
   }
@@ -160,10 +164,9 @@ ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
       return {matched_client, OK};
     }
     if (matched_names.size() > 1) {
-      return {nullptr,
-              Err(EC::ClientNotFound, "get_client", nickname,
-                  AMStr::fmt("Ambiguous nickname, candidates: {}",
-                             AMStr::join(matched_names, ", ")))}; 
+      return {nullptr, Err(EC::ClientNotFound, "get_client", nickname,
+                           AMStr::fmt("Ambiguous nickname, candidates: {}",
+                                      AMStr::join(matched_names, ", ")))};
     }
   }
   return {nullptr,
@@ -210,9 +213,11 @@ std::string ClientAppService::CurrentNickname() const {
 void ClientAppService::RegisterMaintainerCallbacks(
     std::optional<DisconnectCallback> disconnect_cb,
     std::optional<TraceCallback> trace_cb,
+    std::optional<ConnectStateCallback> connect_state_cb,
     std::optional<KnownHostCallback> known_host_cb,
     std::optional<AuthCallback> auth_cb) {
   ClientAppServiceBase::RegisterMaintainerCallbacks(disconnect_cb, trace_cb,
+                                                    connect_state_cb,
                                                     known_host_cb, auth_cb);
   if (maintainer_ && disconnect_cb.has_value()) {
     maintainer_->SetDisconnectCallback(*disconnect_cb);
@@ -222,9 +227,11 @@ void ClientAppService::RegisterMaintainerCallbacks(
 void ClientAppService::RegisterPublicCallbacks(
     std::optional<DisconnectCallback> disconnect_cb,
     std::optional<TraceCallback> trace_cb,
+    std::optional<ConnectStateCallback> connect_state_cb,
     std::optional<KnownHostCallback> known_host_cb,
     std::optional<AuthCallback> auth_cb) {
   ClientAppServiceBase::RegisterPublicCallbacks(disconnect_cb, trace_cb,
+                                                connect_state_cb,
                                                 known_host_cb, auth_cb);
   if (maintainer_ && disconnect_cb.has_value()) {
     maintainer_->SetDisconnectCallback(*disconnect_cb);
@@ -249,7 +256,7 @@ ClientAppService::CreateClient(const HostConfig &config,
     return {nullptr, create_rcm};
   }
   if (!client) {
-    return {nullptr, Err(EC::InvalidHandle, __func__, "<context>",
+    return {nullptr, Err(EC::InvalidHandle, __func__, "",
                          "CreateClient returned null client")};
   }
   ApplyCallbacksToClient_(client, callbacks);
@@ -466,6 +473,15 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
 
     const ECM lease_rcm = AcquireTransferLease_(candidate);
     if ((lease_rcm)) {
+      candidate->TaskControlPort().ClearInterrupt();
+      auto check_result =
+          candidate->IOPort().Check({}, ClientControlComponent(nullptr, 2000));
+      if (!(check_result.rcm)) {
+        (void)TryReturnClient(candidate);
+        stale_ids.push_back(candidate_id);
+        status = check_result.rcm;
+        continue;
+      }
       auto managed_result = GetClient(nickname, true);
       if ((managed_result.rcm) && managed_result.data &&
           managed_result.data != candidate) {
@@ -501,9 +517,8 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
   }
 
   if (has_leased_client) {
-    return {nullptr,
-            Err(EC::PathUsingByOthers, "get_public_client", nickname,
-                "All public clients are leased")};
+    return {nullptr, Err(EC::PathUsingByOthers, "get_public_client", nickname,
+                         "All public clients are leased")};
   }
   if (!(status)) {
     return {nullptr, status};
@@ -591,8 +606,9 @@ ECM ClientAppService::SetClientMetadata(const ClientHandle &client,
 ECMData<std::string>
 ClientAppService::GetClientCwd(const ClientHandle &client) {
   if (!client) {
-    return {"", {EC::InvalidHandle, "get_client_cwd", "<client>",
-                 "Client handle is null"}};
+    return {"",
+            {EC::InvalidHandle, "get_client_cwd", "<client>",
+             "Client handle is null"}};
   }
   auto meta_opt = GetClientMetadata(client);
   if (!meta_opt.has_value()) {
@@ -676,11 +692,15 @@ void ClientAppService::ApplyCallbacksToClient_(const ClientHandle &client,
 
   TraceCallback trace =
       trace_override ? std::move(trace_override) : callbacks.trace;
+  ConnectStateCallback connect_state = callbacks.connect_state;
   AuthCallback auth = callbacks.auth;
   KnownHostCallback known_host = callbacks.known_host;
 
   if (trace) {
     client->IOPort().RegisterTraceCallback(std::move(trace));
+  }
+  if (connect_state) {
+    client->IOPort().RegisterConnectStateCallback(std::move(connect_state));
   }
   if (auth) {
     client->IOPort().RegisterAuthCallback(std::move(auth));
@@ -733,4 +753,3 @@ ECMData<CheckResult> ClientAppService::CheckClientInternal_(
 }
 
 } // namespace AMApplication::client
-

@@ -15,10 +15,10 @@ ClientServiceArg ClientAppServiceBase::GetInitArg() const {
 ECM ClientAppServiceBase::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, __func__, "<context>", "config service is null");
+    return Err(EC::InvalidArg, __func__, "", "config service is null");
   }
   if (!config_service->Write<ClientServiceArg>(GetInitArg())) {
-    return Err(EC::ConfigDumpFailed, __func__, "<context>", "failed to flush client config");
+    return Err(EC::ConfigDumpFailed, __func__, "", "failed to flush client config");
   }
   return OK;
 }
@@ -70,6 +70,7 @@ std::vector<std::string> ClientAppServiceBase::GetPrivateKeys() const {
 void ClientAppServiceBase::RegisterMaintainerCallbacks(
     std::optional<DisconnectCallback> disconnect_cb,
     std::optional<TraceCallback> trace_cb,
+    std::optional<ConnectStateCallback> connect_state_cb,
     std::optional<KnownHostCallback> known_host_cb,
     std::optional<AuthCallback> auth_cb) {
   auto callbacks = maintainer_callbacks_.lock();
@@ -79,6 +80,9 @@ void ClientAppServiceBase::RegisterMaintainerCallbacks(
   }
   if (trace_cb.has_value()) {
     value.trace = std::move(*trace_cb);
+  }
+  if (connect_state_cb.has_value()) {
+    value.connect_state = std::move(*connect_state_cb);
   }
   if (known_host_cb.has_value()) {
     value.known_host = std::move(*known_host_cb);
@@ -92,6 +96,7 @@ void ClientAppServiceBase::RegisterMaintainerCallbacks(
 void ClientAppServiceBase::RegisterPublicCallbacks(
     std::optional<DisconnectCallback> disconnect_cb,
     std::optional<TraceCallback> trace_cb,
+    std::optional<ConnectStateCallback> connect_state_cb,
     std::optional<KnownHostCallback> known_host_cb,
     std::optional<AuthCallback> auth_cb) {
   auto callbacks = public_callbacks_.lock();
@@ -101,6 +106,9 @@ void ClientAppServiceBase::RegisterPublicCallbacks(
   }
   if (trace_cb.has_value()) {
     value.trace = std::move(*trace_cb);
+  }
+  if (connect_state_cb.has_value()) {
+    value.connect_state = std::move(*connect_state_cb);
   }
   if (known_host_cb.has_value()) {
     value.known_host = std::move(*known_host_cb);
@@ -121,4 +129,3 @@ ClientAppServiceBase::GetPublicCallbacks() const {
   return public_callbacks_.lock().load();
 }
 } // namespace AMApplication::client
-
