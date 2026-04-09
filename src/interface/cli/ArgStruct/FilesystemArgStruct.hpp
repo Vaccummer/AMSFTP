@@ -19,12 +19,12 @@ inline ECM ResolveTransferEndpoint(const CLIServices &managers,
                                    const std::string &raw,
                                    PathTarget *out_endpoint) {
   if (!out_endpoint) {
-    return Err(EC::InvalidArg, __func__, "<context>", "null transfer endpoint output");
+    return Err(EC::InvalidArg, __func__, "", "null transfer endpoint output");
   }
 
   const std::string token = AMStr::Strip(raw);
   if (token.empty()) {
-    return Err(EC::InvalidArg, __func__, "<context>", "Transfer path is empty");
+    return Err(EC::InvalidArg, __func__, "", "Transfer path is empty");
   }
 
   auto split_result =
@@ -57,7 +57,7 @@ inline TransferCliBuildResult BuildTransferArgsFromCli(
   }
 
   if (src_tokens.empty()) {
-    out.rcm = Err(EC::InvalidArg, __func__, "<context>", "cp requires at least one source");
+    out.rcm = Err(EC::InvalidArg, __func__, "", "cp requires at least one source");
     return out;
   }
 
@@ -67,13 +67,18 @@ inline TransferCliBuildResult BuildTransferArgsFromCli(
   std::vector<std::string> normalized_src_tokens = {};
   std::string normalized_dst_token = {};
   if (output_token.empty()) {
-    if (src_tokens.size() != 2) {
-      out.rcm = Err(EC::InvalidArg, __func__, "<context>",
-                    "cp requires exactly 2 paths when --output is omitted");
+    if (src_tokens.size() == 1) {
+      normalized_src_tokens = {src_tokens.front()};
+      normalized_dst_token = ".";
+    } else if (src_tokens.size() == 2) {
+      normalized_src_tokens = {src_tokens.front()};
+      normalized_dst_token = src_tokens.back();
+    } else {
+      out.rcm =
+          Err(EC::InvalidArg, __func__, "",
+              "cp with 3+ paths requires --output to specify destination");
       return out;
     }
-    normalized_src_tokens = {src_tokens.front()};
-    normalized_dst_token = src_tokens.back();
   } else {
     normalized_src_tokens = src_tokens;
     normalized_dst_token = output_token;
@@ -310,6 +315,37 @@ struct CpArgs : BaseArgStruct {
   }
 };
 
+struct MoveArgs : BaseArgStruct {
+  std::string src = {};
+  std::string dst = {};
+  bool force = false;
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    std::string src_token = src;
+    std::string dst_token = dst;
+    managers.interfaces.var_interface_service->VSubstitutePathLike(src_token);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(dst_token);
+
+    src_token = AMStr::Strip(src_token);
+    if (src_token.empty()) {
+      return Err(EC::InvalidArg, __func__, "src", "move requires one source path");
+    }
+
+    AMInterface::filesystem::FilesystemMoveArg arg = {};
+    arg.target = src_token;
+    arg.dst = AMStr::Strip(dst_token);
+    arg.mkdir = true;
+    arg.overwrite = force;
+    return managers.interfaces.filesystem_interface_service->Move(arg);
+  }
+  void reset() override {
+    src.clear();
+    dst.clear();
+    force = false;
+  }
+};
+
 struct CloneArgs : BaseArgStruct {
   std::string src = {};
   std::string dst = {};
@@ -323,7 +359,7 @@ struct CloneArgs : BaseArgStruct {
     const std::string suffix = AMStr::Strip(async_suffix);
     if (!suffix.empty()) {
       if (suffix != "&") {
-        return Err(EC::InvalidArg, __func__, "<context>", "clone async suffix must be '&'");
+        return Err(EC::InvalidArg, __func__, "", "clone async suffix must be '&'");
       }
       raw_srcs.push_back(suffix);
     }
@@ -375,7 +411,7 @@ struct WgetArgs : BaseArgStruct {
     AMInterface::transfer::HttpGetArg arg = {};
     arg.src_url = AMStr::Strip(src_token);
     if (arg.src_url.empty()) {
-      return Err(EC::InvalidArg, __func__, "<context>", "wget requires one source URL");
+      return Err(EC::InvalidArg, __func__, "", "wget requires one source URL");
     }
 
     dst_token = AMStr::Strip(dst_token);
@@ -434,7 +470,7 @@ struct SftpArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.empty() || targets.size() > 2) {
-      return Err(EC::InvalidArg, __func__, "<context>",
+      return Err(EC::InvalidArg, __func__, "",
                  "sftp requires user@host or nickname user@host");
     }
     auto req = request;
@@ -468,7 +504,7 @@ struct FtpArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.empty() || targets.size() > 2) {
-      return Err(EC::InvalidArg, __func__, "<context>",
+      return Err(EC::InvalidArg, __func__, "",
                  "ftp requires user@host or nickname user@host");
     }
 
@@ -499,7 +535,7 @@ struct LocalArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.size() > 1) {
-      return Err(EC::InvalidArg, __func__, "<context>",
+      return Err(EC::InvalidArg, __func__, "",
                  "local accepts at most one nickname");
     }
     auto req = request;
@@ -552,10 +588,10 @@ struct CmdArgs : BaseArgStruct {
     (void)ctx;
     const std::string command = AMStr::Strip(request.cmd);
     if (command.empty()) {
-      return Err(EC::InvalidArg, __func__, "<context>", "cmd cannot be empty");
+      return Err(EC::InvalidArg, __func__, "", "cmd cannot be empty");
     }
     if (timeout_ms == 0) {
-      return Err(EC::InvalidArg, __func__, "<context>", "timeout_ms cannot be 0");
+      return Err(EC::InvalidArg, __func__, "", "timeout_ms cannot be 0");
     }
     auto arg = request;
     arg.cmd = command;
@@ -567,6 +603,18 @@ struct CmdArgs : BaseArgStruct {
     timeout_ms = -1;
     request = {};
   }
+};
+
+struct TerminalArgs : BaseArgStruct {
+  AMInterface::filesystem::FilesystemTerminalArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    arg.target = AMStr::Strip(arg.target);
+    return managers.interfaces.filesystem_interface_service->LaunchTerminal(arg);
+  }
+  void reset() override { request = {}; }
 };
 
 struct BashArgs : BaseArgStruct {
@@ -592,6 +640,3 @@ struct ExitArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
-
-
-

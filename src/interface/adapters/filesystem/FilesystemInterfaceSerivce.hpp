@@ -1,6 +1,8 @@
 #pragma once
 #include "application/client/ClientAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
+#include "application/host/HostAppService.hpp"
+#include "application/terminal/TermAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/core/Enum.hpp"
 #include "interface/prompt/Prompt.hpp"
@@ -69,8 +71,7 @@ struct FilesystemShellRunArg {
 };
 
 struct FilesystemTerminalArg {
-  std::string nickname = {};
-  std::string term = {};
+  std::string target = {};
 };
 
 struct FilesystemRenameArg {
@@ -108,6 +109,8 @@ class FilesystemInterfaceSerivce final : public NonCopyableNonMovable {
 public:
   FilesystemInterfaceSerivce(
       AMApplication::client::ClientAppService &client_service,
+      AMApplication::terminal::TermAppService &terminal_service,
+      AMApplication::host::HostAppService &host_service,
       AMApplication::filesystem::FilesystemAppService &filesystem_service,
       AMInterface::style::AMStyleService &style_service,
       AMInterface::prompt::AMPromptIOManager &prompt_io_manager);
@@ -159,9 +162,10 @@ public:
                const std::optional<AMDomain::client::ClientControlComponent>
                    &control_opt = std::nullopt) const;
 
-  ECM Terminal(const FilesystemTerminalArg &arg = {},
-               const std::optional<AMDomain::client::ClientControlComponent>
-                   &control_opt = std::nullopt) const;
+  ECM LaunchTerminal(
+      const FilesystemTerminalArg &arg = {},
+      const std::optional<AMDomain::client::ClientControlComponent>
+          &control_opt = std::nullopt) const;
 
   ECM Rename(const FilesystemRenameArg &arg,
              const std::optional<AMDomain::client::ClientControlComponent>
@@ -192,6 +196,8 @@ private:
   [[nodiscard]] ECMData<PathTarget> MatchOne(const PathTarget &path) const;
 
   AMApplication::client::ClientAppService &client_service_;
+  AMApplication::terminal::TermAppService &terminal_service_;
+  AMApplication::host::HostAppService &host_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   AMInterface::style::AMStyleService &style_service_;
   AMInterface::prompt::AMPromptIOManager &prompt_io_manager_;
