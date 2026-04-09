@@ -43,9 +43,13 @@ public:
   ListChannels(const ChannelListArgs &list_args,
                const ClientControlComponent &control = {}) = 0;
 
-  virtual ECMData<TerminalStatusResult>
-  Status(const TerminalStatusArgs &status_args,
-         const ClientControlComponent &control = {}) = 0;
+  virtual ECMData<CheckSessionResult>
+  CheckSession(const CheckSessionArgs &check_args,
+               const ClientControlComponent &control = {}) = 0;
+
+  virtual ECMData<ChannelCheckResult>
+  CheckChannel(const ChannelCheckArgs &check_args,
+               const ClientControlComponent &control = {}) = 0;
 };
 
 using TerminalHandle = std::shared_ptr<ITerminalPort>;
