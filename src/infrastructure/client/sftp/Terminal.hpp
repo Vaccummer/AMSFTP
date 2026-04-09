@@ -13,35 +13,11 @@
 
 namespace AMInfra::client::SFTP::terminal {
 namespace AMFSI = AMDomain::filesystem;
-class ITerminalPort {
+class ITerminalPort : public AMDomain::client::IClientTerminalPort {
 public:
-  virtual ~ITerminalPort() = default;
+  ~ITerminalPort() override = default;
 
   [[nodiscard]] virtual ConRequest GetRequest() const = 0;
-
-  virtual ECMData<AMDomain::filesystem::TerminalOpenResult>
-  TerminalOpen(const AMDomain::filesystem::TerminalOpenArgs &args,
-               const AMDomain::client::ClientControlComponent &control) = 0;
-
-  virtual ECMData<AMDomain::filesystem::TerminalReadResult>
-  TerminalRead(const AMDomain::filesystem::TerminalReadArgs &args,
-               const AMDomain::client::ClientControlComponent &control) = 0;
-
-  virtual ECMData<AMDomain::filesystem::TerminalWriteResult>
-  TerminalWrite(const AMDomain::filesystem::TerminalWriteArgs &args,
-                const AMDomain::client::ClientControlComponent &control) = 0;
-
-  virtual ECMData<AMDomain::filesystem::TerminalResizeResult>
-  TerminalResize(const AMDomain::filesystem::TerminalResizeArgs &args,
-                 const AMDomain::client::ClientControlComponent &control) = 0;
-
-  virtual ECMData<AMDomain::filesystem::TerminalCloseResult>
-  TerminalClose(const AMDomain::filesystem::TerminalCloseArgs &args,
-                const AMDomain::client::ClientControlComponent &control) = 0;
-
-  virtual ECMData<AMDomain::filesystem::TerminalStatusResult>
-  TerminalStatus(const AMDomain::filesystem::TerminalStatusArgs &args,
-                 const AMDomain::client::ClientControlComponent &control) = 0;
 };
 
 class TerminalPortBase : public ITerminalPort {
@@ -113,6 +89,7 @@ private:
   ConRequest request_ = {};
   std::vector<std::string> private_keys_ = {};
   TraceCallback trace_cb_ = {};
+  ConnectStateCallback connect_state_cb_ = {};
   AuthCallback auth_cb_ = {};
   KnownHostCallback known_host_cb_ = {};
   std::unique_ptr<AMInfra::client::ClientConfigStore> config_store_ = {};
@@ -150,15 +127,30 @@ private:
     return sftp_core_->GetLastErrorMsg();
   }
 
-  void Trace_(TraceLevel level, ErrorCode code, const std::string &target,
-              const std::string &operation, const std::string &msg) const {
-    if (!trace_cb_) {
+  void SyncCallbacksToCore_() {
+    if (!sftp_core_) {
       return;
     }
-    (void)CallCallbackSafe(trace_cb_,
-                           TraceInfo(level, code, request_.nickname, target,
-                                     operation, msg, request_,
-                                     AMDomain::client::TraceSource::Client));
+    if (trace_cb_) {
+      sftp_core_->RegisterTraceCallback(trace_cb_);
+    } else {
+      sftp_core_->UnregisterTraceCallback();
+    }
+    if (connect_state_cb_) {
+      sftp_core_->RegisterConnectStateCallback(connect_state_cb_);
+    } else {
+      sftp_core_->UnregisterConnectStateCallback();
+    }
+    if (auth_cb_) {
+      sftp_core_->RegisterAuthCallback(auth_cb_);
+    } else {
+      sftp_core_->UnregisterAuthCallback();
+    }
+    if (known_host_cb_) {
+      sftp_core_->RegisterKnownHostCallback(known_host_cb_);
+    } else {
+      sftp_core_->UnregisterKnownHostCallback();
+    }
   }
 
   void ResetTerminalState_(bool keep_window = true) {
@@ -188,10 +180,7 @@ private:
   }
 
   void DisconnectSession_() {
-    if (terminal_channel_) {
-      (void)terminal_channel_->graceful_exit(true, 50, true);
-      terminal_channel_.reset();
-    }
+    (void)CloseChannel_(true);
     sftp_core_.reset();
     control_store_.reset();
     config_store_.reset();
@@ -240,91 +229,6 @@ private:
     }
   }
 
-  [[nodiscard]] ECM VerifyKnownHost_() {
-    if (!known_host_cb_) {
-      return OK;
-    }
-    size_t key_len = 0;
-    int key_type = LIBSSH2_HOSTKEY_TYPE_UNKNOWN;
-    const char *key_ptr =
-        libssh2_session_hostkey(session_, &key_len, &key_type);
-    if (!key_ptr || key_len == 0) {
-      return {ErrorCode::HostkeyInitFailed, "libssh2_session_hostkey",
-              request_.hostname, "Failed to retrieve host key"};
-    }
-    const std::string protocol = detail::HostKeyTypeToProtocol(key_type);
-    if (protocol.empty()) {
-      return {ErrorCode::AlgorithmUnsupported, "HostKeyTypeToProtocol",
-              request_.hostname, "Unsupported hostkey type"};
-    }
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest = {};
-    std::string sha_base64 = "";
-    auto *key_bytes = reinterpret_cast<const unsigned char *>(key_ptr);
-    if (SHA256(key_bytes, key_len, digest.data())) {
-      sha_base64 = detail::Base64Encode(digest.data(), SHA256_DIGEST_LENGTH);
-    }
-    KnownHostQuery entry{
-        request_.nickname, request_.hostname, static_cast<int>(request_.port),
-        protocol,          request_.username, sha_base64};
-    auto [res, cb_ecm] = CallCallbackSafeRet<ECM>(known_host_cb_, entry);
-    if (cb_ecm.code != ErrorCode::Success) {
-      return cb_ecm;
-    }
-    return res;
-  }
-
-  void NotifyAuth_(bool need_password, const std::string &password_enc,
-                   bool ok) {
-    if (!auth_cb_) {
-      return;
-    }
-    ConRequest callback_request = request_;
-    callback_request.password = ok ? password_enc : "";
-    (void)CallCallbackSafe(auth_cb_, AuthCBInfo(need_password,
-                                                std::move(callback_request),
-                                                password_enc, ok));
-  }
-
-  [[nodiscard]] bool TryAuthWithPassword_(
-      const std::string &encrypted_password,
-      const AMDomain::client::ClientControlComponent &control) {
-    if (encrypted_password.empty()) {
-      return false;
-    }
-    std::string plain_password = AMAuth::DecryptPassword(encrypted_password);
-    auto auth_res = NBCall_(control, [&]() {
-      return libssh2_userauth_password(session_, request_.username.c_str(),
-                                       plain_password.c_str());
-    });
-    AMAuth::SecureZero(plain_password);
-    if (!auth_res || auth_res.value != 0) {
-      NotifyAuth_(false, encrypted_password, false);
-      return false;
-    }
-    request_.password = encrypted_password;
-    NotifyAuth_(false, encrypted_password, true);
-    return true;
-  }
-
-  [[nodiscard]] bool
-  TryAuthWithKey_(const std::string &keyfile,
-                  const AMDomain::client::ClientControlComponent &control) {
-    if (keyfile.empty()) {
-      return false;
-    }
-    auto auth_res = NBCall_(control, [&]() {
-      return libssh2_userauth_publickey_fromfile(
-          session_, request_.username.c_str(), nullptr, keyfile.c_str(),
-          nullptr);
-    });
-    if (!auth_res || auth_res.value != 0) {
-      NotifyAuth_(false, "", false);
-      return false;
-    }
-    NotifyAuth_(false, "", true);
-    return true;
-  }
-
   [[nodiscard]] ECM
   EnsureConnected_(bool force,
                    const AMDomain::client::ClientControlComponent &control) {
@@ -343,6 +247,7 @@ private:
       if (!force) {
         return OK;
       }
+      (void)CloseChannel_(true);
       const auto reconnect_result =
           sftp_core_->Connect(AMFSI::ConnectArgs{true}, control);
       status_ = reconnect_result.data.status;
@@ -364,6 +269,7 @@ private:
           config_store_.get(), control_store_.get(), private_keys_, trace_cb_,
           auth_cb_, known_host_cb_);
     }
+    SyncCallbacksToCore_();
     const auto connect_result =
         sftp_core_->Connect(AMFSI::ConnectArgs{force}, control);
     status_ = connect_result.data.status;
@@ -488,6 +394,55 @@ public:
   }
 
   [[nodiscard]] ConRequest GetRequest() const override { return request_; }
+
+  void RegisterTraceCallback(TraceCallback trace_cb) override {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    trace_cb_ = std::move(trace_cb);
+    SyncCallbacksToCore_();
+  }
+
+  void UnregisterTraceCallback() override {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    trace_cb_ = {};
+    SyncCallbacksToCore_();
+  }
+
+  void RegisterConnectStateCallback(
+      ConnectStateCallback connect_state_cb) override {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    connect_state_cb_ = std::move(connect_state_cb);
+    SyncCallbacksToCore_();
+  }
+
+  void UnregisterConnectStateCallback() override {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    connect_state_cb_ = {};
+    SyncCallbacksToCore_();
+  }
+
+  void RegisterAuthCallback(AuthCallback auth_cb) override {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    auth_cb_ = std::move(auth_cb);
+    SyncCallbacksToCore_();
+  }
+
+  void UnregisterAuthCallback() override {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    auth_cb_ = {};
+    SyncCallbacksToCore_();
+  }
+
+  void RegisterKnownHostCallback(KnownHostCallback known_host_cb) override {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    known_host_cb_ = std::move(known_host_cb);
+    SyncCallbacksToCore_();
+  }
+
+  void UnregisterKnownHostCallback() override {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    known_host_cb_ = {};
+    SyncCallbacksToCore_();
+  }
 
   ECMData<AMFSI::TerminalOpenResult> TerminalOpen(
       const AMFSI::TerminalOpenArgs &args,

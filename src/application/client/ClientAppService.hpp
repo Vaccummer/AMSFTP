@@ -115,6 +115,10 @@ public:
   static ECM SetClientCwd(const ClientHandle &client, const std::string &cwd);
   [[nodiscard]] static ECM TryLeaseClient(const ClientHandle &client);
   [[nodiscard]] static ECM TryReturnClient(const ClientHandle &client);
+  [[nodiscard]] static ECM TryActivateTerminal(const ClientHandle &client);
+  [[nodiscard]] static ECM TryDeactivateTerminal(const ClientHandle &client);
+  [[nodiscard]] static ECM EnsureTerminalInactive(
+      const ClientHandle &client, const std::string &operation = {});
 
 private:
   void ApplyCallbacksToClient_(const ClientHandle &client,

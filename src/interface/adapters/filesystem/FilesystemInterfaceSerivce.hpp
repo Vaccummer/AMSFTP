@@ -68,6 +68,11 @@ struct FilesystemShellRunArg {
   int max_time_s = -1;
 };
 
+struct FilesystemTerminalArg {
+  std::string nickname = {};
+  std::string term = {};
+};
+
 struct FilesystemRenameArg {
   std::string target = {};
   std::string dst = {};
@@ -151,6 +156,10 @@ public:
                   &control_opt = std::nullopt) const;
 
   ECM ShellRun(const FilesystemShellRunArg &arg,
+               const std::optional<AMDomain::client::ClientControlComponent>
+                   &control_opt = std::nullopt) const;
+
+  ECM Terminal(const FilesystemTerminalArg &arg = {},
                const std::optional<AMDomain::client::ClientControlComponent>
                    &control_opt = std::nullopt) const;
 

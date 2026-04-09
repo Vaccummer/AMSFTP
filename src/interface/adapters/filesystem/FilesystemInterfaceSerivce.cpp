@@ -7,15 +7,30 @@
 #include "interface/parser/CommandPreprocess.hpp"
 #include "interface/style/StyleManager.hpp"
 #include <algorithm>
+#include <chrono>
+#include <array>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <functional>
 #include <iomanip>
 #include <limits>
 #include <sstream>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 namespace AMInterface::filesystem {
 namespace {
@@ -65,6 +80,33 @@ bool IsValidNicknameToken_(const std::string &nickname_token) {
     return false;
   }
   return AMDomain::host::HostService::ValidateNickname(nickname);
+}
+
+using TerminalPort = AMDomain::client::IClientTerminalPort;
+
+struct TerminalLoopOutcome_ {
+  ECM rcm = OK;
+  bool force_close = true;
+};
+
+[[nodiscard]] TerminalPort *
+ResolveTerminalPort_(const AMDomain::client::ClientHandle &client) {
+  if (!client) {
+    return nullptr;
+  }
+  return client->TerminalPort();
+}
+
+[[nodiscard]] ECM BuildTerminalUnsupportedError_(const std::string &nickname) {
+  return Err(EC::OperationUnsupported, "terminal", nickname,
+             "Current client does not support interactive terminal mode");
+}
+
+void ReleaseTerminalLease_(const AMDomain::client::ClientHandle &client) {
+  if (client) {
+    (void)AMApplication::client::ClientAppService::TryDeactivateTerminal(
+        client);
+  }
 }
 
 size_t FindFirstNonEscapedAt_(
@@ -119,6 +161,294 @@ std::string SubstituteTemplateVars_(
     ++i;
   }
   return out;
+}
+
+struct LocalTerminalGeometry_ {
+  int cols = 80;
+  int rows = 24;
+  int width = 0;
+  int height = 0;
+};
+
+enum class LocalInputPollStatus_ { Ready, Closed, Error };
+
+LocalTerminalGeometry_ QueryLocalTerminalGeometry_() {
+  LocalTerminalGeometry_ out = {};
+#ifdef _WIN32
+  CONSOLE_SCREEN_BUFFER_INFO info = {};
+  HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (output != INVALID_HANDLE_VALUE &&
+      GetConsoleScreenBufferInfo(output, &info) != 0) {
+    out.cols = std::max<int>(1, info.srWindow.Right - info.srWindow.Left + 1);
+    out.rows = std::max<int>(1, info.srWindow.Bottom - info.srWindow.Top + 1);
+  }
+#else
+  winsize ws = {};
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+    if (ws.ws_col > 0) {
+      out.cols = static_cast<int>(ws.ws_col);
+    }
+    if (ws.ws_row > 0) {
+      out.rows = static_cast<int>(ws.ws_row);
+    }
+    out.width = static_cast<int>(ws.ws_xpixel);
+    out.height = static_cast<int>(ws.ws_ypixel);
+  }
+#endif
+  return out;
+}
+
+void WriteTerminalBytes_(const std::string &text) {
+  if (text.empty()) {
+    return;
+  }
+  (void)std::fwrite(text.data(), 1, text.size(), stdout);
+  std::fflush(stdout);
+}
+
+bool ConsumeLocalExitByte_(std::string *input) {
+  if (input == nullptr || input->empty()) {
+    return false;
+  }
+  const size_t pos = input->find('\x1d'); // Ctrl+]
+  if (pos == std::string::npos) {
+    return false;
+  }
+  input->resize(pos);
+  return true;
+}
+
+class ScopedRawTerminal_ final : public NonCopyableNonMovable {
+public:
+  ScopedRawTerminal_() = default;
+  ~ScopedRawTerminal_() override { Restore(); }
+
+  bool Activate() {
+#ifdef _WIN32
+    input_ = GetStdHandle(STD_INPUT_HANDLE);
+    output_ = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (input_ == INVALID_HANDLE_VALUE || output_ == INVALID_HANDLE_VALUE) {
+      error_ = "Console handle is invalid";
+      return false;
+    }
+    if (GetConsoleMode(input_, &input_mode_) == 0) {
+      error_ = "Failed to query console input mode";
+      return false;
+    }
+    if (GetConsoleMode(output_, &output_mode_) == 0) {
+      error_ = "Failed to query console output mode";
+      return false;
+    }
+
+    DWORD raw_input_mode = input_mode_;
+    raw_input_mode &=
+        ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+    raw_input_mode |= ENABLE_WINDOW_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    if (SetConsoleMode(input_, raw_input_mode) == 0) {
+      error_ = "Failed to enable raw console input";
+      return false;
+    }
+
+    DWORD raw_output_mode = output_mode_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    (void)SetConsoleMode(output_, raw_output_mode);
+#else
+    stdin_flags_ = fcntl(STDIN_FILENO, F_GETFL, 0);
+    if (stdin_flags_ < 0) {
+      error_ = "Failed to query stdin flags";
+      return false;
+    }
+    if (tcgetattr(STDIN_FILENO, &termios_) != 0) {
+      error_ = "Failed to query terminal attributes";
+      return false;
+    }
+    termios raw = termios_;
+    raw.c_iflag &=
+        static_cast<tcflag_t>(~(BRKINT | ICRNL | INPCK | ISTRIP | IXON));
+    raw.c_oflag &= static_cast<tcflag_t>(~(OPOST));
+    raw.c_cflag |= CS8;
+    raw.c_lflag &= static_cast<tcflag_t>(~(ECHO | ICANON | IEXTEN | ISIG));
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
+      error_ = "Failed to enable raw terminal mode";
+      return false;
+    }
+    if (fcntl(STDIN_FILENO, F_SETFL, stdin_flags_ | O_NONBLOCK) != 0) {
+      error_ = "Failed to enable non-blocking stdin";
+      (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &termios_);
+      return false;
+    }
+#endif
+    active_ = true;
+    return true;
+  }
+
+  void Restore() {
+    if (!active_) {
+      return;
+    }
+#ifdef _WIN32
+    (void)SetConsoleMode(input_, input_mode_);
+    (void)SetConsoleMode(output_, output_mode_);
+#else
+    (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &termios_);
+    (void)fcntl(STDIN_FILENO, F_SETFL, stdin_flags_);
+#endif
+    active_ = false;
+  }
+
+  [[nodiscard]] const std::string &Error() const { return error_; }
+
+private:
+  bool active_ = false;
+  std::string error_ = {};
+#ifdef _WIN32
+  HANDLE input_ = INVALID_HANDLE_VALUE;
+  HANDLE output_ = INVALID_HANDLE_VALUE;
+  DWORD input_mode_ = 0;
+  DWORD output_mode_ = 0;
+#else
+  termios termios_ = {};
+  int stdin_flags_ = -1;
+#endif
+};
+
+LocalInputPollStatus_ PollLocalTerminalInput_(std::string *out,
+                                              std::string *error) {
+  if (out == nullptr || error == nullptr) {
+    return LocalInputPollStatus_::Error;
+  }
+  out->clear();
+  error->clear();
+
+#ifdef _WIN32
+  HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+  if (input == INVALID_HANDLE_VALUE) {
+    *error = "Console input handle is invalid";
+    return LocalInputPollStatus_::Error;
+  }
+  const DWORD wait_rc = WaitForSingleObject(input, 0);
+  if (wait_rc == WAIT_TIMEOUT) {
+    return LocalInputPollStatus_::Ready;
+  }
+  if (wait_rc != WAIT_OBJECT_0) {
+    *error = "Console input wait failed";
+    return LocalInputPollStatus_::Error;
+  }
+
+  std::array<char, 256> buffer = {};
+  DWORD read_bytes = 0;
+  if (ReadFile(input, buffer.data(), static_cast<DWORD>(buffer.size()),
+               &read_bytes, nullptr) == 0) {
+    *error = "Console input read failed";
+    return LocalInputPollStatus_::Error;
+  }
+  if (read_bytes == 0) {
+    return LocalInputPollStatus_::Closed;
+  }
+  out->assign(buffer.data(), static_cast<size_t>(read_bytes));
+  return LocalInputPollStatus_::Ready;
+#else
+  std::array<char, 256> buffer = {};
+  const ssize_t nread = read(STDIN_FILENO, buffer.data(), buffer.size());
+  if (nread > 0) {
+    out->assign(buffer.data(), static_cast<size_t>(nread));
+    return LocalInputPollStatus_::Ready;
+  }
+  if (nread == 0) {
+    return LocalInputPollStatus_::Closed;
+  }
+  if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+    return LocalInputPollStatus_::Ready;
+  }
+  *error = std::strerror(errno);
+  return LocalInputPollStatus_::Error;
+#endif
+}
+
+TerminalLoopOutcome_ BridgeInteractiveTerminal_(
+    TerminalPort &terminal_port,
+    const AMDomain::client::ClientControlComponent &base_control) {
+  ScopedRawTerminal_ raw_terminal = {};
+  if (!raw_terminal.Activate()) {
+    return {Err(EC::CommonFailure, "terminal.raw_mode", "<stdin>",
+                raw_terminal.Error()),
+            true};
+  }
+
+  LocalTerminalGeometry_ last_geometry = QueryLocalTerminalGeometry_();
+  constexpr int kReadTimeoutMs = 20;
+
+  while (true) {
+    if (base_control.IsInterrupted()) {
+      return {Err(EC::Terminate, "terminal.loop", "<terminal>",
+                  "Terminal interrupted"),
+              true};
+    }
+    if (base_control.IsTimeout()) {
+      return {Err(EC::OperationTimeout, "terminal.loop", "<terminal>",
+                  "Terminal timed out"),
+              true};
+    }
+
+    std::string input = {};
+    std::string input_error = {};
+    const auto input_status = PollLocalTerminalInput_(&input, &input_error);
+    if (input_status == LocalInputPollStatus_::Error) {
+      return {Err(EC::LocalFileReadError, "terminal.input", "<stdin>",
+                  input_error.empty() ? "Local terminal input failed"
+                                      : input_error),
+              true};
+    }
+    if (input_status == LocalInputPollStatus_::Closed) {
+      return {OK, false};
+    }
+
+    const bool request_local_exit = ConsumeLocalExitByte_(&input);
+    if (!input.empty()) {
+      auto write_result = terminal_port.TerminalWrite(
+          AMDomain::filesystem::TerminalWriteArgs{input}, base_control);
+      if (!(write_result.rcm)) {
+        return {write_result.rcm, true};
+      }
+    }
+    if (request_local_exit) {
+      return {OK, false};
+    }
+
+    const LocalTerminalGeometry_ geometry = QueryLocalTerminalGeometry_();
+    if (geometry.cols != last_geometry.cols ||
+        geometry.rows != last_geometry.rows ||
+        geometry.width != last_geometry.width ||
+        geometry.height != last_geometry.height) {
+      auto resize_result = terminal_port.TerminalResize(
+          AMDomain::filesystem::TerminalResizeArgs{
+              geometry.cols, geometry.rows, geometry.width, geometry.height},
+          base_control);
+      if (!(resize_result.rcm)) {
+        return {resize_result.rcm, true};
+      }
+      last_geometry = geometry;
+    }
+
+    AMDomain::client::ClientControlComponent read_control(
+        base_control.ControlToken(), kReadTimeoutMs);
+    auto read_result = terminal_port.TerminalRead(
+        AMDomain::filesystem::TerminalReadArgs{32U * 1024U}, read_control);
+    if (!(read_result.rcm)) {
+      if (read_result.rcm.code == EC::OperationTimeout) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      return {read_result.rcm, true};
+    }
+    if (!read_result.data.output.empty()) {
+      WriteTerminalBytes_(read_result.data.output);
+    }
+    if (read_result.data.eof) {
+      return {OK, false};
+    }
+  }
 }
 
 struct TreeNode_ {
@@ -703,14 +1033,13 @@ ECM FilesystemInterfaceSerivce::Realpath(
     return split_result.rcm;
   }
 
-  auto client_result = filesystem_service_.GetClient(split_result.data.nickname,
-                                                     control);
+  auto client_result =
+      filesystem_service_.GetClient(split_result.data.nickname, control);
   if (!(client_result.rcm) || !client_result.data) {
-    const ECM rcm =
-        !(client_result.rcm)
-            ? client_result.rcm
-            : Err(EC::ClientNotFound, __func__, split_result.data.nickname,
-                  "Client not found");
+    const ECM rcm = !(client_result.rcm)
+                        ? client_result.rcm
+                        : Err(EC::ClientNotFound, __func__,
+                              split_result.data.nickname, "Client not found");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -824,6 +1153,7 @@ ECM FilesystemInterfaceSerivce::Tree(
   while (!pending.empty()) {
     const ECM check_rcm = stop_error();
     if (!(check_rcm)) {
+      print_error(interface_print::BuildPathLabel(target), check_rcm);
       return check_rcm;
     }
 
@@ -849,6 +1179,7 @@ ECM FilesystemInterfaceSerivce::Tree(
     for (const auto &entry : list_result.data) {
       const ECM item_check_rcm = stop_error();
       if (!(item_check_rcm)) {
+        print_error(interface_print::BuildPathLabel(current), item_check_rcm);
         return item_check_rcm;
       }
 
@@ -941,7 +1272,8 @@ ECM FilesystemInterfaceSerivce::ShellRun(
     return rcm;
   }
   if (arg.max_time_s < -1) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "max_time_s must be >= -1");
+    const ECM rcm =
+        Err(EC::InvalidArg, __func__, "", "max_time_s must be >= -1");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1012,6 +1344,105 @@ ECM FilesystemInterfaceSerivce::ShellRun(
   return OK;
 }
 
+ECM FilesystemInterfaceSerivce::Terminal(
+    const FilesystemTerminalArg &arg,
+    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string nickname = AMStr::Strip(arg.nickname);
+  if (nickname.empty()) {
+    nickname = filesystem_service_.CurrentNickname();
+  }
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+
+  auto client_result = filesystem_service_.GetClient(nickname, control);
+  if (!(client_result.rcm) || !client_result.data) {
+    const ECM rcm = (client_result.rcm)
+                        ? Err(EC::InvalidHandle, __func__, nickname,
+                              "Resolved client is null")
+                        : client_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  const auto client = client_result.data;
+  const ECM lease_rcm =
+      AMApplication::client::ClientAppService::TryActivateTerminal(client);
+  if (!(lease_rcm)) {
+    prompt_io_manager_.ErrorFormat(lease_rcm);
+    return lease_rcm;
+  }
+
+  const auto release_lease = [&]() { ReleaseTerminalLease_(client); };
+
+  auto *terminal_port = ResolveTerminalPort_(client);
+  if (!terminal_port) {
+    release_lease();
+    const ECM rcm = BuildTerminalUnsupportedError_(nickname);
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto status_result = terminal_port->TerminalStatus({}, control);
+  if (!(status_result.rcm)) {
+    release_lease();
+    if (status_result.rcm.code == EC::OperationUnsupported) {
+      const ECM rcm = BuildTerminalUnsupportedError_(nickname);
+      prompt_io_manager_.ErrorFormat(rcm);
+      return rcm;
+    }
+    prompt_io_manager_.ErrorFormat(status_result.rcm);
+    return status_result.rcm;
+  }
+  if (!status_result.data.is_supported) {
+    release_lease();
+    const ECM rcm = BuildTerminalUnsupportedError_(nickname);
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  const LocalTerminalGeometry_ geometry = QueryLocalTerminalGeometry_();
+  AMDomain::filesystem::TerminalOpenArgs open_args = {};
+  open_args.cols = geometry.cols;
+  open_args.rows = geometry.rows;
+  open_args.width = geometry.width;
+  open_args.height = geometry.height;
+  open_args.term = AMStr::Strip(arg.term).empty() ? "xterm-256color"
+                                                  : AMStr::Strip(arg.term);
+
+  auto open_result = terminal_port->TerminalOpen(open_args, control);
+  if (!(open_result.rcm) || !open_result.data.opened) {
+    release_lease();
+    const ECM rcm = open_result.rcm
+                        ? Err(EC::NoConnection, __func__, nickname,
+                              "Interactive terminal failed to open")
+                        : open_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  TerminalLoopOutcome_ loop_outcome =
+      BridgeInteractiveTerminal_(*terminal_port, control);
+  WriteTerminalBytes_("\r\n");
+
+  auto close_result = terminal_port->TerminalClose(
+      AMDomain::filesystem::TerminalCloseArgs{loop_outcome.force_close},
+      control);
+  release_lease();
+
+  ECM final_rcm = loop_outcome.rcm;
+  if (!(close_result.rcm) && final_rcm.code == EC::Success) {
+    final_rcm = close_result.rcm;
+  }
+
+  if (!(final_rcm)) {
+    prompt_io_manager_.ErrorFormat(final_rcm);
+  }
+  return final_rcm;
+}
+
 ECM FilesystemInterfaceSerivce::Rename(
     const FilesystemRenameArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
@@ -1039,8 +1470,8 @@ ECM FilesystemInterfaceSerivce::Rename(
   }
   PathTarget dst = std::move(dst_split.data);
   if (AMDomain::filesystem::services::HasWildcard(dst.path)) {
-    const ECM rcm =
-        Err(EC::InvalidArg, __func__, "", "Destination wildcard is not supported");
+    const ECM rcm = Err(EC::InvalidArg, __func__, "",
+                        "Destination wildcard is not supported");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1061,7 +1492,8 @@ ECM FilesystemInterfaceSerivce::Rename(
                    interface_print::BuildPathLabel(dst));
     const bool approved = prompt_io_manager_.PromptYesNo(prompt, &canceled);
     if (!approved) {
-      const ECM cancel_rcm = Err(EC::ConfigCanceled, __func__, "", "Rename canceled");
+      const ECM cancel_rcm =
+          Err(EC::ConfigCanceled, __func__, "", "Rename canceled");
       prompt_io_manager_.ErrorFormat(cancel_rcm);
       return cancel_rcm;
     }
@@ -1079,35 +1511,86 @@ ECM FilesystemInterfaceSerivce::Move(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  auto src_split = SplitRawTarget(arg.target);
-  if (!src_split.rcm) {
-    prompt_io_manager_.ErrorFormat(src_split.rcm);
-    return src_split.rcm;
-  }
-  PathTarget src = std::move(src_split.data);
-  if (AMDomain::filesystem::services::HasWildcard(src.path)) {
-    auto match_result = MatchOne(src);
-    if (!(match_result.rcm)) {
-      prompt_io_manager_.ErrorFormat(match_result.rcm);
-      return match_result.rcm;
-    }
-    src = std::move(match_result.data);
-  }
-
-  auto dst_split = SplitRawTarget(arg.dst);
-  if (!(dst_split.rcm)) {
-    prompt_io_manager_.ErrorFormat(dst_split.rcm);
-    return dst_split.rcm;
-  }
-  PathTarget dst_dir = std::move(dst_split.data);
-  if (AMDomain::filesystem::services::HasWildcard(dst_dir.path)) {
-    const ECM rcm =
-        Err(EC::InvalidArg, __func__, "", "Destination wildcard is not supported");
+  const std::string raw_src = AMStr::Strip(arg.target);
+  if (raw_src.empty()) {
+    const ECM rcm = Err(EC::InvalidArg, "Move", "src", "Source path is empty");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
-  if (!HasExplicitNickname_(arg.dst)) {
-    dst_dir.nickname = src.nickname;
+
+  auto src_split = SplitRawTarget(raw_src);
+  if (!(src_split.rcm)) {
+    prompt_io_manager_.ErrorFormat(src_split.rcm);
+    return src_split.rcm;
+  }
+
+  ECM status = OK;
+  std::vector<PathTarget> sources = {};
+  PathTarget src_pattern = std::move(src_split.data);
+  const bool src_is_wildcard =
+      AMDomain::filesystem::services::HasWildcard(src_pattern.path);
+  if (src_is_wildcard) {
+    auto find_result = filesystem_service_.find(
+        src_pattern, SearchType::All, control, {},
+        [this, &status](const PathTarget &error_path, ECM rcm) {
+          (void)error_path;
+          prompt_io_manager_.ErrorFormat(rcm);
+          status = MergeStatus_(status, rcm);
+        });
+
+    if (!(find_result.rcm)) {
+      if (find_result.rcm.code == EC::Terminate ||
+          find_result.rcm.code == EC::OperationTimeout) {
+        prompt_io_manager_.ErrorFormat(find_result.rcm);
+        return find_result.rcm;
+      }
+      status = MergeStatus_(status, find_result.rcm);
+    }
+
+    for (const auto &entry : find_result.data) {
+      PathTarget one = {};
+      one.nickname = src_pattern.nickname;
+      one.path = entry.path;
+      sources.push_back(std::move(one));
+    }
+    sources = AMDomain::filesystem::services::DedupPathTargets(sources);
+
+    if (sources.empty()) {
+      const ECM rcm = Err(EC::PathNotExist, "Move", raw_src,
+                          "Wildcard source matched no target");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return MergeStatus_(status, rcm);
+    }
+
+    prompt_io_manager_.FmtPrint("Matched {} source path(s):", sources.size());
+    for (const auto &source : sources) {
+      const std::string styled =
+          interface_print::BuildStyledPathLabel(style_service_, source);
+      prompt_io_manager_.Print(AMStr::fmt("  {}", styled));
+    }
+    bool canceled = false;
+    const bool approved = prompt_io_manager_.PromptYesNo(
+        "Move all matched paths? (y/N): ", &canceled);
+    if (!approved || canceled) {
+      return Err(EC::ConfigCanceled, "Move", raw_src, "Move canceled");
+    }
+  } else {
+    sources.push_back(std::move(src_pattern));
+  }
+
+  const std::string raw_dst =
+      AMStr::Strip(arg.dst).empty() ? "." : AMStr::Strip(arg.dst);
+  auto dst_split = SplitRawTarget(raw_dst);
+  if (!(dst_split.rcm)) {
+    prompt_io_manager_.ErrorFormat(dst_split.rcm);
+    return MergeStatus_(status, dst_split.rcm);
+  }
+  PathTarget dst_dir = std::move(dst_split.data);
+  if (AMDomain::filesystem::services::HasWildcard(dst_dir.path)) {
+    const ECM rcm = Err(EC::InvalidArg, "Move", raw_dst,
+                        "Destination wildcard is not supported");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return MergeStatus_(status, rcm);
   }
 
   auto dst_stat = filesystem_service_.Stat(dst_dir, control, false);
@@ -1115,37 +1598,138 @@ ECM FilesystemInterfaceSerivce::Move(
     if (AMDomain::filesystem::services::IsPathNotExistError(
             dst_stat.rcm.code)) {
       if (!arg.mkdir) {
-        const ECM rcm =
-            Err(EC::PathNotExist, __func__, "",
-                AMStr::fmt("Destination directory not found: {}",
-                           interface_print::BuildPathLabel(dst_dir)));
+        const ECM rcm = Err(EC::PathNotExist, "Move",
+                            interface_print::BuildPathLabel(dst_dir),
+                            "Destination directory not found");
         prompt_io_manager_.ErrorFormat(rcm);
-        return rcm;
+        return MergeStatus_(status, rcm);
       }
       ECM mkdir_rcm = filesystem_service_.Mkdirs(dst_dir, control);
       if (!(mkdir_rcm)) {
         prompt_io_manager_.ErrorFormat(mkdir_rcm);
-        return mkdir_rcm;
+        return MergeStatus_(status, mkdir_rcm);
+      }
+      dst_stat = filesystem_service_.Stat(dst_dir, control, false);
+      if (!(dst_stat.rcm)) {
+        prompt_io_manager_.ErrorFormat(dst_stat.rcm);
+        return MergeStatus_(status, dst_stat.rcm);
       }
     } else {
       prompt_io_manager_.ErrorFormat(dst_stat.rcm);
-      return dst_stat.rcm;
+      return MergeStatus_(status, dst_stat.rcm);
     }
-  } else if (dst_stat.data.type != PathType::DIR) {
-    const ECM rcm = Err(EC::NotADirectory, __func__, "",
-                        AMStr::fmt("Not a directory: {}", dst_stat.data.path));
+  }
+  if (dst_stat.data.type != PathType::DIR) {
+    const ECM rcm =
+        Err(EC::NotADirectory, "Move", interface_print::BuildPathLabel(dst_dir),
+            "Destination path is not a directory");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return MergeStatus_(status, rcm);
+  }
+
+  struct MoveEntry_ {
+    PathTarget src = {};
+    PathTarget dst = {};
+    bool dst_exists = false;
+  };
+  std::vector<MoveEntry_> plan = {};
+  std::vector<PathTarget> collisions = {};
+  plan.reserve(sources.size());
+
+  for (const auto &source : sources) {
+    if (control.IsInterrupted()) {
+      const ECM rcm =
+          Err(EC::Terminate, "Move", interface_print::BuildPathLabel(source),
+              "Operation interrupted");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return MergeStatus_(status, rcm);
+    }
+    if (control.IsTimeout()) {
+      const ECM rcm =
+          Err(EC::OperationTimeout, "Move",
+              interface_print::BuildPathLabel(source), "Operation timed out");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return MergeStatus_(status, rcm);
+    }
+
+    MoveEntry_ entry = {};
+    entry.src = source;
+    entry.dst = dst_dir;
+    entry.dst.path = AMPath::join(dst_dir.path, AMPath::basename(source.path));
+
+    auto precheck = filesystem_service_.Stat(entry.dst, control, false);
+    if ((precheck.rcm)) {
+      entry.dst_exists = true;
+      collisions.push_back(entry.dst);
+    } else if (AMDomain::filesystem::services::IsPathNotExistError(
+                   precheck.rcm.code)) {
+      entry.dst_exists = false;
+    } else {
+      prompt_io_manager_.ErrorFormat(precheck.rcm);
+      status = MergeStatus_(status, precheck.rcm);
+      continue;
+    }
+    plan.push_back(std::move(entry));
+  }
+
+  if (plan.empty()) {
+    if (!(status)) {
+      return status;
+    }
+    const ECM rcm =
+        Err(EC::PathNotExist, "Move", raw_src, "No source path can be moved");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
-  PathTarget final_dst = dst_dir;
-  final_dst.path = AMPath::join(dst_dir.path, AMPath::basename(src.path));
-  FilesystemRenameArg rename_arg = {};
-  rename_arg.target = interface_print::BuildPathLabel(src);
-  rename_arg.dst = interface_print::BuildPathLabel(final_dst);
-  rename_arg.mkdir = arg.mkdir;
-  rename_arg.overwrite = arg.overwrite;
-  return Rename(rename_arg, control_opt);
+  bool overwrite = arg.overwrite;
+  if (!collisions.empty()) {
+    prompt_io_manager_.Print("Destination collision(s):");
+    for (const auto &collision : collisions) {
+      const std::string styled =
+          interface_print::BuildStyledPathLabel(style_service_, collision);
+      prompt_io_manager_.Print(AMStr::fmt("  {}", styled));
+    }
+    prompt_io_manager_.Print(
+        AMStr::fmt("Overwrite enabled: {}", overwrite ? "true" : "false"));
+    if (!overwrite) {
+      bool canceled = false;
+      const bool approved = prompt_io_manager_.PromptYesNo(
+          "Continue and overwrite existing destination file(s)? (y/N): ",
+          &canceled);
+      if (!approved || canceled) {
+        return Err(EC::ConfigCanceled, "Move",
+                   interface_print::BuildPathLabel(dst_dir), "Move canceled");
+      }
+      overwrite = true;
+    }
+  }
+
+  for (const auto &entry : plan) {
+    if (control.IsInterrupted()) {
+      const ECM rcm =
+          Err(EC::Terminate, "Move", interface_print::BuildPathLabel(entry.src),
+              "Operation interrupted");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return MergeStatus_(status, rcm);
+    }
+    if (control.IsTimeout()) {
+      const ECM rcm = Err(EC::OperationTimeout, "Move",
+                          interface_print::BuildPathLabel(entry.src),
+                          "Operation timed out");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return MergeStatus_(status, rcm);
+    }
+
+    ECM rename_rcm = filesystem_service_.Rename(entry.src, entry.dst, control,
+                                                arg.mkdir, overwrite);
+    if (!(rename_rcm)) {
+      prompt_io_manager_.ErrorFormat(rename_rcm);
+    }
+    status = MergeStatus_(status, rename_rcm);
+  }
+
+  return status;
 }
 
 ECM FilesystemInterfaceSerivce::Saferm(

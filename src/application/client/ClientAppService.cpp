@@ -13,6 +13,74 @@ using HostConfig = AMDomain::host::HostConfig;
 using HostConfigManager = AMApplication::host::HostAppService;
 using AMDomain::host::HostService::IsLocalNickname;
 constexpr const char *kTransferLeaseKey = "transfer.lease";
+constexpr const char *kTerminalLeaseKey = "terminal.lease";
+
+[[nodiscard]] ECM QueryLeaseFlag_(const ClientHandle &client, const char *key,
+                                  bool *value) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "query_client_lease", "<client>",
+               "Client handle is null");
+  }
+  if (value == nullptr) {
+    return Err(EC::InvalidArg, "query_client_lease", "<client>",
+               "Lease output is null");
+  }
+
+  bool found = false;
+  bool type_mismatch = false;
+  bool current = false;
+  client->MetaDataPort().MutateNamedValue<bool>(
+      key, [&](bool *stored, bool name_found, bool type_match) {
+        if (!name_found) {
+          return;
+        }
+        found = true;
+        if (!type_match || !stored) {
+          type_mismatch = true;
+          return;
+        }
+        current = *stored;
+      });
+  if (type_mismatch) {
+    return Err(EC::CommonFailure, "query_client_lease", key,
+               AMStr::fmt("{} metadata type is invalid", key));
+  }
+  *value = found ? current : false;
+  return OK;
+}
+
+[[nodiscard]] ECM StoreLeaseFlag_(const ClientHandle &client, const char *key,
+                                  bool value, const char *operation) {
+  if (!client) {
+    return Err(EC::InvalidHandle, operation, "<client>",
+               "Client handle is null");
+  }
+  if (client->MetaDataPort().StoreNamedData(key, std::any(value), true)) {
+    return OK;
+  }
+  return Err(EC::CommonFailure, operation, "<client>",
+             AMStr::fmt("{} metadata type is invalid", key));
+}
+
+[[nodiscard]] ECM ReconcileTerminalLease_(const ClientHandle &client) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "reconcile_terminal_lease", "<client>",
+               "Client handle is null");
+  }
+
+  bool active = false;
+  const ECM query_rcm = QueryLeaseFlag_(client, kTerminalLeaseKey, &active);
+  if (!(query_rcm) || !active) {
+    return query_rcm;
+  }
+
+  const auto state = client->ConfigPort().GetState();
+  if (state.data.status == ClientStatus::OK) {
+    return OK;
+  }
+  return StoreLeaseFlag_(client, kTerminalLeaseKey, false,
+                         "reconcile_terminal_lease");
+}
 
 ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
                                        const std::string &nickname,
@@ -36,6 +104,21 @@ ECM AcquireTransferLease_(const ClientHandle &client) {
   if (!client) {
     return Err(EC::InvalidHandle, "acquire_transfer_lease", "<client>",
                "Client handle is null");
+  }
+
+  const ECM reconcile_rcm = ReconcileTerminalLease_(client);
+  if (!(reconcile_rcm)) {
+    return reconcile_rcm;
+  }
+  bool terminal_active = false;
+  const ECM terminal_query_rcm =
+      QueryLeaseFlag_(client, kTerminalLeaseKey, &terminal_active);
+  if (!(terminal_query_rcm)) {
+    return terminal_query_rcm;
+  }
+  if (terminal_active) {
+    return Err(EC::PathUsingByOthers, "acquire_transfer_lease", "<client>",
+               "Client terminal is active");
   }
 
   auto &meta = client->MetaDataPort();
@@ -101,6 +184,89 @@ ECM AcquireTransferLease_(const ClientHandle &client) {
 
   return Err(EC::PathUsingByOthers, "acquire_transfer_lease", "<client>",
              "Client is already leased");
+}
+
+ECM AcquireTerminalLease_(const ClientHandle &client) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "acquire_terminal_lease", "<client>",
+               "Client handle is null");
+  }
+
+  auto &meta = client->MetaDataPort();
+  const ECM reconcile_rcm = ReconcileTerminalLease_(client);
+  if (!(reconcile_rcm)) {
+    return reconcile_rcm;
+  }
+
+  bool transfer_active = false;
+  const ECM transfer_query_rcm =
+      QueryLeaseFlag_(client, kTransferLeaseKey, &transfer_active);
+  if (!(transfer_query_rcm)) {
+    return transfer_query_rcm;
+  }
+  if (transfer_active) {
+    return Err(EC::PathUsingByOthers, "acquire_terminal_lease", "<client>",
+               "Client is already leased");
+  }
+
+  bool terminal_acquired = false;
+  bool lease_missing = false;
+  bool type_mismatch = false;
+  meta.MutateNamedValue<bool>(
+      kTerminalLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
+        if (!name_found) {
+          lease_missing = true;
+          return;
+        }
+        if (!type_match || !leased) {
+          type_mismatch = true;
+          return;
+        }
+        if (!*leased) {
+          *leased = true;
+        }
+        terminal_acquired = true;
+      });
+
+  if (type_mismatch) {
+    return StoreLeaseFlag_(client, kTerminalLeaseKey, true,
+                           "acquire_terminal_lease");
+  }
+  if (terminal_acquired) {
+    return OK;
+  }
+
+  if (lease_missing) {
+    if (meta.StoreNamedData(kTerminalLeaseKey, std::any(true), false)) {
+      return OK;
+    }
+    bool retry_type_mismatch = false;
+    bool retry_acquired = false;
+    meta.MutateNamedValue<bool>(kTerminalLeaseKey,
+                                [&](bool *leased, bool name_found,
+                                    bool type_match) {
+                                  if (!name_found) {
+                                    return;
+                                  }
+                                  if (!type_match || !leased) {
+                                    retry_type_mismatch = true;
+                                    return;
+                                  }
+                                  if (!*leased) {
+                                    *leased = true;
+                                  }
+                                  retry_acquired = true;
+                                });
+    if (retry_type_mismatch) {
+      return Err(EC::CommonFailure, "acquire_terminal_lease", "<client>",
+                 "terminal.lease metadata type is invalid");
+    }
+    if (retry_acquired) {
+      return OK;
+    }
+  }
+
+  return OK;
 }
 } // namespace
 
@@ -498,6 +664,9 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
     }
     if (lease_rcm.code == EC::PathUsingByOthers) {
       has_leased_client = true;
+      if ((status)) {
+        status = lease_rcm;
+      }
       continue;
     }
     status = lease_rcm;
@@ -517,6 +686,9 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
   }
 
   if (has_leased_client) {
+    if (!(status)) {
+      return {nullptr, status};
+    }
     return {nullptr, Err(EC::PathUsingByOthers, "get_public_client", nickname,
                          "All public clients are leased")};
   }
@@ -683,6 +855,44 @@ ECM ClientAppService::TryReturnClient(const ClientHandle &client) {
   return OK;
 }
 
+ECM ClientAppService::TryActivateTerminal(const ClientHandle &client) {
+  return AcquireTerminalLease_(client);
+}
+
+ECM ClientAppService::TryDeactivateTerminal(const ClientHandle &client) {
+  return StoreLeaseFlag_(client, kTerminalLeaseKey, false,
+                         "release_terminal_lease");
+}
+
+ECM ClientAppService::EnsureTerminalInactive(const ClientHandle &client,
+                                             const std::string &operation) {
+  if (!client) {
+    return Err(EC::InvalidHandle,
+               operation.empty() ? "terminal_guard" : operation, "<client>",
+               "Client handle is null");
+  }
+
+  const ECM reconcile_rcm = ReconcileTerminalLease_(client);
+  if (!(reconcile_rcm)) {
+    return reconcile_rcm;
+  }
+
+  bool active = false;
+  const ECM query_rcm = QueryLeaseFlag_(client, kTerminalLeaseKey, &active);
+  if (!(query_rcm)) {
+    return query_rcm;
+  }
+  if (!active) {
+    return OK;
+  }
+
+  const std::string target = AMStr::Strip(client->ConfigPort().GetNickname());
+  return Err(EC::PathUsingByOthers,
+             operation.empty() ? "terminal_guard" : operation,
+             target.empty() ? std::string("<client>") : target,
+             "Client terminal is active");
+}
+
 void ClientAppService::ApplyCallbacksToClient_(const ClientHandle &client,
                                                const ClientCallbacks &callbacks,
                                                TraceCallback trace_override) {
@@ -697,16 +907,33 @@ void ClientAppService::ApplyCallbacksToClient_(const ClientHandle &client,
   KnownHostCallback known_host = callbacks.known_host;
 
   if (trace) {
-    client->IOPort().RegisterTraceCallback(std::move(trace));
+    client->IOPort().RegisterTraceCallback(trace);
   }
   if (connect_state) {
-    client->IOPort().RegisterConnectStateCallback(std::move(connect_state));
+    client->IOPort().RegisterConnectStateCallback(connect_state);
   }
   if (auth) {
-    client->IOPort().RegisterAuthCallback(std::move(auth));
+    client->IOPort().RegisterAuthCallback(auth);
   }
   if (known_host) {
-    client->IOPort().RegisterKnownHostCallback(std::move(known_host));
+    client->IOPort().RegisterKnownHostCallback(known_host);
+  }
+
+  auto *terminal_port = client->TerminalPort();
+  if (!terminal_port) {
+    return;
+  }
+  if (trace) {
+    terminal_port->RegisterTraceCallback(trace);
+  }
+  if (connect_state) {
+    terminal_port->RegisterConnectStateCallback(connect_state);
+  }
+  if (auth) {
+    terminal_port->RegisterAuthCallback(auth);
+  }
+  if (known_host) {
+    terminal_port->RegisterKnownHostCallback(known_host);
   }
 }
 
