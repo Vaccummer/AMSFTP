@@ -173,6 +173,8 @@ private:
   void ClearActivePromptHeader_();
   [[nodiscard]] bool ShouldReplayPromptHeader_() const;
   [[nodiscard]] std::string BuildReplayFrame_(const std::string &msg);
+  [[nodiscard]] bool TryCacheOutput_(const std::string &text);
+  void EmitOutput_(const std::string &text, bool allow_cache = true);
   void PrintSyncLocked_(const std::string &text);
   void PrintSyncRefreshLocked_(const std::string &text);
   void PrintInsertAndRepaintLocked_(const std::string &msg);

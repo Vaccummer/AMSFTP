@@ -33,6 +33,13 @@ constexpr int kEventIdCorePromptBackupIfNeeded = 7004;
 constexpr int kEventIdCorePromptCompletionCancelAsync = 7005;
 constexpr int kEventIdLoopExitConfigSaveAll = 7101;
 
+void FlushPromptOutputIfSafe_(AMInterface::prompt::AMPromptIOManager &prompt) {
+  if (prompt.IsCacheOutputOnly()) {
+    return;
+  }
+  prompt.FlushCachedOutput();
+}
+
 /**
  * @brief Return the active client or the local client fallback.
  */
@@ -365,6 +372,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       ctx.task_control_token->ClearInterrupt();
       continue;
     }
+    FlushPromptOutputIfSafe_(managers.interfaces.prompt_io_manager.Get());
 
     // bool settings_reloaded = false;
     // ECM reload_settings_rcm =
@@ -408,6 +416,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     }
     managers.runtime.interactive_event_registry.Run(
         InteractiveEventCategory::CorePromptReturn);
+    FlushPromptOutputIfSafe_(managers.interfaces.prompt_io_manager.Get());
 
     if (!line_opt.has_value()) {
       prompt_arg.result = OK;
@@ -493,6 +502,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     managers.runtime.interactive_event_registry.Run(
         InteractiveEventCategory::InteractiveLoopExit);
   }
+  FlushPromptOutputIfSafe_(managers.interfaces.prompt_io_manager.Get());
   ctx.is_interactive->store(false, std::memory_order_relaxed);
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
