@@ -57,11 +57,13 @@ public:
   void RegisterMaintainerCallbacks(
       std::optional<DisconnectCallback> disconnect_cb = std::nullopt,
       std::optional<TraceCallback> trace_cb = std::nullopt,
+      std::optional<ConnectStateCallback> connect_state_cb = std::nullopt,
       std::optional<KnownHostCallback> known_host_cb = std::nullopt,
       std::optional<AuthCallback> auth_cb = std::nullopt);
   void RegisterPublicCallbacks(
       std::optional<DisconnectCallback> disconnect_cb = std::nullopt,
       std::optional<TraceCallback> trace_cb = std::nullopt,
+      std::optional<ConnectStateCallback> connect_state_cb = std::nullopt,
       std::optional<KnownHostCallback> known_host_cb = std::nullopt,
       std::optional<AuthCallback> auth_cb = std::nullopt);
 

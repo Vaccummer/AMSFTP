@@ -37,6 +37,8 @@ using ClientProtocol = host::ClientProtocol;
 using KnownHostQuery = host::KnownHostQuery;
 using KnownHostCallback = std::function<ECM(const KnownHostQuery &)>;
 using TraceCallback = std::function<void(const TraceInfo &)>;
+using ConnectStateCallback =
+    std::function<void(const std::string &, const std::string &)>;
 using AuthCallback =
     std::function<std::optional<std::string>(const AuthCBInfo &)>;
 using ConRequest = host::ConRequest;
@@ -442,11 +444,11 @@ public:
 
   [[nodiscard]] bool CheckStop(ECM &rcm) const {
     if (IsInterrupted()) {
-      rcm = ECM{EC::Terminate, __func__, "<context>", "Operation interrupted by user"};
+      rcm = ECM{EC::Terminate, __func__, "", "Operation interrupted by user"};
       return true;
     }
     if (IsTimeout()) {
-      rcm = ECM{EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
+      rcm = ECM{EC::OperationTimeout, __func__, "", "Operation timed out"};
       return true;
     }
     return false;
@@ -472,6 +474,17 @@ public:
    * @brief Unregister current trace callback.
    */
   virtual void UnregisterTraceCallback() = 0;
+
+  /**
+   * @brief Register one connect-state callback for connect progress records.
+   */
+  virtual void RegisterConnectStateCallback(
+      ConnectStateCallback connect_state_cb) = 0;
+
+  /**
+   * @brief Unregister current connect-state callback.
+   */
+  virtual void UnregisterConnectStateCallback() = 0;
 
   /**
    * @brief Register one auth callback for IO worker auth flow.
@@ -728,4 +741,3 @@ CreateClientMaintainer(int heartbeat_interval_s = 60,
                        DisconnectCallback disconnect_callback = {},
                        std::vector<ClientHandle> init_clients = {});
 } // namespace AMDomain::client
-

@@ -14,6 +14,7 @@ using ClientServiceArg = AMDomain::client::ClientServiceArg;
 using amf = AMDomain::client::amf;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using TraceCallback = AMDomain::client::TraceCallback;
+using ConnectStateCallback = AMDomain::client::ConnectStateCallback;
 using AuthCallback = AMDomain::client::AuthCallback;
 using KnownHostCallback = AMDomain::client::KnownHostCallback;
 using DisconnectCallback =
@@ -24,6 +25,7 @@ public:
   struct ClientCallbacks {
     DisconnectCallback disconnect = {};
     TraceCallback trace = {};
+    ConnectStateCallback connect_state = {};
     AuthCallback auth = {};
     KnownHostCallback known_host = {};
   };
@@ -50,11 +52,13 @@ public:
   void RegisterMaintainerCallbacks(
       std::optional<DisconnectCallback> disconnect_cb = std::nullopt,
       std::optional<TraceCallback> trace_cb = std::nullopt,
+      std::optional<ConnectStateCallback> connect_state_cb = std::nullopt,
       std::optional<KnownHostCallback> known_host_cb = std::nullopt,
       std::optional<AuthCallback> auth_cb = std::nullopt);
   void RegisterPublicCallbacks(
       std::optional<DisconnectCallback> disconnect_cb = std::nullopt,
       std::optional<TraceCallback> trace_cb = std::nullopt,
+      std::optional<ConnectStateCallback> connect_state_cb = std::nullopt,
       std::optional<KnownHostCallback> known_host_cb = std::nullopt,
       std::optional<AuthCallback> auth_cb = std::nullopt);
 

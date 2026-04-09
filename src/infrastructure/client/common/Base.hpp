@@ -91,6 +91,7 @@ using WRDR = std::pair<WRD, AMPath::WER>;          // walk data + errors
 using WR = std::pair<ECM, WRI>;                    // iwalk func return type
 using SIZER = std::pair<ECM, size_t>;              // getsize func return type
 using TraceCallback = std::function<void(const TraceInfo &)>;
+using ConnectStateCallback = AMDomain::client::ConnectStateCallback;
 using CR =
     std::pair<ECM, std::pair<std::string, int>>; // ConductCmd func return type
 using amf =
@@ -1621,6 +1622,7 @@ public:
 class ClientIOBase : public AMDomain::client::IClientIOPort {
 protected:
   mutable AMAtomic<TraceCallback> trace_callback_;
+  mutable AMAtomic<ConnectStateCallback> connect_state_callback_;
   mutable AMAtomic<AuthCallback> auth_callback_;
   mutable AMAtomic<KnownHostCallback> known_host_callback_;
   AMDomain::client::IClientConfigPort *config_part_ = nullptr;
@@ -1656,6 +1658,16 @@ public:
     trace.store(TraceCallback{});
   }
 
+  void RegisterConnectStateCallback(ConnectStateCallback cb) override {
+    auto connect_state = connect_state_callback_.lock();
+    connect_state.store(std::move(cb));
+  }
+
+  void UnregisterConnectStateCallback() override {
+    auto connect_state = connect_state_callback_.lock();
+    connect_state.store(ConnectStateCallback{});
+  }
+
   void RegisterAuthCallback(AuthCallback cb) override {
     auto auth_cb = auth_callback_.lock();
     auth_cb.store(std::move(cb));
@@ -1677,6 +1689,18 @@ public:
   }
 
 protected:
+  void connect_state(const std::string &state_info,
+                     const std::string &target) const {
+    ConnectStateCallback cb;
+    {
+      auto connect_state_cb = connect_state_callback_.lock();
+      cb = connect_state_cb.load();
+    }
+    if (cb) {
+      (void)CallCallbackSafe(cb, state_info, target);
+    }
+  }
+
   void trace(const TraceInfo &trace_info) const {
     TraceCallback cb;
     {
