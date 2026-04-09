@@ -1,4 +1,5 @@
 #include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
+#include "Isocline/isocline.h"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/path.hpp"
@@ -108,6 +109,45 @@ void ReleaseTerminalLease_(const AMDomain::client::ClientHandle &client) {
         client);
   }
 }
+
+void RestoreCliPromptStateAfterTerminalExit_() {
+#ifdef _WIN32
+  HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+  if (input != INVALID_HANDLE_VALUE) {
+    (void)FlushConsoleInputBuffer(input);
+  }
+#else
+  (void)tcflush(STDIN_FILENO, TCIFLUSH);
+#endif
+  ic_term_reset();
+  ic_term_flush();
+}
+
+class ScopedPromptOutputCache_ final : NonCopyableNonMovable {
+public:
+  explicit ScopedPromptOutputCache_(
+      AMInterface::prompt::AMPromptIOManager *prompt_io_manager)
+      : prompt_io_manager_(prompt_io_manager) {
+    if (prompt_io_manager_ != nullptr) {
+      prompt_io_manager_->SetCacheOutputOnly(true);
+      active_ = true;
+    }
+  }
+
+  ~ScopedPromptOutputCache_() override { Disable(); }
+
+  void Disable() {
+    if (!active_ || prompt_io_manager_ == nullptr) {
+      return;
+    }
+    prompt_io_manager_->SetCacheOutputOnly(false);
+    active_ = false;
+  }
+
+private:
+  AMInterface::prompt::AMPromptIOManager *prompt_io_manager_ = nullptr;
+  bool active_ = false;
+};
 
 size_t FindFirstNonEscapedAt_(
     const AMInterface::parser::ResolvedStringMeta &resolved) {
@@ -243,7 +283,9 @@ public:
     DWORD raw_input_mode = input_mode_;
     raw_input_mode &=
         ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
-    raw_input_mode |= ENABLE_WINDOW_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    raw_input_mode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_EXTENDED_FLAGS;
+    raw_input_mode &=
+        ~(ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_QUICK_EDIT_MODE);
     if (SetConsoleMode(input_, raw_input_mode) == 0) {
       error_ = "Failed to enable raw console input";
       return false;
@@ -327,6 +369,42 @@ LocalInputPollStatus_ PollLocalTerminalInput_(std::string *out,
     *error = "Console input handle is invalid";
     return LocalInputPollStatus_::Error;
   }
+  while (true) {
+    DWORD event_count = 0;
+    if (GetNumberOfConsoleInputEvents(input, &event_count) == 0) {
+      *error = "Console input event query failed";
+      return LocalInputPollStatus_::Error;
+    }
+    if (event_count == 0) {
+      return LocalInputPollStatus_::Ready;
+    }
+
+    INPUT_RECORD record = {};
+    DWORD peeked = 0;
+    if (PeekConsoleInputW(input, &record, 1, &peeked) == 0) {
+      *error = "Console input peek failed";
+      return LocalInputPollStatus_::Error;
+    }
+    if (peeked == 0) {
+      return LocalInputPollStatus_::Ready;
+    }
+
+    const bool key_down =
+        record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown;
+    if (key_down) {
+      break;
+    }
+
+    DWORD consumed = 0;
+    if (ReadConsoleInputW(input, &record, 1, &consumed) == 0) {
+      *error = "Console input consume failed";
+      return LocalInputPollStatus_::Error;
+    }
+    if (consumed == 0) {
+      return LocalInputPollStatus_::Ready;
+    }
+  }
+
   const DWORD wait_rc = WaitForSingleObject(input, 0);
   if (wait_rc == WAIT_TIMEOUT) {
     return LocalInputPollStatus_::Ready;
@@ -344,7 +422,7 @@ LocalInputPollStatus_ PollLocalTerminalInput_(std::string *out,
     return LocalInputPollStatus_::Error;
   }
   if (read_bytes == 0) {
-    return LocalInputPollStatus_::Closed;
+    return LocalInputPollStatus_::Ready;
   }
   out->assign(buffer.data(), static_cast<size_t>(read_bytes));
   return LocalInputPollStatus_::Ready;
@@ -377,9 +455,10 @@ TerminalLoopOutcome_ BridgeInteractiveTerminal_(
   }
 
   LocalTerminalGeometry_ last_geometry = QueryLocalTerminalGeometry_();
-  constexpr int kReadTimeoutMs = 20;
+  constexpr int kIdleSleepMs = 5;
 
   while (true) {
+    bool had_activity = false;
     if (base_control.IsInterrupted()) {
       return {Err(EC::Terminate, "terminal.loop", "<terminal>",
                   "Terminal interrupted"),
@@ -406,6 +485,7 @@ TerminalLoopOutcome_ BridgeInteractiveTerminal_(
 
     const bool request_local_exit = ConsumeLocalExitByte_(&input);
     if (!input.empty()) {
+      had_activity = true;
       auto write_result = terminal_port.TerminalWrite(
           AMDomain::filesystem::TerminalWriteArgs{input}, base_control);
       if (!(write_result.rcm)) {
@@ -429,24 +509,23 @@ TerminalLoopOutcome_ BridgeInteractiveTerminal_(
         return {resize_result.rcm, true};
       }
       last_geometry = geometry;
+      had_activity = true;
     }
 
-    AMDomain::client::ClientControlComponent read_control(
-        base_control.ControlToken(), kReadTimeoutMs);
     auto read_result = terminal_port.TerminalRead(
-        AMDomain::filesystem::TerminalReadArgs{32U * 1024U}, read_control);
+        AMDomain::filesystem::TerminalReadArgs{32U * 1024U}, base_control);
     if (!(read_result.rcm)) {
-      if (read_result.rcm.code == EC::OperationTimeout) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        continue;
-      }
       return {read_result.rcm, true};
     }
     if (!read_result.data.output.empty()) {
       WriteTerminalBytes_(read_result.data.output);
+      had_activity = true;
     }
     if (read_result.data.eof) {
       return {OK, false};
+    }
+    if (!had_activity) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(kIdleSleepMs));
     }
   }
 }
@@ -1423,14 +1502,17 @@ ECM FilesystemInterfaceSerivce::Terminal(
     return rcm;
   }
 
+  ScopedPromptOutputCache_ prompt_cache_guard(&prompt_io_manager_);
   TerminalLoopOutcome_ loop_outcome =
       BridgeInteractiveTerminal_(*terminal_port, control);
-  WriteTerminalBytes_("\r\n");
 
   auto close_result = terminal_port->TerminalClose(
       AMDomain::filesystem::TerminalCloseArgs{loop_outcome.force_close},
       control);
   release_lease();
+  RestoreCliPromptStateAfterTerminalExit_();
+  prompt_cache_guard.Disable();
+  prompt_io_manager_.Print("");
 
   ECM final_rcm = loop_outcome.rcm;
   if (!(close_result.rcm) && final_rcm.code == EC::Success) {

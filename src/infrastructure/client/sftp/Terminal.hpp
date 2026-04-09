@@ -364,6 +364,10 @@ private:
         return OK;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
+        terminal_eof_ = libssh2_channel_eof(channel) != 0;
+        if (terminal_eof_) {
+          terminal_exit_status_ = libssh2_channel_get_exit_status(channel);
+        }
         return OK;
       }
       if (control.IsInterrupted()) {
@@ -475,6 +479,41 @@ public:
     const size_t max_bytes =
         (args.max_bytes == 0U ? static_cast<size_t>(32 * AMKB)
                               : args.max_bytes);
+    auto drain_output = [&]() -> ECM {
+      ECM read_rcm = ReadChunk_(terminal_channel_->channel, &out.data.output,
+                                max_bytes, control,
+                                [](LIBSSH2_CHANNEL *channel, char *buf,
+                                   size_t size) {
+                                  return libssh2_channel_read(channel, buf,
+                                                              size);
+                                });
+      if (!(read_rcm)) {
+        return read_rcm;
+      }
+      if (out.data.output.size() >= max_bytes || terminal_eof_) {
+        return OK;
+      }
+      ECM stderr_rcm = ReadChunk_(
+          terminal_channel_->channel, &out.data.output, max_bytes, control,
+          [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
+            return libssh2_channel_read_stderr(channel, buf, size);
+          });
+      if (!(stderr_rcm)) {
+        return stderr_rcm;
+      }
+      return OK;
+    };
+
+    out.rcm = drain_output();
+    if (!(out.rcm)) {
+      out.data.eof = terminal_eof_;
+      return out;
+    }
+    if (!out.data.output.empty() || terminal_eof_) {
+      out.data.eof = terminal_eof_;
+      return out;
+    }
+
     if (control.RemainingTimeMs().has_value()) {
       const WaitResult wr = WaitSocket_(detail::SocketWaitType::Read, control);
       if (wr == WaitResult::Interrupted) {
@@ -489,22 +528,14 @@ public:
         out.data.eof = terminal_eof_;
         return out;
       }
-    }
-    out.rcm = ReadChunk_(terminal_channel_->channel, &out.data.output,
-                         max_bytes, control,
-                         [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
-                           return libssh2_channel_read(channel, buf, size);
-                         });
-    if (out.rcm.code == ErrorCode::Success &&
-        out.data.output.size() < max_bytes) {
-      ECM err_rcm = ReadChunk_(
-          terminal_channel_->channel, &out.data.output, max_bytes, control,
-          [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
-            return libssh2_channel_read_stderr(channel, buf, size);
-          });
-      if (err_rcm.code != ErrorCode::Success) {
-        out.rcm = err_rcm;
+      if (wr == WaitResult::Error) {
+        out.rcm = {ErrorCode::SocketRecvError, "terminal.read",
+                   terminal_window_.term, "Socket error while waiting output"};
+        out.data.eof = terminal_eof_;
+        return out;
       }
+
+      out.rcm = drain_output();
     }
     out.data.eof = terminal_eof_;
     return out;
