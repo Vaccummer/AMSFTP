@@ -142,7 +142,11 @@ std::string CLIPromtRender::ResolveKeywordValue_(const std::string &key,
   }
 
   if (normalized == "nickname") {
-    return arg.current_nickname;
+    const std::string nickname = AMStr::BBCEscape(arg.current_nickname);
+    if (arg.current_client_connected || nickname.empty()) {
+      return nickname;
+    }
+    return AMStr::fmt("[disconnected_nickname]{}[/]", nickname);
   }
   if (normalized == "elapsed") {
     return AMStr::fmt("{}ms", std::max<int64_t>(0, arg.elapsed_time_ms));

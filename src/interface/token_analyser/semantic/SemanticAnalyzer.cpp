@@ -56,8 +56,12 @@ ClassifyNicknameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
   if (!runtime) {
     return AMTokenType::NonexistentNickname;
   }
-  if (runtime->GetClient(nickname)) {
-    return AMTokenType::Nickname;
+  if (auto client = runtime->GetClient(nickname); client) {
+    const auto state = client->ConfigPort().GetState();
+    if (state.data.status == AMDomain::client::ClientStatus::OK) {
+      return AMTokenType::Nickname;
+    }
+    return AMTokenType::DisconnectedNickname;
   }
   if (runtime->HostExists(nickname)) {
     return AMTokenType::UnestablishedNickname;
@@ -72,15 +76,15 @@ ClassifyNewHostNicknameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime
   ECM validate_rcm = AMDomain::host::HostService::ValidateFieldValue(
       AMDomain::host::ConRequest::Attr::nickname, nickname);
   if (!(validate_rcm)) {
-    return AMTokenType::InvalidValue;
+    return AMTokenType::InvalidNewNickname;
   }
   if (AMDomain::host::HostService::IsLocalNickname(nickname)) {
-    return AMTokenType::InvalidValue;
+    return AMTokenType::InvalidNewNickname;
   }
   if (runtime && runtime->HostExists(nickname)) {
-    return AMTokenType::InvalidValue;
+    return AMTokenType::InvalidNewNickname;
   }
-  return AMTokenType::ValidValue;
+  return AMTokenType::ValidNewNickname;
 }
 
 AMTokenType ClassifyVarZoneTokenType_(
@@ -335,6 +339,8 @@ SemanticAnalyzer::Classify(
 
   std::optional<CommandNode::OptionValueRule> pending_value_rule = std::nullopt;
   size_t pending_value_index = 0;
+  std::optional<AMDomain::host::HostService::HostSetFieldRef>
+      active_host_set_field = std::nullopt;
   auto consume_option_value = [&]() -> std::optional<AMCommandArgSemantic> {
     if (!pending_value_rule.has_value()) {
       return std::nullopt;
@@ -454,7 +460,38 @@ SemanticAnalyzer::Classify(
 
       if (*semantic_hint == AMCommandArgSemantic::HostAttr ||
           *semantic_hint == AMCommandArgSemantic::TaskId) {
-        token.type = AMTokenType::BuiltinArg;
+        if (*semantic_hint == AMCommandArgSemantic::HostAttr) {
+          active_host_set_field = std::nullopt;
+          const auto parsed_field =
+              AMDomain::host::HostService::ParseEditableHostSetField(
+                  unescaped_text);
+          if (parsed_field.has_value()) {
+            token.type = AMTokenType::BuiltinArg;
+            if (command_path == "host set") {
+              active_host_set_field = parsed_field.value();
+            }
+          } else {
+            token.type = AMTokenType::NonexistentBuiltinArg;
+          }
+        } else {
+          token.type = AMTokenType::BuiltinArg;
+        }
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+
+      if (*semantic_hint == AMCommandArgSemantic::HostAttrValue) {
+        if (!active_host_set_field.has_value()) {
+          token.type = AMTokenType::InvalidValue;
+        } else {
+          const ECM validate_rcm =
+              AMDomain::host::HostService::ValidateEditableHostSetFieldValue(
+                  active_host_set_field.value(), unescaped_text);
+          token.type =
+              (validate_rcm) ? AMTokenType::ValidValue : AMTokenType::InvalidValue;
+        }
         if (positional_consumed) {
           ++arg_index;
         }
@@ -514,6 +551,7 @@ SemanticAnalyzer::Classify(
     if (token.type == AMTokenType::Common && force_path && !has_clear_path_sign) {
       const AMTokenType nick_type = ClassifyNicknameTokenType_(runtime_, unescaped_text);
       if (nick_type == AMTokenType::Nickname ||
+          nick_type == AMTokenType::DisconnectedNickname ||
           nick_type == AMTokenType::UnestablishedNickname) {
         token.type = nick_type;
         if (positional_consumed) {

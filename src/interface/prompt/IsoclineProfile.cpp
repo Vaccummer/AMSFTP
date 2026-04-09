@@ -63,6 +63,12 @@ void ApplyProfileInitData_(
     (void)profile->DefineStyle("nickname",
                                style_arg.style.input_highlight.nickname);
   }
+  if (!AMStr::Strip(style_arg.style.input_highlight.disconnected_nickname)
+           .empty()) {
+    (void)profile->DefineStyle(
+        "disconnected_nickname",
+        style_arg.style.input_highlight.disconnected_nickname);
+  }
   if (!AMStr::Strip(style_arg.style.input_highlight.unestablished_nickname)
            .empty()) {
     (void)profile->DefineStyle(

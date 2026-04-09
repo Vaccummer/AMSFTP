@@ -93,6 +93,7 @@ struct InputHighlightStyle {
   std::string nonexistent_varname = "";
   std::string varvalue = "";
   std::string nickname = "";
+  std::string disconnected_nickname = "";
   std::string unestablished_nickname = "";
   std::string nonexistent_nickname = "";
   std::string valid_new_nickname = "";
@@ -106,7 +107,6 @@ struct InputHighlightStyle {
   std::string escapedsign = "";
   std::string bangsign = "";
   std::string shell_cmd = "";
-  std::string cwd = "";
   std::string number = "";
   std::string timestamp = "";
   std::string path_like = "";
@@ -124,6 +124,7 @@ struct InternalStyle {
 };
 
 struct PathHighlightStyle {
+  std::string cwd = "";
   std::string path_str = "";
   std::string root = "";
   std::string node_dir_name = "";

@@ -112,7 +112,7 @@ ECMData<PathInfo> TokenAnalyzerRuntimeAdapter::StatPath(
     AMDomain::client::ClientHandle client, const std::string &abs_path,
     int timeout_ms) const {
   if (!client) {
-    return {PathInfo{}, Err(EC::InvalidHandle, __func__, "<context>", "client is null")};
+    return {PathInfo{}, Err(EC::InvalidHandle, __func__, "", "client is null")};
   }
   auto control =
       AMDomain::client::ClientControlComponent(nullptr, timeout_ms);
@@ -142,15 +142,23 @@ std::string TokenAnalyzerRuntimeAdapter::ResolveInputHighlightStyle(
     return style_cfg.input_highlight.varvalue;
   case AMTokenType::Nickname:
     return style_cfg.input_highlight.nickname;
+  case AMTokenType::DisconnectedNickname:
+    return style_cfg.input_highlight.disconnected_nickname;
   case AMTokenType::UnestablishedNickname:
     return style_cfg.input_highlight.unestablished_nickname;
   case AMTokenType::NonexistentNickname:
     return style_cfg.input_highlight.nonexistent_nickname;
   case AMTokenType::BuiltinArg:
     return style_cfg.input_highlight.builtin_arg;
+  case AMTokenType::NonexistentBuiltinArg:
+    return style_cfg.input_highlight.nonexistent_builtin_arg;
   case AMTokenType::ValidValue:
-    return style_cfg.input_highlight.valid_new_nickname;
+    return style_cfg.value_query_highlight.valid_value;
   case AMTokenType::InvalidValue:
+    return style_cfg.value_query_highlight.invalid_value;
+  case AMTokenType::ValidNewNickname:
+    return style_cfg.input_highlight.valid_new_nickname;
+  case AMTokenType::InvalidNewNickname:
     return style_cfg.input_highlight.invalid_new_nickname;
   case AMTokenType::String:
     return style_cfg.input_highlight.string;
@@ -199,5 +207,4 @@ std::string TokenAnalyzerRuntimeAdapter::ResolvePathHighlightStyle(
 }
 
 } // namespace AMInterface::parser
-
 

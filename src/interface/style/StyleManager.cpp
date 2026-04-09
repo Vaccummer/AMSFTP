@@ -46,6 +46,8 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.input_highlight.varvalue;
   case StyleIndex::Nickname:
     return &cfg.input_highlight.nickname;
+  case StyleIndex::DisconnectedNickname:
+    return &cfg.input_highlight.disconnected_nickname;
   case StyleIndex::UnestablishedNickname:
     return &cfg.input_highlight.unestablished_nickname;
   case StyleIndex::NonexistentNickname:
@@ -73,7 +75,7 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
   case StyleIndex::ShellCmd:
     return &cfg.input_highlight.shell_cmd;
   case StyleIndex::Cwd:
-    return &cfg.input_highlight.cwd;
+    return &cfg.path.cwd;
   case StyleIndex::Number:
     return &cfg.input_highlight.number;
   case StyleIndex::Timestamp:

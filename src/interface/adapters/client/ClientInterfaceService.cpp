@@ -154,6 +154,53 @@ std::string BuildConnectSuccessLine_(const AMStyleService &style_service,
                     styled_nickname);
 }
 
+AMInterface::style::StyleIndex
+ResolveClientNicknameStyleByState_(const ClientHandle &client) {
+  if (!client) {
+    return AMInterface::style::StyleIndex::NonexistentNickname;
+  }
+  const auto cached = client->ConfigPort().GetState();
+  const bool connected =
+      (cached.rcm.code == EC::Success) &&
+      (cached.data.status == AMDomain::client::ClientStatus::OK);
+  return connected ? AMInterface::style::StyleIndex::Nickname
+                   : AMInterface::style::StyleIndex::DisconnectedNickname;
+}
+
+void PrintStyledNicknamesCompact_(
+    AMPromptIOManager &prompt, AMStyleService &style_service,
+    const std::vector<std::pair<std::string, AMInterface::style::StyleIndex>>
+        &nicknames) {
+  if (nicknames.empty()) {
+    prompt.Print("");
+    return;
+  }
+  constexpr size_t kMaxWidth = 80;
+  size_t current_width = 0;
+  std::ostringstream line;
+  for (const auto &entry : nicknames) {
+    const std::string &nickname = entry.first;
+    const size_t display_len = nickname.size();
+    const size_t separator_len = current_width == 0 ? 0 : 3;
+    if (current_width + separator_len + display_len > kMaxWidth &&
+        current_width > 0) {
+      prompt.Print(line.str());
+      line.str(std::string());
+      line.clear();
+      current_width = 0;
+    }
+    if (current_width > 0) {
+      line << "   ";
+      current_width += 3;
+    }
+    line << style_service.Format(nickname, entry.second);
+    current_width += display_len;
+  }
+  if (current_width > 0) {
+    prompt.Print(line.str());
+  }
+}
+
 ECM MergeStatus_(const ECM &current, const ECM &next) {
   return (next) ? current : next;
 }
@@ -346,9 +393,9 @@ void PrintClientStatusLine(AMPromptIOManager &prompt,
 
   const std::string styled_protocol =
       style_service.Format(padded_protocol, AMInterface::style::StyleIndex::Protocol);
+  const auto nickname_style = ResolveClientNicknameStyleByState_(client);
   const std::string styled_nickname =
-      style_service.Format(padded_nickname,
-                           AMInterface::style::StyleIndex::Nickname);
+      style_service.Format(padded_nickname, nickname_style);
   const std::string styled_cwd =
       style_service.Format(padded_cwd, AMInterface::style::StyleIndex::Cwd);
 
@@ -1575,9 +1622,16 @@ ECM ClientInterfaceService::RemoveClients(
 
   ECM last = OK;
   std::vector<std::string> valid_targets = {};
-  std::vector<std::string> show_targets = {};
+  struct RemovePreviewEntry {
+    std::string protocol = {};
+    std::string nickname = {};
+    std::string endpoint = {};
+    bool healthy = false;
+    std::string error = {};
+  };
+  std::vector<RemovePreviewEntry> preview_entries = {};
   valid_targets.reserve(targets.size());
-  show_targets.reserve(targets.size());
+  preview_entries.reserve(targets.size());
 
   for (const auto &target : targets) {
     const std::string stripped = AMStr::Strip(target);
@@ -1603,32 +1657,78 @@ ECM ClientInterfaceService::RemoveClients(
     }
 
     valid_targets.push_back(resolved);
-    show_targets.push_back(resolved);
+    auto client_result = client_service_.GetClient(resolved, true);
+    if (!(client_result.rcm) || !client_result.data) {
+      preview_entries.push_back(RemovePreviewEntry{
+          "[UNKNOWN]", resolved, "<unknown>", false, "Connection lost"});
+      continue;
+    }
+    const ClientHandle &client = client_result.data;
+    const auto request_info = client->ConfigPort().GetRequest();
+    const auto state = client->ConfigPort().GetState();
+    const std::string username = AMStr::Strip(request_info.username);
+    const std::string host = AMStr::Strip(request_info.hostname);
+    const std::string endpoint = username.empty()
+                                     ? AMStr::fmt("{}:{}", host, request_info.port)
+                                     : AMStr::fmt("{}@{}:{}", username, host,
+                                                  request_info.port);
+    const std::string protocol = AMStr::fmt(
+        "[{}]", AMStr::uppercase(AMStr::ToString(request_info.protocol)));
+    const bool healthy =
+        (state.rcm.code == EC::Success) &&
+        (state.data.status == AMDomain::client::ClientStatus::OK);
+    std::string error_text = AMStr::Strip(state.rcm.error);
+    if (!healthy && error_text.empty()) {
+      error_text = "Connection lost";
+    }
+    preview_entries.push_back(
+        RemovePreviewEntry{protocol, resolved, endpoint, healthy, error_text});
   }
 
-  if (show_targets.empty()) {
+  if (preview_entries.empty()) {
     return (last) ? Err(EC::ClientNotFound, kOp, "<targets>",
                         "No valid clients to remove")
                   : last;
   }
 
-  std::string target_line = "";
-  for (size_t i = 0; i < show_targets.size(); ++i) {
-    if (i > 0) {
-      target_line += ", ";
+  size_t protocol_width = 0;
+  size_t nickname_width = 0;
+  size_t endpoint_width = 0;
+  for (const auto &entry : preview_entries) {
+    protocol_width = std::max(protocol_width, entry.protocol.size());
+    nickname_width = std::max(nickname_width, entry.nickname.size());
+    endpoint_width = std::max(endpoint_width, entry.endpoint.size());
+  }
+
+  for (const auto &entry : preview_entries) {
+    const std::string styled_protocol = style_service_.Format(
+        AMStr::PadRightUtf8(entry.protocol, protocol_width),
+        AMInterface::style::StyleIndex::Protocol);
+    const auto nickname_style = entry.healthy
+                                    ? AMInterface::style::StyleIndex::Nickname
+                                    : AMInterface::style::StyleIndex::DisconnectedNickname;
+    const std::string styled_nickname = style_service_.Format(
+        AMStr::PadRightUtf8(entry.nickname, nickname_width),
+        nickname_style);
+    const std::string padded_endpoint =
+        AMStr::PadRightUtf8(entry.endpoint, endpoint_width);
+    if (entry.healthy) {
+      prompt_io_manager_.Print(AMStr::fmt("{} {} {} ✅", styled_protocol,
+                                          styled_nickname, padded_endpoint));
+    } else {
+      prompt_io_manager_.Print(AMStr::fmt("{} {} {} ❌ {}", styled_protocol,
+                                          styled_nickname, padded_endpoint,
+                                          entry.error));
     }
-    target_line += show_targets[i];
   }
 
   bool canceled = false;
   const bool confirmed = prompt_io_manager_.PromptYesNo(
-      AMStr::fmt("Remove clients: {} ? (y/N): ", target_line), &canceled);
+      "Are you sure to remove these clients? (y/n) :", &canceled);
   if (canceled || !confirmed) {
-    const std::string msg = "Remove clients canceled";
-    prompt_io_manager_.FmtPrint("🚫  {}\n", msg);
-    prompt_io_manager_.ErrorFormat(
-        Err(EC::ConfigCanceled, "remove_clients.confirm", target_line, msg));
-    return Err(EC::Terminate, "remove_clients.confirm", target_line, msg);
+    prompt_io_manager_.Print("🚫  Remove clients canceled");
+    return Err(EC::ConfigCanceled, "remove_clients.confirm", "",
+               "Remove clients canceled");
   }
 
   bool removed_current = false;
@@ -1720,16 +1820,26 @@ ECM ClientInterfaceService::ListClients(
   }
 
   if (!request.detail) {
-    std::unordered_set<std::string> established_set = {};
-    established_set.reserve(resolved_names.size());
+    std::vector<std::pair<std::string, AMInterface::style::StyleIndex>>
+        styled_nicknames = {};
+    styled_nicknames.reserve(resolved_names.size());
     for (const auto &name : resolved_names) {
-      const std::string normalized = NormalizeNickname(name);
-      if (!normalized.empty()) {
-        established_set.insert(normalized);
+      ClientHandle client = nullptr;
+      std::string display_name = name;
+      if (IsLocalNickname(name)) {
+        display_name = "local";
+        client = client_service_.GetLocalClient();
+      } else {
+        auto result = client_service_.GetClient(name, true);
+        if ((result.rcm)) {
+          client = result.data;
+        }
       }
+      styled_nicknames.emplace_back(
+          display_name, ResolveClientNicknameStyleByState_(client));
     }
-    hostui::PrintHostCompact_(prompt_io_manager_, style_service_,
-                              resolved_names, &established_set, nullptr);
+    PrintStyledNicknamesCompact_(prompt_io_manager_, style_service_,
+                                 styled_nicknames);
     return status;
   }
 

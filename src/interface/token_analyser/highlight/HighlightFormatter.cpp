@@ -36,8 +36,12 @@ ClassifyNicknameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
   if (!runtime) {
     return AMTokenType::NonexistentNickname;
   }
-  if (runtime->GetClient(nickname)) {
-    return AMTokenType::Nickname;
+  if (auto client = runtime->GetClient(nickname); client) {
+    const auto state = client->ConfigPort().GetState();
+    if (state.data.status == AMDomain::client::ClientStatus::OK) {
+      return AMTokenType::Nickname;
+    }
+    return AMTokenType::DisconnectedNickname;
   }
   if (runtime->HostExists(nickname)) {
     return AMTokenType::UnestablishedNickname;
@@ -197,6 +201,8 @@ int PriorityForType_(AMTokenType type) {
   case AMTokenType::VarNameMissing:
   case AMTokenType::ValidValue:
   case AMTokenType::InvalidValue:
+  case AMTokenType::ValidNewNickname:
+  case AMTokenType::InvalidNewNickname:
   case AMTokenType::DollarSign:
   case AMTokenType::LeftBraceSign:
   case AMTokenType::RightBraceSign:
@@ -204,10 +210,12 @@ int PriorityForType_(AMTokenType type) {
     return 80;
   case AMTokenType::AtSign:
   case AMTokenType::Nickname:
+  case AMTokenType::DisconnectedNickname:
   case AMTokenType::UnestablishedNickname:
   case AMTokenType::NonexistentNickname:
     return 70;
   case AMTokenType::BuiltinArg:
+  case AMTokenType::NonexistentBuiltinArg:
     return 65;
   case AMTokenType::Option:
     return 60;
@@ -584,11 +592,15 @@ public:
       switch (token.type) {
       case AMTokenType::IllegalCommand:
       case AMTokenType::Nickname:
+      case AMTokenType::DisconnectedNickname:
       case AMTokenType::UnestablishedNickname:
       case AMTokenType::NonexistentNickname:
       case AMTokenType::BuiltinArg:
+      case AMTokenType::NonexistentBuiltinArg:
       case AMTokenType::ValidValue:
       case AMTokenType::InvalidValue:
+      case AMTokenType::ValidNewNickname:
+      case AMTokenType::InvalidNewNickname:
       case AMTokenType::Path:
       case AMTokenType::Nonexistentpath:
       case AMTokenType::File:
@@ -620,7 +632,7 @@ public:
     }
 
     constexpr size_t kTokenTypeCount =
-        static_cast<size_t>(AMTokenType::InvalidValue) + 1;
+        static_cast<size_t>(AMTokenType::DisconnectedNickname) + 1;
     std::array<std::string, kTokenTypeCount> style_tags = {};
     for (size_t i = 0; i < kTokenTypeCount; ++i) {
       style_tags[i] =

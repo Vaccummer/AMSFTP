@@ -60,6 +60,8 @@ int PriorityForType_(AMTokenType type) {
   case AMTokenType::VarNameMissing:
   case AMTokenType::ValidValue:
   case AMTokenType::InvalidValue:
+  case AMTokenType::ValidNewNickname:
+  case AMTokenType::InvalidNewNickname:
   case AMTokenType::DollarSign:
   case AMTokenType::LeftBraceSign:
   case AMTokenType::RightBraceSign:
@@ -67,10 +69,12 @@ int PriorityForType_(AMTokenType type) {
     return 80;
   case AMTokenType::AtSign:
   case AMTokenType::Nickname:
+  case AMTokenType::DisconnectedNickname:
   case AMTokenType::UnestablishedNickname:
   case AMTokenType::NonexistentNickname:
     return 70;
   case AMTokenType::BuiltinArg:
+  case AMTokenType::NonexistentBuiltinArg:
     return 65;
   case AMTokenType::Option:
     return 60;

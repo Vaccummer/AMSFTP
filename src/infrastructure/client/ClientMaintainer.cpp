@@ -1,5 +1,6 @@
 #include "infrastructure/client/maintainer/ClientMaintainer.hpp"
 #include "domain/client/ClientDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <chrono>
@@ -11,44 +12,24 @@ namespace AMInfra::client::maintainer {
 namespace {
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientName = AMDomain::client::ClientName;
+using ClientStatus = AMDomain::client::ClientStatus;
 using DisconnectCallback = AMDomain::client::DisconnectCallback;
+using CheckResult = AMDomain::filesystem::CheckResult;
+using AMDomain::client::MaintainerService::ClampHeartbeatIntervalS;
+using AMDomain::client::MaintainerService::ClampHeartbeatTimeoutMs;
+using AMDomain::host::HostService::NormalizeNickname;
 
-[[nodiscard]] ClientName NormalizeClientName(const ClientName &name) {
-  const std::string normalized = AMStr::Strip(name);
-  const std::string lower = AMStr::lowercase(normalized);
-  return (lower.empty() || lower == "local") ? "local" : normalized;
-}
-
-[[nodiscard]] int ClampHeartbeatInterval(int interval_s) {
-  return static_cast<int>(
-      AMDomain::client::MaintainerService::ClampHeartbeatIntervalS(interval_s));
-}
-
-[[nodiscard]] int ClampCheckTimeout(int timeout_ms) {
-  return static_cast<int>(
-      AMDomain::client::MaintainerService::ClampHeartbeatTimeoutMs(timeout_ms));
-}
-
-[[nodiscard]] std::map<ClientName, ClientHandle>
-SnapshotClients(AMAtomic<std::map<ClientName, ClientHandle>> &clients) {
-  auto lock = clients.lock();
-  return lock.load();
-}
-
-[[nodiscard]] DisconnectCallback
-SnapshotDisconnectCallback(AMAtomic<DisconnectCallback> &disconnect_cb) {
-  auto lock = disconnect_cb.lock();
-  return lock.load();
-}
-
-[[nodiscard]] ECM CheckClientNow(const ClientHandle &client, int timeout_ms) {
+[[nodiscard]] ECMData<CheckResult> CheckClientNow(const ClientHandle &client,
+                                                  int timeout_ms) {
   if (!client) {
-    return {EC::InvalidHandle, "maintainer.check_client", "<client>",
-            "Client handle is null"};
+    return {{ClientStatus::NullHandle},
+            {EC::InvalidHandle, "maintainer.check_client", "<client>",
+             "Client handle is null"}};
   }
-  return client->IOPort()
-      .Check({}, AMDomain::client::ClientControlComponent(nullptr, timeout_ms))
-      .rcm;
+  auto checked = client->IOPort().Check(
+      {}, AMDomain::client::ClientControlComponent(nullptr, timeout_ms));
+  client->ConfigPort().SetState(checked);
+  return checked;
 }
 } // namespace
 
@@ -58,8 +39,8 @@ ClientMaintainer::ClientMaintainer(int heartbeat_interval_s,
                                    std::vector<ClientHandle> init_clients)
     : clients_(std::map<ClientName, ClientHandle>{}),
       disconnect_cb_(std::move(disconnect_callback)),
-      heartbeat_interval_s_(ClampHeartbeatInterval(heartbeat_interval_s)),
-      check_timeout_ms_(ClampCheckTimeout(check_timeout_ms)) {
+      heartbeat_interval_s_(ClampHeartbeatIntervalS(heartbeat_interval_s)),
+      check_timeout_ms_(ClampHeartbeatTimeoutMs(check_timeout_ms)) {
   (void)AddClients(init_clients, true);
 }
 
@@ -67,49 +48,57 @@ ClientMaintainer::~ClientMaintainer() { TerminateHeartbeat(); }
 
 ClientMaintainer::ClientHandle
 ClientMaintainer::GetClient(const ClientName &name) {
-  const ClientName normalized = NormalizeClientName(name);
+  const ClientName normalized = NormalizeNickname(name);
   auto clients = clients_.lock();
   auto it = clients->find(normalized);
   return it == clients->end() ? nullptr : it->second;
 }
 
 ECM ClientMaintainer::CheckClient(const ClientName &name) {
-  const ClientName normalized = NormalizeClientName(name);
+  const ClientName normalized = NormalizeNickname(name);
   auto client = GetClient(normalized);
   if (!client) {
     return {EC::ClientNotFound, "maintainer.get_client", normalized,
             "Client not found"};
   }
-  return CheckClientNow(client,
-                        check_timeout_ms_.load(std::memory_order_acquire));
+  auto checked =
+      CheckClientNow(client, check_timeout_ms_.load(std::memory_order_acquire));
+  return checked.rcm;
 }
 
 std::map<ClientMaintainer::ClientName, ClientMaintainer::ClientHandle>
 ClientMaintainer::GetAllClients() {
-  return SnapshotClients(clients_);
+  return clients_.lock().load();
 }
 
 bool ClientMaintainer::RemoveClient(const ClientName &name) {
-  const ClientName normalized = NormalizeClientName(name);
+  const ClientName normalized = NormalizeNickname(name);
   auto clients = clients_.lock();
   return clients->erase(normalized) > 0;
 }
 
 void ClientMaintainer::RemoveDisconnectedClients() {
-  const auto clients_snapshot = SnapshotClients(clients_);
-  const auto callback = SnapshotDisconnectCallback(disconnect_cb_);
+  const auto clients_snapshot = clients_.lock().load();
+  const auto callback = disconnect_cb_.lock().load();
   const int timeout_ms = check_timeout_ms_.load(std::memory_order_acquire);
   std::vector<ClientName> to_remove = {};
   to_remove.reserve(clients_snapshot.size());
 
   for (const auto &entry : clients_snapshot) {
-    const ECM check_rcm = CheckClientNow(entry.second, timeout_ms);
-    if (check_rcm.code == EC::Success) {
+    if (!entry.second) {
+      continue;
+    }
+    const auto cached = entry.second->ConfigPort().GetState();
+    if (cached.data.status != ClientStatus::OK) {
+      continue;
+    }
+    const auto checked = CheckClientNow(entry.second, timeout_ms);
+    if (checked.rcm.code == EC::Success) {
       continue;
     }
     to_remove.push_back(entry.first);
     if (callback) {
-      (void)CallCallbackSafe(callback, entry.second, check_rcm);
+      (void)CallCallbackSafe(callback, entry.second, checked.rcm);
     }
   }
 
@@ -136,7 +125,7 @@ bool ClientMaintainer::AddClient(ClientHandle client, bool overwrite) {
   if (raw_name.empty()) {
     return false;
   }
-  const ClientName normalized = NormalizeClientName(raw_name);
+  const ClientName normalized = NormalizeNickname(raw_name);
 
   auto clients = clients_.lock();
   auto it = clients->find(normalized);
@@ -159,13 +148,13 @@ ClientMaintainer::AddClients(const std::vector<ClientHandle> &clients,
 }
 
 void ClientMaintainer::SetHeartbeatInterval(int interval_s) {
-  heartbeat_interval_s_.store(ClampHeartbeatInterval(interval_s),
+  heartbeat_interval_s_.store(ClampHeartbeatIntervalS(interval_s),
                               std::memory_order_release);
   heartbeat_cv_.notify_all();
 }
 
 void ClientMaintainer::SetCheckTimeout(int timeout_ms) {
-  check_timeout_ms_.store(ClampCheckTimeout(timeout_ms),
+  check_timeout_ms_.store(ClampHeartbeatTimeoutMs(timeout_ms),
                           std::memory_order_release);
 }
 
@@ -233,21 +222,28 @@ void ClientMaintainer::HeartbeatLoop_() {
       return;
     }
 
-    const auto clients_snapshot = SnapshotClients(clients_);
-    const auto callback = SnapshotDisconnectCallback(disconnect_cb_);
+    const auto clients_snapshot = clients_.lock().load();
+    const auto callback = disconnect_cb_.lock().load();
     const int timeout_ms = check_timeout_ms_.load(std::memory_order_acquire);
     for (const auto &entry : clients_snapshot) {
       if (heartbeat_state_.load(std::memory_order_acquire) !=
           HeartbeatState::Running) {
         break;
       }
-      const ECM check_rcm = CheckClientNow(entry.second, timeout_ms);
-      if (check_rcm.code != EC::Success && callback) {
-        (void)CallCallbackSafe(callback, entry.second, check_rcm);
+      if (!entry.second) {
+        continue;
+      }
+      const auto cached = entry.second->ConfigPort().GetState();
+      if (cached.data.status != ClientStatus::OK) {
+        continue;
+      }
+      const auto checked = CheckClientNow(entry.second, timeout_ms);
+      if (checked.rcm.code != EC::Success && callback) {
+        (void)CallCallbackSafe(callback, entry.second, checked.rcm);
       }
     }
 
-    const int interval_s = ClampHeartbeatInterval(
+    const int interval_s = ClampHeartbeatIntervalS(
         heartbeat_interval_s_.load(std::memory_order_acquire));
     std::unique_lock<std::mutex> wait_lock(heartbeat_wait_mtx_);
     (void)heartbeat_cv_.wait_for(

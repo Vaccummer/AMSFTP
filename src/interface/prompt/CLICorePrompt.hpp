@@ -16,6 +16,7 @@ public:
 
   struct RenderArg {
     std::string current_nickname = "local";
+    bool current_client_connected = true;
     int64_t elapsed_time_ms = 0;
     ECM result = OK;
   };

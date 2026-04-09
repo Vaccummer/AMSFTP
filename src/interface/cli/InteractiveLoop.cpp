@@ -24,6 +24,7 @@ namespace AMInterface::cli {
 
 namespace {
 using OS_TYPE = AMDomain::client::OS_TYPE;
+using ClientStatus = AMDomain::client::ClientStatus;
 using DocumentKind = AMDomain::config::DocumentKind;
 constexpr int kEventIdCorePromptFilesystemCacheClear = 7001;
 constexpr int kEventIdCorePromptHighlightCacheClear = 7002;
@@ -378,6 +379,14 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 
     prompt_arg.current_nickname =
         AMStr::Strip(managers.application.client_service->CurrentNickname());
+    prompt_arg.current_client_connected = true;
+    if (auto client =
+            ResolveActiveClient_(managers.application.client_service.Get());
+        client) {
+      const auto state = client->ConfigPort().GetState();
+      prompt_arg.current_client_connected =
+          (state.data.status == ClientStatus::OK);
+    }
     prompt_arg.elapsed_time_ms = 0;
     prompt_arg.result = OK;
 
@@ -460,7 +469,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     } catch (const CLI::ParseError &e) {
       const std::string parse_msg = e.what();
       managers.interfaces.prompt_io_manager->Print(parse_msg);
-      ECM parse_rcm = {EC::InvalidArg, __func__, "<context>", parse_msg};
+      ECM parse_rcm = {EC::InvalidArg, __func__, "", parse_msg};
       store_exit_code(static_cast<int>(parse_rcm.code));
       prompt_arg.result = parse_rcm;
       prompt_arg.elapsed_time_ms = std::max<int64_t>(
@@ -489,4 +498,3 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
-
