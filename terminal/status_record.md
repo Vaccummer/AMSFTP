@@ -109,3 +109,44 @@ Use one short entry per update.
 - Status: Accepted
 - Decision: raw stream handling stays in interface terminal loop, not prompt formatting utilities.
 - Reason: prevent stream corruption and broken full-screen behavior.
+
+## Cache-Sign Audit (2026-04-09)
+
+### Findings (ordered by severity)
+
+- High | Potential cache depth underflow / double flush
+  - Location: `src/interface/prompt/PromptCli.cpp` (`SetCacheOutputOnly`, `FlushCachedOutput`)
+  - Risk: repeated disable calls can underflow depth or flush more than once.
+  - Mitigation: clamp at zero and flush only on transition from depth `1 -> 0`.
+
+- High | Cache bypass in low-level isocline write paths
+  - Location: `src/interface/prompt/PromptCli.cpp` (`PrintSyncLocked_`, `PrintSyncRefreshLocked_`, `ClearScreen`, `UseAlternateScreen`, `SetCursorVisible`)
+  - Risk: output still reaches terminal when cache sign is active.
+  - Mitigation: route all isocline writes through cache gate.
+
+- Medium | Terminal teardown flush ordering
+  - Location: `src/interface/adapters/filesystem/FilesystemInterfaceSerivce.cpp` (`Terminal`)
+  - Risk: cached callback/error output may not flush on every exit/failure branch.
+  - Mitigation: keep one scoped cache guard over terminal bridge/close/restore and release after restore.
+
+- Medium | Callback ordering during raw-mode teardown
+  - Location: `src/interface/adapters/client/ClientInterfaceService.cpp` (disconnect callback print path)
+  - Risk: disconnect messages interleave with raw-screen redraw.
+  - Mitigation: rely on prompt cache sign during terminal session and flush after terminal restore.
+
+- Low | PTY byte stream accidentally captured by prompt cache
+  - Location: `src/interface/adapters/filesystem/FilesystemInterfaceSerivce.cpp` (`WriteTerminalBytes_`)
+  - Risk: interactive apps freeze if PTY bytes are cached.
+  - Mitigation: keep PTY stream on direct `fwrite` path; cache applies only to prompt/isocline output.
+
+### Manual Regression Checklist
+
+- `term` enter
+  - Run `term` on a connected SFTP client and verify terminal output appears immediately.
+  - Trigger a background callback print while terminal is active and verify it is deferred.
+- `vim` exit
+  - Start `vim`, quit, and verify prompt prefix appears immediately without extra keypress.
+- `htop` exit
+  - Start `htop`, quit, and verify no stuck blank screen and no delayed redraw requirement.
+- disconnect callback timing
+  - Force remote disconnect during terminal mode and verify disconnect message appears after terminal teardown, not mid-TUI frame.
