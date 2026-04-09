@@ -29,6 +29,7 @@ static const std::string inline_hint_key = "ic-hint";
 static const std::string default_prompt_key = "ic-prompt";
 static const std::string invalid_value_key = "typein_invalid_value";
 static const std::string valid_value_key = "typein_valid_value";
+static const std::string operation_abort_text = "Operation Abort !";
 static const std::string default_profile_name = "*";
 } // namespace kvars
 
@@ -95,6 +96,7 @@ public:
   }
 
   void Print(const std::string &text);
+  void PrintOperationAbort();
 
   template <typename... Args> void FmtPrint(Args &&...args) {
     std::string output = AMStr::fmt(std::forward<Args>(args)...);
