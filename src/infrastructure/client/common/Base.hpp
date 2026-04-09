@@ -1748,6 +1748,7 @@ private:
   std::unique_ptr<AMDomain::client::IClientConfigPort> config_port_;
   std::unique_ptr<AMDomain::client::IClientControlToken> control_port_;
   std::unique_ptr<AMDomain::client::IClientIOPort> io_port_;
+  std::unique_ptr<AMDomain::client::IClientTerminalPort> terminal_port_;
 
 public:
   using amf = std::shared_ptr<ClientControlToken>;
@@ -1759,7 +1760,9 @@ public:
       std::unique_ptr<AMDomain::client::IClientConfigPort> config_port,
       std::unique_ptr<AMDomain::client::IClientControlToken> control_port,
       std::unique_ptr<AMDomain::client::IClientIOPort> io_port,
-      ClientID uid = "") {
+      ClientID uid = "",
+      std::unique_ptr<AMDomain::client::IClientTerminalPort> terminal_port =
+          nullptr) {
     if (!metadata_port || !config_port || !control_port || !io_port) {
       throw std::invalid_argument(
           "AMClient requires non-null metadata/config/control/io ports");
@@ -1768,6 +1771,7 @@ public:
     this->config_port_ = std::move(config_port);
     this->control_port_ = std::move(control_port);
     this->io_port_ = std::move(io_port);
+    this->terminal_port_ = std::move(terminal_port);
     this->uid_ = std::move(uid);
   }
 
@@ -1834,6 +1838,22 @@ public:
    */
   [[nodiscard]] const AMDomain::client::IClientIOPort &IOPort() const override {
     return *io_port_;
+  }
+
+  /**
+   * @brief Return terminal port when supported.
+   */
+  [[nodiscard]] AMDomain::client::IClientTerminalPort *TerminalPort()
+      override {
+    return terminal_port_.get();
+  }
+
+  /**
+   * @brief Return terminal port when supported.
+   */
+  [[nodiscard]] const AMDomain::client::IClientTerminalPort *TerminalPort()
+      const override {
+    return terminal_port_.get();
   }
 };
 } // namespace AMInfra::client

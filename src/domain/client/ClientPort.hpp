@@ -456,6 +456,100 @@ public:
 };
 
 /**
+ * @brief Port for interactive terminal operations.
+ */
+class IClientTerminalPort {
+public:
+  /**
+   * @brief Virtual destructor for polymorphic use.
+   */
+  virtual ~IClientTerminalPort() = default;
+
+  /**
+   * @brief Register one trace callback for terminal worker records.
+   */
+  virtual void RegisterTraceCallback(TraceCallback trace_cb) = 0;
+
+  /**
+   * @brief Unregister current trace callback.
+   */
+  virtual void UnregisterTraceCallback() = 0;
+
+  /**
+   * @brief Register one connect-state callback for terminal connect progress.
+   */
+  virtual void RegisterConnectStateCallback(
+      ConnectStateCallback connect_state_cb) = 0;
+
+  /**
+   * @brief Unregister current connect-state callback.
+   */
+  virtual void UnregisterConnectStateCallback() = 0;
+
+  /**
+   * @brief Register one auth callback for terminal auth flow.
+   */
+  virtual void RegisterAuthCallback(AuthCallback auth_cb) = 0;
+
+  /**
+   * @brief Unregister current auth callback.
+   */
+  virtual void UnregisterAuthCallback() = 0;
+
+  /**
+   * @brief Register one known-host verification callback for terminal flow.
+   */
+  virtual void RegisterKnownHostCallback(KnownHostCallback known_host_cb) = 0;
+
+  /**
+   * @brief Unregister current known-host verification callback.
+   */
+  virtual void UnregisterKnownHostCallback() = 0;
+
+  /**
+   * @brief Open or attach one interactive terminal session.
+   */
+  virtual ECMData<AMDomain::filesystem::TerminalOpenResult>
+  TerminalOpen(const AMDomain::filesystem::TerminalOpenArgs &args,
+               const ClientControlComponent &control = {}) = 0;
+
+  /**
+   * @brief Read remote terminal bytes.
+   */
+  virtual ECMData<AMDomain::filesystem::TerminalReadResult>
+  TerminalRead(const AMDomain::filesystem::TerminalReadArgs &args,
+               const ClientControlComponent &control = {}) = 0;
+
+  /**
+   * @brief Write local terminal bytes to the remote shell.
+   */
+  virtual ECMData<AMDomain::filesystem::TerminalWriteResult>
+  TerminalWrite(const AMDomain::filesystem::TerminalWriteArgs &args,
+                const ClientControlComponent &control = {}) = 0;
+
+  /**
+   * @brief Resize the remote terminal.
+   */
+  virtual ECMData<AMDomain::filesystem::TerminalResizeResult>
+  TerminalResize(const AMDomain::filesystem::TerminalResizeArgs &args,
+                 const ClientControlComponent &control = {}) = 0;
+
+  /**
+   * @brief Close the interactive terminal session.
+   */
+  virtual ECMData<AMDomain::filesystem::TerminalCloseResult>
+  TerminalClose(const AMDomain::filesystem::TerminalCloseArgs &args,
+                const ClientControlComponent &control = {}) = 0;
+
+  /**
+   * @brief Query whether terminal mode is supported and active.
+   */
+  virtual ECMData<AMDomain::filesystem::TerminalStatusResult>
+  TerminalStatus(const AMDomain::filesystem::TerminalStatusArgs &args,
+                 const ClientControlComponent &control = {}) = 0;
+};
+
+/**
  * @brief Port for IO worker operations.
  */
 class IClientIOPort {
@@ -685,6 +779,16 @@ public:
    * @brief Return IO port.
    */
   [[nodiscard]] virtual const IClientIOPort &IOPort() const = 0;
+
+  /**
+   * @brief Return terminal port, or nullptr when unsupported.
+   */
+  [[nodiscard]] virtual IClientTerminalPort *TerminalPort() = 0;
+
+  /**
+   * @brief Return terminal port, or nullptr when unsupported.
+   */
+  [[nodiscard]] virtual const IClientTerminalPort *TerminalPort() const = 0;
 };
 
 using ClientID = IClientPort::ID;
