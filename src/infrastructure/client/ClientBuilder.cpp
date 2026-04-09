@@ -1,5 +1,6 @@
 #include "domain/client/ClientDomainService.hpp"
 #include "domain/client/ClientPort.hpp"
+#include "domain/terminal/TerminalPort.hpp"
 #include "infrastructure/client/common/Base.hpp"
 #include "infrastructure/client/ftp/FTP.hpp"
 #include "infrastructure/client/local/Local.hpp"
@@ -31,14 +32,10 @@ CreateClient(const ConRequest &request,
       std::make_unique<AMInfra::client::ClientConfigStore>(normalized);
   auto control_port = std::make_unique<AMInfra::client::ClientControlToken>();
   std::unique_ptr<AMDomain::client::IClientIOPort> io_port;
-  std::unique_ptr<AMDomain::client::IClientTerminalPort> terminal_port;
   ClientID UID;
 
   switch (normalized.protocol) {
   case ClientProtocol::SFTP:
-    terminal_port =
-        std::make_unique<AMInfra::client::SFTP::terminal::SSHTerminalPort>(
-            normalized, private_keys, trace_cb, auth_cb, known_host_cb);
     io_port = std::make_unique<AMInfra::client::SFTP::AMSFTPIOCore>(
         config_port.get(), control_port.get(), private_keys,
         std::move(trace_cb), std::move(auth_cb), std::move(known_host_cb));
@@ -63,8 +60,48 @@ CreateClient(const ConRequest &request,
   return {OK,
           std::make_shared<AMInfra::client::BaseClient>(
               std::move(metadata_port), std::move(config_port),
-              std::move(control_port), std::move(io_port), UID,
-              std::move(terminal_port))};
+              std::move(control_port), std::move(io_port), UID)};
 }
 
 } // namespace AMDomain::client
+
+namespace AMDomain::terminal {
+
+ECMData<TerminalHandle>
+CreateTerminalPort(const ClientHandle &client) {
+  if (!client) {
+    return {nullptr,
+            Err(EC::InvalidHandle, "CreateTerminalPort", "<client>",
+                "Client handle is null")};
+  }
+  const ConRequest request = client->ConfigPort().GetRequest();
+  if (request.protocol != AMDomain::host::ClientProtocol::SFTP) {
+    return {nullptr,
+            Err(EC::OperationUnsupported, "CreateTerminalPort", request.nickname,
+                "Current client protocol does not support SSH terminal")};
+  }
+
+  auto *sftp_core =
+      dynamic_cast<AMInfra::client::SFTP::AMSFTPIOCore *>(&client->IOPort());
+  if (sftp_core == nullptr) {
+    return {nullptr,
+            Err(EC::OperationUnsupported, "CreateTerminalPort", request.nickname,
+                "Client IO port cannot provide SFTP session reuse")};
+  }
+  if (sftp_core->session == nullptr) {
+    return {nullptr,
+            Err(EC::NoConnection, "CreateTerminalPort", request.nickname,
+                "Client session is not connected")};
+  }
+
+  auto terminal =
+      std::make_shared<AMInfra::client::SFTP::terminal::SSHTerminalPort>(
+          client, request, sftp_core);
+  if (!terminal) {
+    return {nullptr, Err(EC::InvalidHandle, "CreateTerminalPort", request.nickname,
+                         "Failed to create terminal handle")};
+  }
+  return {std::move(terminal), OK};
+}
+
+} // namespace AMDomain::terminal

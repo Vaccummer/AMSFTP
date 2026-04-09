@@ -8,6 +8,7 @@
 #include "application/log/LoggerAppService.hpp"
 #include "application/prompt/PromptHistoryManager.hpp"
 #include "application/prompt/PromptProfileManager.hpp"
+#include "application/terminal/TermAppService.hpp"
 #include "application/var/VarAppService.hpp"
 #include "domain/config/ConfigSchema.hpp"
 #include "domain/transfer/TransferPort.hpp"
@@ -62,6 +63,8 @@ struct AppServiceBuildState final {
   std::unique_ptr<AMApplication::host::KnownHostsAppService>
       known_hosts_service = nullptr;
   std::unique_ptr<AMApplication::client::ClientAppService> client_service =
+      nullptr;
+  std::unique_ptr<AMApplication::terminal::TermAppService> terminal_service =
       nullptr;
   std::unique_ptr<AMApplication::filesystem::FilesystemAppService>
       filesystem_service = nullptr;
@@ -316,6 +319,10 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
       std::make_unique<AMApplication::client::ClientAppService>(
           snapshots.client_service_arg);
   state->client_service->BindHostConfigManager(state->host_service.get());
+  state->client_service->SetPrivateKeys(snapshots.host_config_arg.private_keys);
+
+  state->terminal_service =
+      std::make_unique<AMApplication::terminal::TermAppService>();
 
   state->filesystem_service =
       std::make_unique<AMApplication::filesystem::FilesystemAppService>(
@@ -513,6 +520,7 @@ ECM BuildClientInterfaceServices_(
     const AppServiceBuildState &app_state, InterfaceServiceBuildState *state) {
   if (state == nullptr || app_state.config_service == nullptr ||
       app_state.client_service == nullptr ||
+      app_state.terminal_service == nullptr ||
       app_state.filesystem_service == nullptr ||
       app_state.host_service == nullptr ||
       app_state.known_hosts_service == nullptr ||
@@ -529,7 +537,8 @@ ECM BuildClientInterfaceServices_(
 
   state->client_interface_service =
       std::make_unique<AMInterface::client::ClientInterfaceService>(
-          *app_state.client_service, *app_state.filesystem_service,
+          *app_state.client_service, *app_state.terminal_service,
+          *app_state.filesystem_service,
           *app_state.host_service, *app_state.known_hosts_service,
           *app_state.prompt_io_manager, *app_state.style_service);
   state->client_interface_service->SetDefaultControlToken(task_control_token);
@@ -537,7 +546,8 @@ ECM BuildClientInterfaceServices_(
 
   state->filesystem_interface_service =
       std::make_unique<AMInterface::filesystem::FilesystemInterfaceSerivce>(
-          *app_state.client_service, *app_state.filesystem_service,
+          *app_state.client_service, *app_state.terminal_service,
+          *app_state.host_service, *app_state.filesystem_service,
           *app_state.style_service, *app_state.prompt_io_manager);
   state->filesystem_interface_service->SetDefaultControlToken(
       task_control_token);
@@ -678,6 +688,8 @@ void BindServicesToCliManagers_(BootstrapServices *runtime,
       std::move(app_state->known_hosts_service));
   runtime->managers.application.client_service.SetInstance(
       std::move(app_state->client_service));
+  runtime->managers.application.terminal_service.SetInstance(
+      std::move(app_state->terminal_service));
   runtime->managers.application.filesystem_service.SetInstance(
       std::move(app_state->filesystem_service));
   runtime->managers.application.var_service.SetInstance(

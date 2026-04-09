@@ -189,6 +189,7 @@ void BindHostCommands(CommandNode *root, CliArgsPool &args,
   if (host_set_node) {
     host_set_node->AddPositionalRule(0, Sem::HostNickname, false);
     host_set_node->AddPositionalRule(1, Sem::HostAttr, false);
+    host_set_node->AddPositionalRule(2, Sem::HostAttrValue, false);
   }
 }
 
@@ -534,6 +535,25 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     cp_node->AddPositionalRule(0, Sem::Path, true);
   }
 
+  CommandNode *move_node = root->AddFunction(
+      "move", "Move one source to destination directory",
+      args, &CliArgsPool::fs, &CliFilesystemArgs::move);
+  commands.fs.move = move_node ? move_node->app : nullptr;
+  if (commands.fs.move) {
+    commands.fs.move->add_option("src", args.fs.move.src, "Source path")
+        ->required()
+        ->expected(1, 1);
+    commands.fs.move
+        ->add_option("dst", args.fs.move.dst, "Destination directory path")
+        ->expected(0, 1);
+  }
+  if (move_node) {
+    move_node->AddFlag("-f", "--force", args.fs.move.force,
+                       "Overwrite existing targets");
+    move_node->AddPositionalRule(0, Sem::Path, false);
+    move_node->AddPositionalRule(1, Sem::Path, false);
+  }
+
   CommandNode *clone_node =
       root->AddFunction("clone", "Clone one source to one destination (cp -c)",
                         args, &CliArgsPool::fs, &CliFilesystemArgs::clone);
@@ -705,6 +725,20 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
                         "Command timeout in milliseconds (<=0 means no "
                         "timeout)");
   }
+
+  CommandNode *term_node =
+      root->AddFunction("term",
+                        "Open an interactive terminal on the current client "
+                        "(local escape: Ctrl+])",
+                        args, &CliArgsPool::fs, &CliFilesystemArgs::term);
+  commands.fs.term = term_node ? term_node->app : nullptr;
+  if (commands.fs.term) {
+    commands.fs.term
+        ->add_option("target", args.fs.term.request.target,
+                     "Optional terminal target spec: [nickname]@[channel] or channel")
+        ->expected(0, 1);
+  }
+  (void)term_node;
 
   CommandNode *bash_node = root->AddFunction("bash", "Enter interactive mode",
                                              args, &CliArgsPool::fs, &CliFilesystemArgs::bash);
@@ -912,14 +946,14 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   if (!cli_commands.args) {
     const std::string msg = "CLI args pool is not initialized";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::UnknownError, __func__, "<context>", msg};
+    ctx.rcm = {EC::UnknownError, __func__, "", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     return;
   }
   if (!ctx.task_control_token) {
     const std::string msg = "CLI session task control token is not initialized";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, __func__, "<context>", msg};
+    ctx.rcm = {EC::InvalidArg, __func__, "", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     if (cli_commands.args) {
       cli_commands.args->ClearActive();
@@ -941,7 +975,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   if (!any_parsed) {
     std::string msg = "No valid command provided";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, __func__, "<context>", msg};
+    ctx.rcm = {EC::InvalidArg, __func__, "", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     args.ClearActive();
     return;
@@ -959,7 +993,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
       msg = "Invalid client command";
     }
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, __func__, "<context>", msg};
+    ctx.rcm = {EC::InvalidArg, __func__, "", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     args.ClearActive();
     return;
@@ -981,8 +1015,5 @@ void DispatchCliCommands(const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
-
-
-
 
 
