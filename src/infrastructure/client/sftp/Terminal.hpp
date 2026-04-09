@@ -223,8 +223,8 @@ private:
     return OK;
   }
 
-  [[nodiscard]] std::string
-  ResolveTargetChannelName_(const std::optional<std::string> &requested_name) const {
+  [[nodiscard]] std::string ResolveTargetChannelName_(
+      const std::optional<std::string> &requested_name) const {
     const std::string requested =
         requested_name.has_value() ? AMStr::Strip(*requested_name) : "";
     if (!requested.empty()) {
@@ -238,12 +238,13 @@ private:
 
   [[nodiscard]] std::string
   ResolveTargetChannelName_(const std::string &requested_name) const {
-    return ResolveTargetChannelName_(std::optional<std::string>(requested_name));
+    return ResolveTargetChannelName_(
+        std::optional<std::string>(requested_name));
   }
 
-  [[nodiscard]] ECMData<ChannelCtx *> ResolveChannelForOp_(
-      const std::optional<std::string> &requested_name,
-      const char *action_name) {
+  [[nodiscard]] ECMData<ChannelCtx *>
+  ResolveChannelForOp_(const std::optional<std::string> &requested_name,
+                       const char *action_name) {
     const std::string target_name = ResolveTargetChannelName_(requested_name);
     if (target_name.empty()) {
       return {nullptr,
@@ -252,16 +253,15 @@ private:
     }
     auto it = channels_.find(target_name);
     if (it == channels_.end()) {
-      return {nullptr,
-              Err(EC::InvalidArg, action_name, target_name,
-                  "Target channel does not exist")};
+      return {nullptr, Err(EC::InvalidArg, action_name, target_name,
+                           "Target channel does not exist")};
     }
     return {&(it->second), OK};
   }
 
-  [[nodiscard]] ECM OpenOneChannel_(
-      ChannelCtx *ctx,
-      const AMDomain::client::ClientControlComponent &control) {
+  [[nodiscard]] ECM
+  OpenOneChannel_(ChannelCtx *ctx,
+                  const AMDomain::client::ClientControlComponent &control) {
     if (!ctx) {
       return {ErrorCode::InvalidArg, "terminal.open", request_.hostname,
               "Invalid channel context"};
@@ -299,8 +299,9 @@ private:
       return ecm;
     }
 
-    auto shell_res =
-        NBCall_(control, [&]() { return libssh2_channel_shell(ctx->channel->channel); });
+    auto shell_res = NBCall_(control, [&]() {
+      return libssh2_channel_shell(ctx->channel->channel);
+    });
     if (!shell_res || shell_res.value != 0) {
       ECM ecm = {LastEC_(), "terminal.start_shell", ctx->window.term,
                  LastError_()};
@@ -365,9 +366,9 @@ public:
 
   [[nodiscard]] ConRequest GetRequest() const override { return request_; }
 
-  ECMData<AMT::ChannelOpenResult>
-  OpenChannel(const AMT::ChannelOpenArgs &open_args,
-              const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::ChannelOpenResult> OpenChannel(
+      const AMT::ChannelOpenArgs &open_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelOpenResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
 
@@ -406,9 +407,9 @@ public:
     return out;
   }
 
-  ECMData<AMT::ChannelActiveResult>
-  ActiveChannel(const AMT::ChannelActiveArgs &active_args,
-                const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::ChannelActiveResult> ActiveChannel(
+      const AMT::ChannelActiveArgs &active_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     (void)control;
     ECMData<AMT::ChannelActiveResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
@@ -439,9 +440,9 @@ public:
     return out;
   }
 
-  ECMData<AMT::ChannelReadResult>
-  ReadChannel(const AMT::ChannelReadArgs &read_args,
-              const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::ChannelReadResult> ReadChannel(
+      const AMT::ChannelReadArgs &read_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelReadResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
 
@@ -453,7 +454,8 @@ public:
       return out;
     }
 
-    const std::string target_name = ResolveTargetChannelName_(read_args.channel_name);
+    const std::string target_name =
+        ResolveTargetChannelName_(read_args.channel_name);
     auto *ctx = resolve_result.data;
     out.data.channel_name = target_name;
 
@@ -469,22 +471,22 @@ public:
                                    : read_args.max_bytes);
 
     auto drain_output = [&]() -> ECM {
-      ECM read_rcm = ReadChunk_(ctx, &out.data.output, max_bytes, control,
-                                [](LIBSSH2_CHANNEL *channel, char *buf,
-                                   size_t size) {
-                                  return libssh2_channel_read(channel, buf, size);
-                                });
+      ECM read_rcm =
+          ReadChunk_(ctx, &out.data.output, max_bytes, control,
+                     [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
+                       return libssh2_channel_read(channel, buf, size);
+                     });
       if (!(read_rcm)) {
         return read_rcm;
       }
       if (out.data.output.size() >= max_bytes || ctx->eof) {
         return OK;
       }
-      ECM stderr_rcm = ReadChunk_(
-          ctx, &out.data.output, max_bytes, control,
-          [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
-            return libssh2_channel_read_stderr(channel, buf, size);
-          });
+      ECM stderr_rcm =
+          ReadChunk_(ctx, &out.data.output, max_bytes, control,
+                     [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
+                       return libssh2_channel_read_stderr(channel, buf, size);
+                     });
       if (!(stderr_rcm)) {
         return stderr_rcm;
       }
@@ -529,9 +531,9 @@ public:
     return out;
   }
 
-  ECMData<AMT::ChannelWriteResult>
-  WriteChannel(const AMT::ChannelWriteArgs &write_args,
-               const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::ChannelWriteResult> WriteChannel(
+      const AMT::ChannelWriteArgs &write_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelWriteResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
 
@@ -542,7 +544,8 @@ public:
       return out;
     }
 
-    const std::string target_name = ResolveTargetChannelName_(write_args.channel_name);
+    const std::string target_name =
+        ResolveTargetChannelName_(write_args.channel_name);
     auto *ctx = resolve_result.data;
     out.data.channel_name = target_name;
 
@@ -562,7 +565,8 @@ public:
         continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
-        const WaitResult wr = WaitSocket_(detail::SocketWaitType::Write, control);
+        const WaitResult wr =
+            WaitSocket_(detail::SocketWaitType::Write, control);
         if (wr == WaitResult::Ready) {
           continue;
         }
@@ -590,9 +594,9 @@ public:
     return out;
   }
 
-  ECMData<AMT::ChannelResizeResult>
-  ResizeChannel(const AMT::ChannelResizeArgs &resize_args,
-                const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::ChannelResizeResult> ResizeChannel(
+      const AMT::ChannelResizeArgs &resize_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelResizeResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
 
@@ -603,7 +607,8 @@ public:
       return out;
     }
 
-    const std::string target_name = ResolveTargetChannelName_(resize_args.channel_name);
+    const std::string target_name =
+        ResolveTargetChannelName_(resize_args.channel_name);
     auto *ctx = resolve_result.data;
     out.data.channel_name = target_name;
 
@@ -630,14 +635,15 @@ public:
     return out;
   }
 
-  ECMData<AMT::ChannelCloseResult>
-  CloseChannel(const AMT::ChannelCloseArgs &close_args,
-               const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::ChannelCloseResult> CloseChannel(
+      const AMT::ChannelCloseArgs &close_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     (void)control;
     ECMData<AMT::ChannelCloseResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
 
-    const std::string target_name = ResolveTargetChannelName_(close_args.channel_name);
+    const std::string target_name =
+        ResolveTargetChannelName_(close_args.channel_name);
     if (target_name.empty()) {
       out.rcm = Err(EC::InvalidArg, "terminal.close", "channel_name",
                     "No channel_name provided and no active channel set");
@@ -675,9 +681,9 @@ public:
     return out;
   }
 
-  ECMData<AMT::ChannelListResult>
-  ListChannels(const AMT::ChannelListArgs &list_args,
-               const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::ChannelListResult> ListChannels(
+      const AMT::ChannelListArgs &list_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     (void)list_args;
     (void)control;
     ECMData<AMT::ChannelListResult> out = {};
@@ -693,37 +699,69 @@ public:
     return out;
   }
 
-  ECMData<AMT::TerminalStatusResult>
-  Status(const AMT::TerminalStatusArgs &status_args,
-         const AMDomain::client::ClientControlComponent &control) override {
-    ECMData<AMT::TerminalStatusResult> out = {};
+  ECMData<AMT::CheckSessionResult>
+  CheckSession(const AMT::CheckSessionArgs &check_args,
+               const AMDomain::client::ClientControlComponent &control) override {
+    (void)check_args;
+    ECMData<AMT::CheckSessionResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
-
-    const ECM session_rcm = EnsureSessionReady_(control);
 
     out.data.is_supported = true;
     out.data.can_resize = true;
-    out.data.status = session_rcm ? AMDomain::client::ClientStatus::OK
-                                  : StatusFromEC_(session_rcm.code);
     if (current_channel_.has_value()) {
       out.data.current_channel = *current_channel_;
     }
 
-    const std::string target_name = AMStr::Strip(status_args.channel_name);
-    if (!target_name.empty()) {
-      auto it = channels_.find(target_name);
-      out.data.is_open = (it != channels_.end()) && IsChannelAlive_(&(it->second));
-    } else {
-      bool open = false;
-      for (auto &entry : channels_) {
-        if (IsChannelAlive_(&(entry.second))) {
-          open = true;
-          break;
-        }
-      }
-      out.data.is_open = open;
+    if (!sftp_core_) {
+      out.rcm = Err(EC::NoSession, "terminal.check_session", request_.hostname,
+                    "SFTP IO core is unavailable");
+      out.data.status = StatusFromEC_(out.rcm.code);
+      out.data.is_open = false;
+      return out;
     }
 
+    auto check_result =
+        sftp_core_->Check(AMDomain::filesystem::CheckArgs{}, control);
+    out.rcm = check_result.rcm;
+    out.data.status = check_result.data.status;
+
+    if (current_channel_.has_value()) {
+      auto it = channels_.find(*current_channel_);
+      out.data.is_open =
+          (it != channels_.end()) && IsChannelAlive_(&(it->second));
+    } else {
+      out.data.is_open = false;
+    }
+    return out;
+  }
+
+  ECMData<AMT::ChannelCheckResult>
+  CheckChannel(const AMT::ChannelCheckArgs &check_args,
+               const AMDomain::client::ClientControlComponent &control) override {
+    (void)control;
+    ECMData<AMT::ChannelCheckResult> out = {};
+    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+
+    const std::string target_name =
+        ResolveTargetChannelName_(check_args.channel_name);
+    if (target_name.empty()) {
+      out.rcm = Err(EC::InvalidArg, "terminal.check_channel", "channel_name",
+                    "No channel_name provided and no active channel set");
+      return out;
+    }
+
+    out.data.channel_name = target_name;
+    auto it = channels_.find(target_name);
+    if (it == channels_.end()) {
+      out.rcm = Err(EC::ClientNotFound, "terminal.check_channel", target_name,
+                    "Target channel does not exist");
+      return out;
+    }
+
+    out.data.exists = true;
+    out.data.is_open = IsChannelAlive_(&(it->second));
+    out.data.is_active =
+        current_channel_.has_value() && (*current_channel_ == target_name);
     out.rcm = OK;
     return out;
   }

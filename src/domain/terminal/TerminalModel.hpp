@@ -49,8 +49,10 @@ struct ChannelListArgs {
   std::string channel_name = "";
 };
 
-struct TerminalStatusArgs {
-  std::string channel_name = "";
+struct CheckSessionArgs {};
+
+struct ChannelCheckArgs {
+  std::optional<std::string> channel_name = std::nullopt;
 };
 
 struct ChannelOpenResult {
@@ -90,12 +92,19 @@ struct ChannelListResult {
   std::string current_channel = "";
 };
 
-struct TerminalStatusResult {
+struct CheckSessionResult {
   bool is_supported = false;
   bool is_open = false;
   bool can_resize = false;
   ClientStatus status = ClientStatus::NotInitialized;
   std::string current_channel = "";
+};
+
+struct ChannelCheckResult {
+  bool exists = false;
+  bool is_open = false;
+  bool is_active = false;
+  std::string channel_name = "";
 };
 
 } // namespace AMDomain::terminal
