@@ -318,6 +318,8 @@ inline void NormalizeInputHighlight(InputHighlightStyle *style) {
                       defaults.nonexistent_varname);
   NormalizeStyleToken(&style->varvalue, defaults.varvalue);
   NormalizeStyleToken(&style->nickname, defaults.nickname);
+  NormalizeStyleToken(&style->disconnected_nickname,
+                      defaults.disconnected_nickname);
   NormalizeStyleToken(&style->unestablished_nickname,
                       defaults.unestablished_nickname);
   NormalizeStyleToken(&style->nonexistent_nickname,
@@ -335,7 +337,6 @@ inline void NormalizeInputHighlight(InputHighlightStyle *style) {
   NormalizeStyleToken(&style->escapedsign, defaults.escapedsign);
   NormalizeStyleToken(&style->bangsign, defaults.bangsign);
   NormalizeStyleToken(&style->shell_cmd, defaults.shell_cmd);
-  NormalizeStyleToken(&style->cwd, defaults.cwd);
   NormalizeStyleToken(&style->number, defaults.number);
   NormalizeStyleToken(&style->timestamp, defaults.timestamp);
   NormalizeStyleToken(&style->path_like, defaults.path_like);
@@ -365,6 +366,7 @@ inline void NormalizePathHighlight(PathHighlightStyle *style) {
     return;
   }
   const PathHighlightStyle defaults = {};
+  NormalizeStyleToken(&style->cwd, defaults.cwd);
   NormalizeStyleToken(&style->path_str, defaults.path_str);
   NormalizeStyleToken(&style->root, defaults.root);
   NormalizeStyleToken(&style->node_dir_name, defaults.node_dir_name);

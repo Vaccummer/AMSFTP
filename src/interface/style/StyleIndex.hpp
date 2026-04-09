@@ -17,6 +17,7 @@ enum class StyleIndex : uint8_t {
   NonexistentVarname,
   VarValue,
   Nickname,
+  DisconnectedNickname,
   UnestablishedNickname,
   NonexistentNickname,
   ValidNewNickname,

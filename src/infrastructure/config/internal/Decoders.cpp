@@ -1324,6 +1324,7 @@ void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"nonexistent_varname"}, &out->nonexistent_varname);
   (void)AMJson::QueryKey(json, {"varvalue"}, &out->varvalue);
   (void)AMJson::QueryKey(json, {"nickname"}, &out->nickname);
+  (void)AMJson::QueryKey(json, {"disconnected_nickname"}, &out->disconnected_nickname);
   (void)AMJson::QueryKey(json, {"unestablished_nickname"}, &out->unestablished_nickname);
   (void)AMJson::QueryKey(json, {"nonexistent_nickname"}, &out->nonexistent_nickname);
   (void)AMJson::QueryKey(json, {"valid_new_nickname"}, &out->valid_new_nickname);
@@ -1337,7 +1338,6 @@ void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"escapedsign"}, &out->escapedsign);
   (void)AMJson::QueryKey(json, {"bangsign"}, &out->bangsign);
   (void)AMJson::QueryKey(json, {"shell_cmd"}, &out->shell_cmd);
-  (void)AMJson::QueryKey(json, {"cwd"}, &out->cwd);
   (void)AMJson::QueryKey(json, {"number"}, &out->number);
   (void)AMJson::QueryKey(json, {"timestamp"}, &out->timestamp);
   (void)AMJson::QueryKey(json, {"path_like"}, &out->path_like);
@@ -1358,6 +1358,7 @@ Json EncodeInputHighlight_(const InputHighlightStyle &in) {
   out["nonexistent_varname"] = in.nonexistent_varname;
   out["varvalue"] = in.varvalue;
   out["nickname"] = in.nickname;
+  out["disconnected_nickname"] = in.disconnected_nickname;
   out["unestablished_nickname"] = in.unestablished_nickname;
   out["nonexistent_nickname"] = in.nonexistent_nickname;
   out["valid_new_nickname"] = in.valid_new_nickname;
@@ -1371,7 +1372,6 @@ Json EncodeInputHighlight_(const InputHighlightStyle &in) {
   out["escapedsign"] = in.escapedsign;
   out["bangsign"] = in.bangsign;
   out["shell_cmd"] = in.shell_cmd;
-  out["cwd"] = in.cwd;
   out["number"] = in.number;
   out["timestamp"] = in.timestamp;
   out["path_like"] = in.path_like;
@@ -1416,6 +1416,7 @@ void DecodePathHighlight_(const Json &json, PathHighlightStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
+  (void)AMJson::QueryKey(json, {"cwd"}, &out->cwd);
   (void)AMJson::QueryKey(json, {"path_str"}, &out->path_str);
   (void)AMJson::QueryKey(json, {"root"}, &out->root);
   (void)AMJson::QueryKey(json, {"node_dir_name"}, &out->node_dir_name);
@@ -1429,6 +1430,7 @@ void DecodePathHighlight_(const Json &json, PathHighlightStyle *out) {
 
 Json EncodePathHighlight_(const PathHighlightStyle &in) {
   Json out = Json::object();
+  out["cwd"] = in.cwd;
   out["path_str"] = in.path_str;
   out["root"] = in.root;
   out["node_dir_name"] = in.node_dir_name;

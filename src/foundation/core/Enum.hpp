@@ -233,8 +233,11 @@ enum class AMTokenType {
   RightBraceSign = 26,
   ColonSign = 27,
   ValidValue = 28,
-  InvalidValue = 29
-
+  InvalidValue = 29,
+  NonexistentBuiltinArg = 30,
+  ValidNewNickname = 31,
+  InvalidNewNickname = 32,
+  DisconnectedNickname = 33
 };
 
 enum class TraceSource { Client = 0, Programm = 1 };
@@ -283,10 +286,10 @@ struct AMError {
       : code(ec), operation(""), target(""), error(std::move(err)) {
     if (code != EC::Success) {
       if (operation.empty()) {
-        operation = "unspecified";
+        operation = "";
       }
       if (target.empty()) {
-        target = "<context>";
+        target = "";
       }
     }
   }
@@ -296,10 +299,10 @@ struct AMError {
         error(std::move(err)) {
     if (code != EC::Success) {
       if (operation.empty()) {
-        operation = "unspecified";
+        operation = "";
       }
       if (target.empty()) {
-        target = "<context>";
+        target = "";
       }
     }
   }
@@ -309,10 +312,10 @@ struct AMError {
         raw_error(raw) {
     if (code != EC::Success) {
       if (operation.empty()) {
-        operation = "unspecified";
+        operation = "";
       }
       if (target.empty()) {
-        target = "<context>";
+        target = "";
       }
     }
   }
@@ -322,10 +325,10 @@ struct AMError {
         error(std::move(err)), raw_error(raw) {
     if (code != EC::Success) {
       if (operation.empty()) {
-        operation = "unspecified";
+        operation = "";
       }
       if (target.empty()) {
-        target = "<context>";
+        target = "";
       }
     }
   }
