@@ -288,6 +288,18 @@ void PromptIOManager::Print(const std::string &text) {
   }
 }
 
+void PromptIOManager::PrintOperationAbort() {
+  const std::string abort_style =
+      isocline_profile_manager_.style_config_manager_.GetInitArg()
+          .style.input_highlight.abort;
+  if (abort_style.empty()) {
+    Print("⚠️  " + kvars::operation_abort_text);
+    return;
+  }
+  Print("⚠️  " + abort_style + AMStr::BBCEscape(kvars::operation_abort_text) +
+        "[/]");
+}
+
 void PromptIOManager::FlushCachedOutput() {
   std::string output;
   {
@@ -653,11 +665,11 @@ void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
   }
   std::string operation = AMStr::Strip(rcm.operation);
   if (operation.empty()) {
-    operation = "unspecified";
+    operation = "";
   }
   std::string target = AMStr::Strip(rcm.target);
   if (target.empty()) {
-    target = "<context>";
+    target = "";
   }
   const auto esc = [](std::string v) {
     AMStr::replace(v, "\\", "\\\\");
@@ -684,7 +696,12 @@ bool PromptIOManager::PromptYesNo(const std::string &prompt, bool *canceled) {
   if (canceled) {
     *canceled = !answer.has_value();
   }
-  return answer.has_value() && AMStr::lowercase(AMStr::Strip(*answer)) == "y";
+  const bool is_yes =
+      answer.has_value() && AMStr::lowercase(AMStr::Strip(*answer)) == "y";
+  if (!is_yes) {
+    PrintOperationAbort();
+  }
+  return is_yes;
 }
 
 void PromptIOManager::ClearScreen(bool clear_scrollback) {
@@ -837,6 +854,7 @@ std::optional<std::string> PromptIOManager::Prompt(
     line = ic_readline_ex(prompt.c_str(), initial);
   }
   if (!line) {
+    PrintOperationAbort();
     return std::nullopt;
   }
   // isocline_profile_manager_.RemoveLastHistoryEntry();
@@ -903,6 +921,7 @@ PromptIOManager::SecurePrompt(const std::string &prompt) {
 
   char *line = ic_readline_secure(prompt.c_str(), nullptr);
   if (!line) {
+    PrintOperationAbort();
     return std::nullopt;
   }
   std::string out = line;

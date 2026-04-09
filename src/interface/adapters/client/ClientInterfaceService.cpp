@@ -1184,18 +1184,15 @@ void ClientInterfaceService::BindInteractionCallbacks() {
         const std::string ec_name = std::string(AMStr::ToString(rcm.code));
         const std::string protocol =
             std::string(AMStr::ToString(request.protocol));
-        const std::string styled_protocol = style_service_.Format(
-            protocol, AMInterface::style::StyleIndex::Protocol);
-        const std::string reason = AMStr::Strip(rcm.msg()).empty()
-                                       ? std::string("connection lost")
-                                       : AMStr::Strip(rcm.msg());
         const std::string nickname = request.nickname.empty()
                                          ? client->ConfigPort().GetNickname()
                                          : request.nickname;
+        const std::string error_text = AMStr::Strip(rcm.error).empty()
+                                           ? AMStr::Strip(rcm.msg())
+                                           : AMStr::Strip(rcm.error);
         std::string disconnect_note = AMStr::fmt(
-            "❌\\[{}] {}: connection lost ({}, nickname={}, host={}:{})",
-            ec_name, styled_protocol, reason, nickname, request.hostname,
-            request.port);
+            "🛑 \\[{}] Client {} disconnected! (ec={}, error={})", protocol,
+            nickname, ec_name, error_text);
         if (!disconnect_note.empty() && disconnect_note.front() != '\n' &&
             ic_is_editline_active()) {
           disconnect_note.insert(disconnect_note.begin(), '\n');
@@ -1726,7 +1723,6 @@ ECM ClientInterfaceService::RemoveClients(
   const bool confirmed = prompt_io_manager_.PromptYesNo(
       "Are you sure to remove these clients? (y/n) :", &canceled);
   if (canceled || !confirmed) {
-    prompt_io_manager_.Print("🚫  Remove clients canceled");
     return Err(EC::ConfigCanceled, "remove_clients.confirm", "",
                "Remove clients canceled");
   }
@@ -1982,10 +1978,6 @@ ECM ClientInterfaceService::AddHost(const std::string &nickname) {
   const ECM prompt_rcm = hostui::PromptAddHostConfig_(
       prompt_io_manager_, host_config_manager_, seed_nickname, &entry);
   if (!(prompt_rcm)) {
-    if (prompt_rcm.code == EC::ConfigCanceled) {
-      prompt_io_manager_.Print(style_service_.Format(
-          "Host add aborted.", AMInterface::style::StyleIndex::Abort));
-    }
     return prompt_rcm;
   }
 
@@ -2014,10 +2006,6 @@ ECM ClientInterfaceService::ModifyHost(const std::string &nickname) {
   const ECM prompt_rcm =
       hostui::PromptModifyHostConfig_(prompt_io_manager_, nickname, &updated);
   if (!(prompt_rcm)) {
-    if (prompt_rcm.code == EC::ConfigCanceled) {
-      prompt_io_manager_.Print(style_service_.Format(
-          "Host edit aborted.", AMInterface::style::StyleIndex::Abort));
-    }
     return prompt_rcm;
   }
 
@@ -2138,7 +2126,6 @@ ECM ClientInterfaceService::RemoveHosts(
                  listing),
       &canceled);
   if (canceled || !confirmed) {
-    prompt_io_manager_.Print("Delete aborted.");
     return OK;
   }
 
