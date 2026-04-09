@@ -206,86 +206,11 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
 } // namespace
 
 void PromptIOManager::PrintRaw(const std::string &text) {
-  std::string out = text;
-  const bool replay_prompt_header = ShouldReplayPromptHeader_();
-  std::string replay_frame;
-  if (replay_prompt_header) {
-    replay_frame = BuildReplayFrame_(out);
-  }
-
-  if (io_state_.refresh_occupied_lines_.load(std::memory_order_relaxed) <= 0) {
-    if (!replay_prompt_header && ic_is_editline_active() &&
-        ic_print_async(out.c_str())) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-    if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
-      (void)profile->Use();
-    }
-    if (replay_prompt_header) {
-      PrintSyncLocked_(replay_frame);
-      if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
-          io_state_.secure_phase_.load(std::memory_order_relaxed)) {
-        (void)ic_request_refresh_async();
-      }
-    } else {
-      PrintSyncLocked_(out);
-    }
-    return;
-  }
-
-  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  PrintInsertAndRepaintLocked_(out);
-  if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
-      io_state_.secure_phase_.load(std::memory_order_relaxed)) {
-    (void)ic_request_refresh_async();
-  }
+  EmitOutput_(text);
 }
 
 void PromptIOManager::Print(const std::string &text) {
-  std::string output = EnsureTrailingNewline_(text);
-  const bool replay_prompt_header = ShouldReplayPromptHeader_();
-  std::string replay_frame;
-  if (replay_prompt_header) {
-    replay_frame = BuildReplayFrame_(output);
-  }
-
-  if (IsCacheOutputOnly()) {
-    std::lock_guard<std::mutex> lock(io_state_.cached_output_mutex_);
-    io_state_.cached_output_ += output;
-    return;
-  }
-
-  if (io_state_.refresh_occupied_lines_.load(std::memory_order_relaxed) <= 0) {
-    if (!replay_prompt_header && ic_is_editline_active() &&
-        ic_print_async(output.c_str())) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-    if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
-      (void)profile->Use();
-    }
-    if (replay_prompt_header) {
-      PrintSyncLocked_(replay_frame);
-      if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
-          io_state_.secure_phase_.load(std::memory_order_relaxed)) {
-        (void)ic_request_refresh_async();
-      }
-    } else {
-      PrintSyncLocked_(output);
-    }
-    return;
-  }
-
-  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
-    (void)profile->Use();
-  }
-  PrintInsertAndRepaintLocked_(output);
-  if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
-      io_state_.secure_phase_.load(std::memory_order_relaxed)) {
-    (void)ic_request_refresh_async();
-  }
+  EmitOutput_(EnsureTrailingNewline_(text));
 }
 
 void PromptIOManager::PrintOperationAbort() {
@@ -313,7 +238,7 @@ void PromptIOManager::FlushCachedOutput() {
   if (output.empty()) {
     return;
   }
-  PrintRaw(output);
+  EmitOutput_(output, false);
 }
 
 void PromptIOManager::SetCacheOutputOnly(bool enabled) {
@@ -321,9 +246,24 @@ void PromptIOManager::SetCacheOutputOnly(bool enabled) {
     io_state_.cache_output_lock_depth_.fetch_add(1, std::memory_order_relaxed);
     return;
   }
-  io_state_.cache_output_lock_depth_.fetch_sub(1, std::memory_order_relaxed);
-  if (io_state_.cache_output_lock_depth_.load(std::memory_order_relaxed) == 0) {
-    FlushCachedOutput();
+
+  int depth = io_state_.cache_output_lock_depth_.load(std::memory_order_relaxed);
+  if (depth <= 0) {
+    io_state_.cache_output_lock_depth_.store(0, std::memory_order_relaxed);
+    return;
+  }
+  while (depth > 0) {
+    if (io_state_.cache_output_lock_depth_.compare_exchange_weak(
+            depth, depth - 1, std::memory_order_relaxed,
+            std::memory_order_relaxed)) {
+      if (depth == 1) {
+        FlushCachedOutput();
+      }
+      return;
+    }
+  }
+  if (depth <= 0) {
+    io_state_.cache_output_lock_depth_.store(0, std::memory_order_relaxed);
   }
 }
 
@@ -414,6 +354,58 @@ std::string PromptIOManager::BuildReplayFrame_(const std::string &msg) {
   return out;
 }
 
+bool PromptIOManager::TryCacheOutput_(const std::string &text) {
+  if (!IsCacheOutputOnly()) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(io_state_.cached_output_mutex_);
+  io_state_.cached_output_ += text;
+  return true;
+}
+
+void PromptIOManager::EmitOutput_(const std::string &text, bool allow_cache) {
+  if (allow_cache && TryCacheOutput_(text)) {
+    return;
+  }
+
+  const bool replay_prompt_header = ShouldReplayPromptHeader_();
+  std::string replay_frame;
+  if (replay_prompt_header) {
+    replay_frame = BuildReplayFrame_(text);
+  }
+
+  if (io_state_.refresh_occupied_lines_.load(std::memory_order_relaxed) <= 0) {
+    if (!replay_prompt_header && ic_is_editline_active() &&
+        ic_print_async(text.c_str())) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+    if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+      (void)profile->Use();
+    }
+    if (replay_prompt_header) {
+      PrintSyncLocked_(replay_frame);
+      if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
+          io_state_.secure_phase_.load(std::memory_order_relaxed)) {
+        (void)ic_request_refresh_async();
+      }
+    } else {
+      PrintSyncLocked_(text);
+    }
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+    (void)profile->Use();
+  }
+  PrintInsertAndRepaintLocked_(text);
+  if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
+      io_state_.secure_phase_.load(std::memory_order_relaxed)) {
+    (void)ic_request_refresh_async();
+  }
+}
+
 void PromptIOManager::AppendMoveUpRows_(std::string *frame, int rows) {
   if (frame == nullptr || rows <= 0) {
     return;
@@ -475,6 +467,9 @@ void PromptIOManager::AppendRowDiffUpdate_(std::string *frame,
 }
 
 void PromptIOManager::PrintSyncLocked_(const std::string &text) {
+  if (TryCacheOutput_(text)) {
+    return;
+  }
   if (text.find('\x1b') != std::string::npos) {
     ic_term_write(text.c_str());
   } else {
@@ -484,6 +479,9 @@ void PromptIOManager::PrintSyncLocked_(const std::string &text) {
 }
 
 void PromptIOManager::PrintSyncRefreshLocked_(const std::string &text) {
+  if (TryCacheOutput_(text)) {
+    return;
+  }
   if (text.find('\x1b') != std::string::npos) {
     ic_term_write_bbcode(text.c_str());
   } else {
@@ -705,33 +703,20 @@ bool PromptIOManager::PromptYesNo(const std::string &prompt, bool *canceled) {
 }
 
 void PromptIOManager::ClearScreen(bool clear_scrollback) {
-  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
-    (void)profile->Use();
-  }
+  std::string frame;
   if (clear_scrollback) {
-    ic_print("\x1b[3J");
+    frame += "\x1b[3J";
   }
-  ic_print("\x1b[2J\x1b[H");
-  ic_term_flush();
+  frame += "\x1b[2J\x1b[H";
+  EmitOutput_(frame);
 }
 
 void PromptIOManager::UseAlternateScreen(bool enable) {
-  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  if (enable) {
-    ic_print("\x1b[?1049h");
-  } else {
-    ic_print("\x1b[?1049l");
-  }
-  ic_term_flush();
+  EmitOutput_(enable ? "\x1b[?1049h" : "\x1b[?1049l");
 }
 
 void PromptIOManager::SetCursorVisible(bool visible) {
-  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
-    (void)profile->Use();
-  }
-  ic_term_set_cursor_visible(visible);
+  EmitOutput_(visible ? "\x1b[?25h" : "\x1b[?25l");
 }
 
 void PromptIOManager::SyncCurrentHistory() {
