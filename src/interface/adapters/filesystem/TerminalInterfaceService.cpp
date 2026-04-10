@@ -9,6 +9,8 @@
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/terminal.hpp"
 #include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
+#include "interface/style/StyleManager.hpp"
+#include "interface/style/StyleIndex.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,7 @@
 #include <memory>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -130,6 +133,90 @@ ParseTerminalTargetSpec_(const std::string &target_spec,
   }
 
   return {out, OK};
+}
+
+std::vector<std::string>
+NormalizeTerminalNicknames_(const std::vector<std::string> &raw_nicknames) {
+  std::vector<std::string> out = {};
+  out.reserve(raw_nicknames.size());
+  std::unordered_set<std::string> seen = {};
+
+  for (const auto &raw_nickname : raw_nicknames) {
+    const std::string stripped = AMStr::Strip(raw_nickname);
+    if (stripped.empty()) {
+      continue;
+    }
+    const std::string nickname =
+        AMDomain::host::HostService::NormalizeNickname(stripped);
+    if (nickname.empty()) {
+      continue;
+    }
+    if (!seen.insert(nickname).second) {
+      continue;
+    }
+    out.push_back(nickname);
+  }
+  return out;
+}
+
+[[nodiscard]] std::string JoinChannelSummary_(
+    const std::vector<std::string> &channels) {
+  if (channels.empty()) {
+    return "(empty)";
+  }
+  std::string out = {};
+  for (size_t i = 0; i < channels.size(); ++i) {
+    if (i > 0) {
+      out += "   ";
+    }
+    out += channels[i];
+  }
+  return out;
+}
+
+[[nodiscard]] ECMData<std::string> BuildTerminalSummaryLine_(
+    const std::string &terminal_name,
+    AMDomain::terminal::ITerminalPort *terminal,
+    const AMDomain::client::ClientControlComponent &control,
+    AMInterface::style::AMStyleService &style_service) {
+  if (terminal == nullptr) {
+    const std::string styled_header = style_service.Format(
+        "[" + terminal_name + "]",
+        AMInterface::style::StyleIndex::DisconnectedTerminalName);
+    return {styled_header + ": (terminal unavailable)",
+            Err(ErrorCode::InvalidHandle, "term.summary", terminal_name,
+                "terminal handle is null")};
+  }
+
+  auto session_result = terminal->CheckSession({}, control);
+  const bool terminal_ok =
+      (session_result.rcm) &&
+      (session_result.data.status == AMDomain::client::ClientStatus::OK);
+  const auto terminal_style =
+      terminal_ok ? AMInterface::style::StyleIndex::TerminalName
+                  : AMInterface::style::StyleIndex::DisconnectedTerminalName;
+  const std::string styled_header =
+      style_service.Format("[" + terminal_name + "]", terminal_style);
+
+  auto channels_result = terminal->ListChannels({}, control);
+  if (!(channels_result.rcm)) {
+    return {styled_header + ": (channel list unavailable)", channels_result.rcm};
+  }
+
+  std::vector<std::string> styled_channels = {};
+  styled_channels.reserve(channels_result.data.channel_names.size());
+  for (const auto &channel_name : channels_result.data.channel_names) {
+    auto check_result =
+        terminal->CheckChannel({std::optional<std::string>(channel_name)}, control);
+    const bool channel_ok =
+        (check_result.rcm) && check_result.data.exists && check_result.data.is_open;
+    const auto channel_style =
+        channel_ok ? AMInterface::style::StyleIndex::ChannelName
+                   : AMInterface::style::StyleIndex::DisconnectedChannelName;
+    styled_channels.push_back(style_service.Format(channel_name, channel_style));
+  }
+
+  return {styled_header + ": " + JoinChannelSummary_(styled_channels), OK};
 }
 
 void RestoreCliPromptStateAfterTerminalExit_() {
@@ -1248,56 +1335,76 @@ ECM FilesystemInterfaceSerivce::AddTerminal(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::string nickname = AMDomain::host::HostService::NormalizeNickname(
-      AMStr::Strip(arg.nickname));
-  if (nickname.empty()) {
-    nickname = AMDomain::host::HostService::NormalizeNickname(
-        AMStr::Strip(filesystem_service_.CurrentNickname()));
-  }
-  if (nickname.empty()) {
-    nickname = "local";
+  const auto nicknames = NormalizeTerminalNicknames_(arg.nicknames);
+  if (nicknames.empty()) {
+    const ECM rcm = Err(EC::InvalidArg, __func__, "<targets>",
+                        "term add requires at least one target nickname");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
   }
 
-  auto existing = terminal_service_.GetTerminalByNickname(nickname, false);
-  if (existing.rcm && existing.data) {
-    if (!arg.force) {
-      const ECM rcm = Err(EC::TargetAlreadyExists, __func__, nickname,
-                          "Terminal already exists");
+  ECM status = OK;
+  for (const auto &nickname : nicknames) {
+    if (control.IsInterrupted()) {
+      return Err(EC::Terminate, __func__, nickname, "Interrupted by user");
+    }
+
+    auto existing = terminal_service_.GetTerminalByNickname(nickname, false);
+    if (existing.rcm && existing.data) {
+      if (!arg.force) {
+        const ECM rcm = Err(EC::TargetAlreadyExists, __func__, nickname,
+                            "Terminal already exists");
+        prompt_io_manager_.ErrorFormat(rcm);
+        if ((status)) {
+          status = rcm;
+        }
+        continue;
+      }
+      const ECM rm_rcm = terminal_service_.RemoveTerminal(nickname, control);
+      if (!(rm_rcm)) {
+        prompt_io_manager_.ErrorFormat(rm_rcm);
+        if ((status)) {
+          status = rm_rcm;
+        }
+        continue;
+      }
+    } else if (existing.rcm.code != EC::ClientNotFound) {
+      prompt_io_manager_.ErrorFormat(existing.rcm);
+      if ((status)) {
+        status = existing.rcm;
+      }
+      continue;
+    }
+
+    auto client_result = client_service_.CreateClient(nickname, control, false);
+    if (!(client_result.rcm) || !client_result.data) {
+      const ECM rcm = (client_result.rcm)
+                          ? Err(EC::InvalidHandle, __func__, nickname,
+                                "Created client is null")
+                          : client_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
-      return rcm;
+      if ((status)) {
+        status = rcm;
+      }
+      continue;
     }
-    const ECM rm_rcm = terminal_service_.RemoveTerminal(nickname, control);
-    if (!(rm_rcm)) {
-      prompt_io_manager_.ErrorFormat(rm_rcm);
-      return rm_rcm;
+
+    auto terminal_result =
+        terminal_service_.CreateTerminal(client_result.data, false);
+    if (!(terminal_result.rcm) || !terminal_result.data) {
+      const ECM rcm = (terminal_result.rcm.code == EC::OperationUnsupported)
+                          ? BuildTerminalUnsupportedError_(nickname)
+                          : terminal_result.rcm;
+      prompt_io_manager_.ErrorFormat(rcm);
+      if ((status)) {
+        status = rcm;
+      }
+      continue;
     }
-  } else if (existing.rcm.code != EC::ClientNotFound) {
-    prompt_io_manager_.ErrorFormat(existing.rcm);
-    return existing.rcm;
-  }
 
-  auto client_result = client_service_.CreateClient(nickname, control, false);
-  if (!(client_result.rcm) || !client_result.data) {
-    const ECM rcm = (client_result.rcm)
-                        ? Err(EC::InvalidHandle, __func__, nickname,
-                              "Created client is null")
-                        : client_result.rcm;
-    prompt_io_manager_.ErrorFormat(rcm);
-    return rcm;
+    prompt_io_manager_.FmtPrint("✅ Terminal added: {}", nickname);
   }
-
-  auto terminal_result =
-      terminal_service_.CreateTerminal(client_result.data, false);
-  if (!(terminal_result.rcm) || !terminal_result.data) {
-    const ECM rcm = (terminal_result.rcm.code == EC::OperationUnsupported)
-                        ? BuildTerminalUnsupportedError_(nickname)
-                        : terminal_result.rcm;
-    prompt_io_manager_.ErrorFormat(rcm);
-    return rcm;
-  }
-
-  prompt_io_manager_.FmtPrint("✅ Terminal added: {}", nickname);
-  return OK;
+  return status;
 }
 
 ECM FilesystemInterfaceSerivce::ListTerminals(
@@ -1305,38 +1412,18 @@ ECM FilesystemInterfaceSerivce::ListTerminals(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   (void)arg;
-  (void)control_opt;
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const auto names = terminal_service_.ListTerminalNames();
-  prompt_io_manager_.Print("Terminals:");
   if (names.empty()) {
-    prompt_io_manager_.Print("  (empty)");
+    prompt_io_manager_.Print("(empty)");
     return OK;
   }
+
   for (const auto &name : names) {
     auto terminal_result = terminal_service_.GetTerminalByNickname(name, true);
-    if (!(terminal_result.rcm) || !terminal_result.data) {
-      prompt_io_manager_.FmtPrint("  - {} (unknown)", name);
-      continue;
-    }
-    const auto state = terminal_result.data->GetSessionState();
-    std::string state_name = "Unknown";
-    switch (state) {
-    case AMDomain::client::ClientStatus::NotInitialized:
-      state_name = "NotInitialized";
-      break;
-    case AMDomain::client::ClientStatus::NoConnection:
-      state_name = "NoConnection";
-      break;
-    case AMDomain::client::ClientStatus::ConnectionBroken:
-      state_name = "ConnectionBroken";
-      break;
-    case AMDomain::client::ClientStatus::OK:
-      state_name = "OK";
-      break;
-    default:
-      break;
-    }
-    prompt_io_manager_.FmtPrint("  - {} ({})", name, state_name);
+    auto line_result = BuildTerminalSummaryLine_(
+        name, terminal_result.data.get(), control, style_service_);
+    prompt_io_manager_.Print(line_result.data);
   }
   return OK;
 }
@@ -1346,23 +1433,115 @@ ECM FilesystemInterfaceSerivce::RemoveTerminal(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::string nickname = AMDomain::host::HostService::NormalizeNickname(
-      AMStr::Strip(arg.nickname));
-  if (nickname.empty()) {
-    nickname = AMDomain::host::HostService::NormalizeNickname(
-        AMStr::Strip(filesystem_service_.CurrentNickname()));
-  }
-  if (nickname.empty()) {
-    nickname = "local";
-  }
-
-  const ECM rcm = terminal_service_.RemoveTerminal(nickname, control);
-  if (!(rcm)) {
+  if (arg.nicknames.empty()) {
+    const ECM rcm = Err(EC::InvalidArg, __func__, "<targets>",
+                        "term rm requires at least one target nickname");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
-  prompt_io_manager_.FmtPrint("✅ Terminal removed: {}", nickname);
-  return OK;
+
+  std::vector<std::string> valid_targets = {};
+  valid_targets.reserve(arg.nicknames.size());
+  std::unordered_set<std::string> seen = {};
+  std::unordered_map<std::string, AMDomain::terminal::TerminalHandle> targets = {};
+  ECM status = OK;
+  for (const auto &raw_nickname : arg.nicknames) {
+    if (control.IsInterrupted()) {
+      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+    }
+    if (control.IsTimeout()) {
+      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
+    }
+
+    const std::string stripped = AMStr::Strip(raw_nickname);
+    if (stripped.empty()) {
+      const ECM rcm =
+          Err(EC::InvalidArg, __func__, "", "invalid empty terminal nickname");
+      prompt_io_manager_.ErrorFormat(rcm);
+      if ((status)) {
+        status = rcm;
+      }
+      continue;
+    }
+
+    const std::string normalized =
+        AMDomain::host::HostService::NormalizeNickname(stripped);
+    if (normalized.empty() ||
+        (!AMDomain::host::HostService::IsLocalNickname(normalized) &&
+         !AMDomain::host::HostService::ValidateNickname(normalized))) {
+      const ECM rcm =
+          Err(EC::InvalidArg, __func__, "", AMStr::fmt(
+                                            "invalid terminal nickname literal: {}",
+                                            stripped));
+      prompt_io_manager_.ErrorFormat(rcm);
+      if ((status)) {
+        status = rcm;
+      }
+      continue;
+    }
+
+    if (!seen.insert(normalized).second) {
+      continue;
+    }
+
+    auto terminal_result =
+        terminal_service_.GetTerminalByNickname(normalized, true);
+    if (!(terminal_result.rcm) || !terminal_result.data) {
+      const ECM rcm = terminal_result.rcm
+                          ? Err(EC::ClientNotFound, __func__, normalized,
+                                "terminal not found")
+                          : terminal_result.rcm;
+      prompt_io_manager_.ErrorFormat(rcm);
+      if ((status)) {
+        status = rcm;
+      }
+      continue;
+    }
+    valid_targets.push_back(normalized);
+    targets[normalized] = terminal_result.data;
+  }
+
+  if (valid_targets.empty()) {
+    return status;
+  }
+
+  for (const auto &nickname : valid_targets) {
+    auto it = targets.find(nickname);
+    AMDomain::terminal::ITerminalPort *terminal =
+        (it == targets.end()) ? nullptr : it->second.get();
+    auto line_result =
+        BuildTerminalSummaryLine_(nickname, terminal, control, style_service_);
+    prompt_io_manager_.Print(line_result.data);
+  }
+
+  bool canceled = false;
+  const bool confirmed = prompt_io_manager_.PromptYesNo(
+      "Are you sure to remove these clients? (y/n): ",
+      &canceled);
+  if (canceled || !confirmed) {
+    return OK;
+  }
+
+  for (const auto &nickname : valid_targets) {
+    if (control.IsInterrupted()) {
+      return Err(EC::Terminate, __func__, nickname, "Interrupted by user");
+    }
+    if (control.IsTimeout()) {
+      return Err(EC::OperationTimeout, __func__, nickname,
+                 "Operation timed out");
+    }
+
+    const ECM rcm = terminal_service_.RemoveTerminal(nickname, control);
+    if (!(rcm)) {
+      prompt_io_manager_.ErrorFormat(rcm);
+      if ((status)) {
+        status = rcm;
+      }
+      continue;
+    }
+    prompt_io_manager_.FmtPrint("✅ Terminal removed: {}", nickname);
+  }
+  return status;
 }
 
 ECM FilesystemInterfaceSerivce::AddChannel(
