@@ -98,6 +98,7 @@ private:
   LIBSSH2_SESSION *session_ = nullptr;
   std::map<std::string, ChannelCtx> channels_ = {};
   std::optional<std::string> current_channel_ = std::nullopt;
+  static constexpr int kDefaultCloseTimeoutMs_ = 1500;
 
   [[nodiscard]] std::recursive_mutex &CoreMutex_() const {
     if (sftp_core_) {
@@ -108,6 +109,25 @@ private:
 
   void SyncCoreHandles_() {
     session_ = (sftp_core_ != nullptr) ? sftp_core_->session : nullptr;
+  }
+
+  [[nodiscard]] int CloseTimeoutMs_(
+      const AMDomain::client::ClientControlComponent &control) const {
+    const int timeout_ms = TimeoutMs_(control);
+    return timeout_ms >= 0 ? timeout_ms : kDefaultCloseTimeoutMs_;
+  }
+
+  void BindCloseControl_(detail::SafeChannel *channel,
+                         const AMDomain::client::ClientControlComponent &control) {
+    if (!channel) {
+      return;
+    }
+    const auto control_token = control.ControlToken();
+    auto is_interrupted = [control_token]() -> bool {
+      return control_token && control_token->IsInterrupted();
+    };
+    channel->SetControlContext(std::move(is_interrupted), CloseTimeoutMs_(control),
+                               AMTime::miliseconds());
   }
 
   [[nodiscard]] ErrorCode LastEC_() const {
@@ -140,14 +160,18 @@ private:
     return true;
   }
 
-  void CloseAllChannels_(bool send_exit) {
+  void CloseAllChannels_(
+      bool send_exit,
+      const AMDomain::client::ClientControlComponent &control) {
     for (auto &entry : channels_) {
       auto &ctx = entry.second;
       if (!ctx.channel || !ctx.channel->channel) {
         continue;
       }
       ctx.exit_status = libssh2_channel_get_exit_status(ctx.channel->channel);
+      BindCloseControl_(ctx.channel.get(), control);
       (void)ctx.channel->graceful_exit(send_exit, 50, true);
+      ctx.channel->closed = true;
       ctx.channel.reset();
       ctx.eof = true;
     }
@@ -155,8 +179,9 @@ private:
     current_channel_ = std::nullopt;
   }
 
-  void CloseTerminal_() {
-    CloseAllChannels_(true);
+  void CloseTerminal_(
+      const AMDomain::client::ClientControlComponent &control) {
+    CloseAllChannels_(true, control);
     session_ = nullptr;
   }
 
@@ -366,7 +391,9 @@ public:
 
   ~SSHTerminalPort() override {
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
-    CloseTerminal_();
+    AMDomain::client::ClientControlComponent close_control(
+        nullptr, kDefaultCloseTimeoutMs_);
+    CloseTerminal_(close_control);
   }
 
   [[nodiscard]] ConRequest GetRequest() const override { return request_; }
@@ -643,7 +670,6 @@ public:
   ECMData<AMT::ChannelCloseResult> CloseChannel(
       const AMT::ChannelCloseArgs &close_args,
       const AMDomain::client::ClientControlComponent &control) override {
-    (void)control;
     ECMData<AMT::ChannelCloseResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
 
@@ -666,7 +692,9 @@ public:
     out.data.channel_name = target_name;
     if (ctx.channel && ctx.channel->channel) {
       ctx.exit_status = libssh2_channel_get_exit_status(ctx.channel->channel);
+      BindCloseControl_(ctx.channel.get(), control);
       out.rcm = ctx.channel->graceful_exit(!close_args.force, 50, true);
+      ctx.channel->closed = true;
     } else {
       out.rcm = OK;
     }
