@@ -111,8 +111,9 @@ public:
                  const std::string &new_nickname);
   ECM RemoveHosts(const std::vector<std::string> &nicknames);
   ECM SetHostValue(const SetHostValueRequest &request);
-  ECM ListHosts(bool detail);
-  ECM ListHosts(const std::vector<std::string> &nicknames, bool detail);
+  ECM ListHosts(bool detail, bool list = false);
+  ECM ListHosts(const std::vector<std::string> &nicknames, bool detail,
+                bool list = false);
 
 private:
   [[nodiscard]] ClientControlComponent
