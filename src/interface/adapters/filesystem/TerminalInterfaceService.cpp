@@ -1,3 +1,8 @@
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include "Isocline/isocline.h"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/terminal/TerminalPort.hpp"
@@ -7,11 +12,11 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <string_view>
-#include <thread>
 #include <unordered_map>
 
 #ifdef _WIN32
@@ -21,6 +26,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -47,7 +53,6 @@ struct TerminalLoopOutcome_ {
              "Current client does not support interactive terminal mode");
 }
 
-constexpr const char *kDefaultTerminalChannelName_ = "default";
 constexpr const char *kDefaultTerminalType_ = "xterm-256color";
 
 struct TerminalTargetSpec_ {
@@ -171,6 +176,19 @@ std::string SubstituteTemplateVars_(
 }
 
 enum class LocalInputPollStatus_ { Ready, Closed, Error };
+enum class TerminalWaitStatus_ {
+  Ready,
+  LocalInput,
+  RemoteReady,
+  Interrupted,
+  Timeout,
+  Error
+};
+
+struct TerminalWaitResult_ {
+  TerminalWaitStatus_ status = TerminalWaitStatus_::Ready;
+  std::string error = {};
+};
 
 void WriteTerminalBytes_(const std::string &text) {
   if (text.empty()) {
@@ -378,6 +396,308 @@ LocalInputPollStatus_ PollLocalTerminalInput_(std::string *out,
 #endif
 }
 
+class InteractiveTerminalWaiter_ final : NonCopyableNonMovable {
+public:
+  InteractiveTerminalWaiter_(
+      AMDomain::terminal::ITerminalPort &terminal,
+      const AMDomain::client::ClientControlComponent &control)
+      : terminal_(terminal), control_(control) {}
+
+  ~InteractiveTerminalWaiter_() override { Shutdown_(); }
+
+  ECM Init() {
+    if (initialized_) {
+      return OK;
+    }
+    auto remote_socket_result = terminal_.GetRemoteSocketHandle();
+    if (remote_socket_result.rcm && remote_socket_result.data >= 0) {
+      remote_socket_ = remote_socket_result.data;
+    }
+
+#ifdef _WIN32
+    InitWindows_();
+#else
+    InitPosix_();
+#endif
+
+    initialized_ = true;
+    return OK;
+  }
+
+  [[nodiscard]] TerminalWaitResult_ Wait() {
+    if (control_.IsInterrupted()) {
+      return {TerminalWaitStatus_::Interrupted, {}};
+    }
+    if (control_.IsTimeout()) {
+      return {TerminalWaitStatus_::Timeout, {}};
+    }
+    if (!initialized_) {
+      return {TerminalWaitStatus_::Error,
+              "InteractiveTerminalWaiter not initialized"};
+    }
+
+#ifdef _WIN32
+    return WaitWindows_();
+#else
+    return WaitPosix_();
+#endif
+  }
+
+private:
+#ifdef _WIN32
+  static constexpr DWORD kInvalidIndex_ = static_cast<DWORD>(-1);
+
+  void PushWaitHandle_(HANDLE handle, DWORD *index_slot) {
+    if (index_slot == nullptr || handle == nullptr ||
+        handle == INVALID_HANDLE_VALUE || wait_count_ >= wait_handles_.size()) {
+      return;
+    }
+    *index_slot = wait_count_;
+    wait_handles_[wait_count_++] = handle;
+  }
+
+  void InitWindows_() {
+    input_handle_ = GetStdHandle(STD_INPUT_HANDLE);
+    PushWaitHandle_(input_handle_, &input_index_);
+
+    if (control_.ControlToken()) {
+      wake_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      if (wake_event_ != nullptr) {
+        wake_guard_ =
+            std::make_unique<AMDomain::client::ControlTokenWakeupSafeGaurd>(
+                control_.ControlToken(),
+                [wake_event = wake_event_]() {
+                  (void)SetEvent(wake_event);
+                });
+        PushWaitHandle_(wake_event_, &wake_index_);
+      }
+    }
+
+    if (remote_socket_ >= 0) {
+      remote_sock_ = static_cast<SOCKET>(remote_socket_);
+      socket_event_ = WSACreateEvent();
+      if (socket_event_ != WSA_INVALID_EVENT) {
+        if (WSAEventSelect(remote_sock_, socket_event_,
+                           FD_READ | FD_WRITE | FD_CLOSE) == 0) {
+          PushWaitHandle_(socket_event_, &socket_index_);
+        } else {
+          (void)WSACloseEvent(socket_event_);
+          socket_event_ = WSA_INVALID_EVENT;
+          remote_sock_ = INVALID_SOCKET;
+        }
+      }
+    }
+  }
+
+  [[nodiscard]] TerminalWaitResult_ WaitWindows_() {
+    if (wait_count_ == 0) {
+      return {TerminalWaitStatus_::Ready, {}};
+    }
+
+    const auto remain_opt = control_.RemainingTimeMs();
+    DWORD timeout_ms = INFINITE;
+    if (remain_opt.has_value()) {
+      timeout_ms = static_cast<DWORD>(std::min<unsigned int>(
+          *remain_opt, (std::numeric_limits<DWORD>::max)()));
+    }
+
+    const DWORD wait_rc = WaitForMultipleObjects(
+        wait_count_, wait_handles_.data(), FALSE, timeout_ms);
+    if (wait_rc == WAIT_TIMEOUT) {
+      return {TerminalWaitStatus_::Timeout, {}};
+    }
+    if (wait_rc == WAIT_FAILED) {
+      return {TerminalWaitStatus_::Error,
+              AMStr::fmt("WaitForMultipleObjects failed: {}",
+                         static_cast<unsigned long>(GetLastError()))};
+    }
+
+    const DWORD signaled_index = wait_rc - WAIT_OBJECT_0;
+    if (wake_index_ != kInvalidIndex_ && signaled_index == wake_index_) {
+      return {control_.IsInterrupted() ? TerminalWaitStatus_::Interrupted
+                                       : TerminalWaitStatus_::Ready,
+              {}};
+    }
+    if (socket_index_ != kInvalidIndex_ && signaled_index == socket_index_) {
+      if (socket_event_ != WSA_INVALID_EVENT && remote_sock_ != INVALID_SOCKET) {
+        WSANETWORKEVENTS events = {};
+        (void)WSAEnumNetworkEvents(remote_sock_, socket_event_, &events);
+      }
+      return {TerminalWaitStatus_::RemoteReady, {}};
+    }
+    if (input_index_ != kInvalidIndex_ && signaled_index == input_index_) {
+      return {TerminalWaitStatus_::LocalInput, {}};
+    }
+    return {TerminalWaitStatus_::Ready, {}};
+  }
+
+  void ShutdownWindows_() {
+    wake_guard_.reset();
+
+    if (socket_event_ != WSA_INVALID_EVENT) {
+      if (remote_sock_ != INVALID_SOCKET) {
+        (void)WSAEventSelect(remote_sock_, socket_event_, 0);
+      }
+      (void)WSACloseEvent(socket_event_);
+      socket_event_ = WSA_INVALID_EVENT;
+    }
+    if (wake_event_ != nullptr) {
+      (void)CloseHandle(wake_event_);
+      wake_event_ = nullptr;
+    }
+    remote_sock_ = INVALID_SOCKET;
+    input_handle_ = INVALID_HANDLE_VALUE;
+    wait_count_ = 0;
+    wait_handles_ = {};
+    input_index_ = kInvalidIndex_;
+    wake_index_ = kInvalidIndex_;
+    socket_index_ = kInvalidIndex_;
+  }
+#else
+  void InitPosix_() {
+    if (control_.ControlToken() && pipe(wake_pipe_) == 0) {
+      const int read_flags = fcntl(wake_pipe_[0], F_GETFL, 0);
+      const int write_flags = fcntl(wake_pipe_[1], F_GETFL, 0);
+      if (read_flags >= 0) {
+        (void)fcntl(wake_pipe_[0], F_SETFL, read_flags | O_NONBLOCK);
+      }
+      if (write_flags >= 0) {
+        (void)fcntl(wake_pipe_[1], F_SETFL, write_flags | O_NONBLOCK);
+      }
+      wake_guard_ = std::make_unique<AMDomain::client::ControlTokenWakeupSafeGaurd>(
+          control_.ControlToken(),
+          [wake_write_fd = wake_pipe_[1]]() {
+            const char c = 1;
+            (void)write(wake_write_fd, &c, 1);
+          });
+    } else {
+      wake_pipe_[0] = -1;
+      wake_pipe_[1] = -1;
+    }
+
+    if (remote_socket_ >= 0) {
+      const int remote_fd = static_cast<int>(remote_socket_);
+      if (remote_fd >= 0 && remote_fd < FD_SETSIZE) {
+        remote_fd_ = remote_fd;
+      }
+    }
+  }
+
+  [[nodiscard]] TerminalWaitResult_ WaitPosix_() {
+    fd_set readfds = {};
+    FD_ZERO(&readfds);
+    int max_fd = -1;
+
+    FD_SET(STDIN_FILENO, &readfds);
+    max_fd = std::max(max_fd, STDIN_FILENO);
+
+    if (remote_fd_ >= 0) {
+      FD_SET(remote_fd_, &readfds);
+      max_fd = std::max(max_fd, remote_fd_);
+    }
+    if (wake_pipe_[0] >= 0 && wake_pipe_[0] < FD_SETSIZE) {
+      FD_SET(wake_pipe_[0], &readfds);
+      max_fd = std::max(max_fd, wake_pipe_[0]);
+    }
+
+    if (max_fd < 0) {
+      return {TerminalWaitStatus_::Ready, {}};
+    }
+
+    const auto remain_opt = control_.RemainingTimeMs();
+    timeval tv = {};
+    timeval *timeout_ptr = nullptr;
+    if (remain_opt.has_value()) {
+      const unsigned int remain_ms = *remain_opt;
+      tv.tv_sec = static_cast<time_t>(remain_ms / 1000U);
+      tv.tv_usec = static_cast<suseconds_t>((remain_ms % 1000U) * 1000U);
+      timeout_ptr = &tv;
+    }
+
+    const int rc = select(max_fd + 1, &readfds, nullptr, nullptr, timeout_ptr);
+    if (rc < 0) {
+      if (errno == EINTR) {
+        return {control_.IsInterrupted() ? TerminalWaitStatus_::Interrupted
+                                         : TerminalWaitStatus_::Ready,
+                {}};
+      }
+      return {TerminalWaitStatus_::Error, std::strerror(errno)};
+    }
+    if (rc == 0) {
+      return {TerminalWaitStatus_::Timeout, {}};
+    }
+
+    if (wake_pipe_[0] >= 0 && FD_ISSET(wake_pipe_[0], &readfds)) {
+      std::array<char, 64> drain_buffer = {};
+      while (read(wake_pipe_[0], drain_buffer.data(), drain_buffer.size()) >
+             0) {
+      }
+    }
+
+    if (control_.IsInterrupted()) {
+      return {TerminalWaitStatus_::Interrupted, {}};
+    }
+    if (FD_ISSET(STDIN_FILENO, &readfds)) {
+      return {TerminalWaitStatus_::LocalInput, {}};
+    }
+    if (remote_fd_ >= 0 && FD_ISSET(remote_fd_, &readfds)) {
+      return {TerminalWaitStatus_::RemoteReady, {}};
+    }
+    return {TerminalWaitStatus_::Ready, {}};
+  }
+
+  void ShutdownPosix_() {
+    wake_guard_.reset();
+    if (wake_pipe_[0] >= 0) {
+      (void)close(wake_pipe_[0]);
+      wake_pipe_[0] = -1;
+    }
+    if (wake_pipe_[1] >= 0) {
+      (void)close(wake_pipe_[1]);
+      wake_pipe_[1] = -1;
+    }
+    remote_fd_ = -1;
+  }
+#endif
+
+  void Shutdown_() {
+    if (!initialized_) {
+      return;
+    }
+#ifdef _WIN32
+    ShutdownWindows_();
+#else
+    ShutdownPosix_();
+#endif
+    initialized_ = false;
+  }
+
+private:
+  AMDomain::terminal::ITerminalPort &terminal_;
+  const AMDomain::client::ClientControlComponent &control_;
+  bool initialized_ = false;
+  std::intptr_t remote_socket_ = -1;
+
+#ifdef _WIN32
+  std::array<HANDLE, 3> wait_handles_ = {nullptr, nullptr, nullptr};
+  DWORD wait_count_ = 0;
+  DWORD input_index_ = kInvalidIndex_;
+  DWORD wake_index_ = kInvalidIndex_;
+  DWORD socket_index_ = kInvalidIndex_;
+  HANDLE input_handle_ = INVALID_HANDLE_VALUE;
+  HANDLE wake_event_ = nullptr;
+  SOCKET remote_sock_ = INVALID_SOCKET;
+  WSAEVENT socket_event_ = WSA_INVALID_EVENT;
+  std::unique_ptr<AMDomain::client::ControlTokenWakeupSafeGaurd> wake_guard_ =
+      nullptr;
+#else
+  int wake_pipe_[2] = {-1, -1};
+  int remote_fd_ = -1;
+  std::unique_ptr<AMDomain::client::ControlTokenWakeupSafeGaurd> wake_guard_ =
+      nullptr;
+#endif
+};
+
 [[nodiscard]] AMDomain::terminal::ChannelOpenArgs
 BuildChannelOpenArgs_(const std::string &channel_name,
                       const AMTerminalTools::TerminalViewportInfo &geometry) {
@@ -391,215 +711,13 @@ BuildChannelOpenArgs_(const std::string &channel_name,
   return args;
 }
 
-ECM EnsureExistingTerminalChannel_(
-    AMDomain::terminal::ITerminalPort &terminal,
-    const std::optional<std::string> &requested_channel_name,
-    const AMDomain::terminal::CheckSessionResult &status,
-    const AMTerminalTools::TerminalViewportInfo &geometry,
-    const AMDomain::client::ClientControlComponent &control,
-    std::string *resolved_channel_name) {
-  if (resolved_channel_name == nullptr) {
-    return Err(EC::InvalidArg, "terminal.channel.resolve", "<output>",
-               "resolved channel output is null");
-  }
-  *resolved_channel_name = "";
-
-  const std::string requested = requested_channel_name.has_value()
-                                    ? AMStr::Strip(*requested_channel_name)
-                                    : "";
-  if (!requested.empty()) {
-    auto active_result = terminal.ActiveChannel({requested}, control);
-    if (!(active_result.rcm) || !active_result.data.activated) {
-      return active_result.rcm
-                 ? Err(EC::CommonFailure, "terminal.channel.active", requested,
-                       "Failed to activate terminal channel")
-                 : active_result.rcm;
-    }
-    *resolved_channel_name = requested;
-    return OK;
-  }
-
-  const std::string current_channel = AMStr::Strip(status.current_channel);
-  if (!current_channel.empty()) {
-    *resolved_channel_name = current_channel;
-    return OK;
-  }
-
-  const std::string default_channel = kDefaultTerminalChannelName_;
-  auto open_result = terminal.OpenChannel(
-      BuildChannelOpenArgs_(default_channel, geometry), control);
-  if (!(open_result.rcm) && open_result.rcm.code != EC::TargetAlreadyExists) {
-    return open_result.rcm;
-  }
-
-  auto active_result = terminal.ActiveChannel({default_channel}, control);
-  if (!(active_result.rcm) || !active_result.data.activated) {
-    return active_result.rcm
-               ? Err(EC::CommonFailure, "terminal.channel.active",
-                     default_channel, "Failed to activate terminal channel")
-               : active_result.rcm;
-  }
-  *resolved_channel_name = default_channel;
-  return OK;
-}
-
-ECM EnsureNewTerminalChannel_(
-    AMDomain::terminal::ITerminalPort &terminal,
-    const std::optional<std::string> &requested_channel_name,
-    const AMTerminalTools::TerminalViewportInfo &geometry,
-    const AMDomain::client::ClientControlComponent &control,
-    std::string *resolved_channel_name) {
-  if (resolved_channel_name == nullptr) {
-    return Err(EC::InvalidArg, "terminal.channel.open", "<output>",
-               "resolved channel output is null");
-  }
-  *resolved_channel_name = "";
-
-  std::string channel_name = requested_channel_name.has_value()
-                                 ? AMStr::Strip(*requested_channel_name)
-                                 : "";
-  if (channel_name.empty()) {
-    channel_name = kDefaultTerminalChannelName_;
-  }
-
-  auto open_result = terminal.OpenChannel(
-      BuildChannelOpenArgs_(channel_name, geometry), control);
-  if (!(open_result.rcm) && open_result.rcm.code != EC::TargetAlreadyExists) {
-    return open_result.rcm;
-  }
-
-  auto active_result = terminal.ActiveChannel({channel_name}, control);
-  if (!(active_result.rcm) || !active_result.data.activated) {
-    return active_result.rcm
-               ? Err(EC::CommonFailure, "terminal.channel.active", channel_name,
-                     "Failed to activate terminal channel")
-               : active_result.rcm;
-  }
-  *resolved_channel_name = channel_name;
-  return OK;
-}
-
-template <typename WriteFn, typename ResizeFn, typename ReadFn>
-TerminalLoopOutcome_ BridgeInteractiveTerminalCore_(
-    const std::string &channel_name,
-    const AMDomain::client::ClientControlComponent &base_control,
-    WriteFn write_channel, ResizeFn resize_channel, ReadFn read_channel) {
-  ScopedRawTerminal_ raw_terminal = {};
-  if (!raw_terminal.Activate()) {
-    return {Err(EC::CommonFailure, "terminal.raw_mode", "<stdin>",
-                raw_terminal.Error()),
-            true};
-  }
-
-  AMTerminalTools::TerminalViewportInfo last_geometry =
-      AMTerminalTools::GetTerminalViewportInfo();
-  constexpr int kIdleSleepMs = 5;
-
-  while (true) {
-    bool had_activity = false;
-    if (base_control.IsInterrupted()) {
-      return {Err(EC::Terminate, "terminal.loop", "<terminal>",
-                  "Terminal interrupted"),
-              true};
-    }
-    if (base_control.IsTimeout()) {
-      return {Err(EC::OperationTimeout, "terminal.loop", "<terminal>",
-                  "Terminal timed out"),
-              true};
-    }
-
-    std::string input = {};
-    std::string input_error = {};
-    const auto input_status = PollLocalTerminalInput_(&input, &input_error);
-    if (input_status == LocalInputPollStatus_::Error) {
-      return {Err(EC::LocalFileReadError, "terminal.input", "<stdin>",
-                  input_error.empty() ? "Local terminal input failed"
-                                      : input_error),
-              true};
-    }
-    if (input_status == LocalInputPollStatus_::Closed) {
-      return {OK, false};
-    }
-
-    const bool request_local_exit = ConsumeLocalExitByte_(&input);
-    if (!input.empty()) {
-      had_activity = true;
-      auto write_result = write_channel(
-          AMDomain::terminal::ChannelWriteArgs{
-              std::optional<std::string>(channel_name), input},
-          base_control);
-      if (!(write_result.rcm)) {
-        return {write_result.rcm, true};
-      }
-    }
-    if (request_local_exit) {
-      return {OK, false};
-    }
-
-    const AMTerminalTools::TerminalViewportInfo geometry =
-        AMTerminalTools::GetTerminalViewportInfo();
-    if (geometry.cols != last_geometry.cols ||
-        geometry.rows != last_geometry.rows ||
-        geometry.width != last_geometry.width ||
-        geometry.height != last_geometry.height) {
-      auto resize_result = resize_channel(
-          AMDomain::terminal::ChannelResizeArgs{
-              std::optional<std::string>(channel_name), geometry.cols,
-              geometry.rows, geometry.width, geometry.height},
-          base_control);
-      if (!(resize_result.rcm)) {
-        return {resize_result.rcm, true};
-      }
-      last_geometry = geometry;
-      had_activity = true;
-    }
-
-    auto read_result = read_channel(
-        AMDomain::terminal::ChannelReadArgs{
-            std::optional<std::string>(channel_name), 32U * 1024U},
-        base_control);
-    if (!(read_result.rcm)) {
-      return {read_result.rcm, true};
-    }
-    if (!read_result.data.output.empty()) {
-      WriteTerminalBytes_(read_result.data.output);
-      had_activity = true;
-    }
-    if (read_result.data.eof) {
-      return {OK, false};
-    }
-    if (!had_activity) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(kIdleSleepMs));
-    }
-  }
-}
-
-TerminalLoopOutcome_ BridgeInteractiveTerminal_(
-    AMDomain::terminal::ITerminalPort &terminal,
-    const std::string &channel_name,
-    const AMDomain::client::ClientControlComponent &base_control) {
-  return BridgeInteractiveTerminalCore_(
-      channel_name, base_control,
-      [&terminal](const AMDomain::terminal::ChannelWriteArgs &write_args,
-                  const AMDomain::client::ClientControlComponent &control) {
-        return terminal.WriteChannel(write_args, control);
-      },
-      [&terminal](const AMDomain::terminal::ChannelResizeArgs &resize_args,
-                  const AMDomain::client::ClientControlComponent &control) {
-        return terminal.ResizeChannel(resize_args, control);
-      },
-      [&terminal](const AMDomain::terminal::ChannelReadArgs &read_args,
-                  const AMDomain::client::ClientControlComponent &control) {
-        return terminal.ReadChannel(read_args, control);
-      });
-}
-
 ECM ExecuteTerminalSession_(
     AMDomain::terminal::ITerminalPort &terminal,
     const TerminalTargetSpec_ &target,
     const AMDomain::client::ClientControlComponent &control,
     bool reuse_existing_channel,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager) {
+  (void)reuse_existing_channel;
   const AMTerminalTools::TerminalViewportInfo geometry =
       AMTerminalTools::GetTerminalViewportInfo();
   auto status_result = terminal.CheckSession({}, control);
@@ -614,20 +732,185 @@ ECM ExecuteTerminalSession_(
   }
 
   std::string channel_name = {};
-  ECM channel_rcm =
-      reuse_existing_channel
-          ? EnsureExistingTerminalChannel_(terminal, target.channel_name,
-                                           status_result.data, geometry,
-                                           control, &channel_name)
-          : EnsureNewTerminalChannel_(terminal, target.channel_name, geometry,
-                                      control, &channel_name);
-  if (!(channel_rcm)) {
-    return channel_rcm;
+  const std::string requested_channel =
+      target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
+
+  if (!requested_channel.empty()) {
+    auto check_result = terminal.CheckChannel(
+        {std::optional<std::string>(requested_channel)}, control);
+    if (!(check_result.rcm)) {
+      if (check_result.rcm.code != EC::ClientNotFound) {
+        return check_result.rcm;
+      }
+      auto open_result = terminal.OpenChannel(
+          BuildChannelOpenArgs_(requested_channel, geometry), control);
+      if (!(open_result.rcm) &&
+          open_result.rcm.code != EC::TargetAlreadyExists) {
+        return open_result.rcm;
+      }
+    } else {
+      if (!check_result.data.exists || !check_result.data.is_open) {
+        return Err(EC::NoConnection, "terminal.channel.check",
+                   requested_channel, "Target channel is not available");
+      }
+    }
+
+    auto active_result = terminal.ActiveChannel({requested_channel}, control);
+    if (!(active_result.rcm) || !active_result.data.activated) {
+      return active_result.rcm
+                 ? Err(EC::CommonFailure, "terminal.channel.active",
+                       requested_channel, "Failed to activate terminal channel")
+                 : active_result.rcm;
+    }
+    channel_name = requested_channel;
+  } else {
+    const std::string current_channel =
+        AMStr::Strip(status_result.data.current_channel);
+    if (current_channel.empty()) {
+      return Err(EC::InvalidArg, "terminal.channel.current", target.nickname,
+                 "No active channel in terminal");
+    }
+    auto check_result = terminal.CheckChannel({std::nullopt}, control);
+    if (!(check_result.rcm)) {
+      return check_result.rcm;
+    }
+    if (!check_result.data.exists || !check_result.data.is_open) {
+      return Err(EC::NoConnection, "terminal.channel.current", current_channel,
+                 "Current channel is not available");
+    }
+    channel_name = check_result.data.channel_name.empty()
+                       ? current_channel
+                       : check_result.data.channel_name;
   }
 
   ScopedPromptOutputCache_ prompt_cache_guard(&prompt_io_manager);
-  TerminalLoopOutcome_ loop_outcome =
-      BridgeInteractiveTerminal_(terminal, channel_name, control);
+  ScopedRawTerminal_ raw_terminal = {};
+  if (!raw_terminal.Activate()) {
+    prompt_cache_guard.Disable();
+    return Err(EC::CommonFailure, "terminal.raw_mode", "<stdin>",
+               raw_terminal.Error());
+  }
+  InteractiveTerminalWaiter_ terminal_waiter(terminal, control);
+  ECM wait_init_rcm = terminal_waiter.Init();
+  if (!wait_init_rcm) {
+    raw_terminal.Restore();
+    prompt_cache_guard.Disable();
+    return wait_init_rcm;
+  }
+
+  TerminalLoopOutcome_ loop_outcome = {};
+  AMTerminalTools::TerminalViewportInfo last_geometry =
+      AMTerminalTools::GetTerminalViewportInfo();
+
+  while (true) {
+    bool had_activity = false;
+    if (control.IsInterrupted()) {
+      loop_outcome = {Err(EC::Terminate, "terminal.loop", "<terminal>",
+                          "Terminal interrupted"),
+                      true};
+      break;
+    }
+    if (control.IsTimeout()) {
+      loop_outcome = {Err(EC::OperationTimeout, "terminal.loop", "<terminal>",
+                          "Terminal timed out"),
+                      true};
+      break;
+    }
+
+    std::string input = {};
+    std::string input_error = {};
+    const auto input_status = PollLocalTerminalInput_(&input, &input_error);
+    if (input_status == LocalInputPollStatus_::Error) {
+      loop_outcome = {Err(EC::LocalFileReadError, "terminal.input", "<stdin>",
+                          input_error.empty() ? "Local terminal input failed"
+                                              : input_error),
+                      true};
+      break;
+    }
+    if (input_status == LocalInputPollStatus_::Closed) {
+      loop_outcome = {OK, false};
+      break;
+    }
+
+    const bool request_local_exit = ConsumeLocalExitByte_(&input);
+    if (!input.empty()) {
+      had_activity = true;
+      auto write_result = terminal.WriteChannel(
+          AMDomain::terminal::ChannelWriteArgs{
+              std::optional<std::string>(channel_name), input},
+          control);
+      if (!write_result.rcm) {
+        loop_outcome = {write_result.rcm, true};
+        break;
+      }
+    }
+    if (request_local_exit) {
+      loop_outcome = {OK, false};
+      break;
+    }
+
+    const AMTerminalTools::TerminalViewportInfo current_geometry =
+        AMTerminalTools::GetTerminalViewportInfo();
+    if (current_geometry.cols != last_geometry.cols ||
+        current_geometry.rows != last_geometry.rows ||
+        current_geometry.width != last_geometry.width ||
+        current_geometry.height != last_geometry.height) {
+      auto resize_result = terminal.ResizeChannel(
+          AMDomain::terminal::ChannelResizeArgs{
+              std::optional<std::string>(channel_name), current_geometry.cols,
+              current_geometry.rows, current_geometry.width,
+              current_geometry.height},
+          control);
+      if (!(resize_result.rcm)) {
+        loop_outcome = {resize_result.rcm, true};
+        break;
+      }
+      last_geometry = current_geometry;
+      had_activity = true;
+    }
+
+    auto read_result = terminal.ReadChannel(
+        AMDomain::terminal::ChannelReadArgs{
+            std::optional<std::string>(channel_name), 32U * 1024U},
+        control);
+    if (!(read_result.rcm)) {
+      loop_outcome = {read_result.rcm, true};
+      break;
+    }
+    if (!read_result.data.output.empty()) {
+      WriteTerminalBytes_(read_result.data.output);
+      had_activity = true;
+    }
+    if (read_result.data.eof) {
+      loop_outcome = {OK, false};
+      break;
+    }
+    if (!had_activity) {
+      const TerminalWaitResult_ wait_result = terminal_waiter.Wait();
+      if (wait_result.status == TerminalWaitStatus_::Interrupted) {
+        loop_outcome = {Err(EC::Terminate, "terminal.wait", "<terminal>",
+                            "Terminal interrupted"),
+                        true};
+        break;
+      }
+      if (wait_result.status == TerminalWaitStatus_::Timeout) {
+        loop_outcome = {Err(EC::OperationTimeout, "terminal.wait", "<terminal>",
+                            "Terminal wait timed out"),
+                        true};
+        break;
+      }
+      if (wait_result.status == TerminalWaitStatus_::Error) {
+        loop_outcome = {Err(EC::SocketRecvError, "terminal.wait", "<terminal>",
+                            wait_result.error.empty()
+                                ? "Terminal wait failed"
+                                : wait_result.error),
+                        true};
+        break;
+      }
+    }
+  }
+
+  raw_terminal.Restore();
 
   auto close_result = terminal.CloseChannel(
       AMDomain::terminal::ChannelCloseArgs{channel_name,
@@ -774,7 +1057,7 @@ ECM FilesystemInterfaceSerivce::LaunchTerminal(
   }
 
   auto temp_client_result =
-      filesystem_service_.GetClient(target.nickname, control, true);
+      client_service_.CreateClient(target.nickname, control, false, false);
   if (!(temp_client_result.rcm) || !temp_client_result.data) {
     const ECM rcm = temp_client_result.rcm
                         ? Err(EC::InvalidHandle, __func__, target.nickname,

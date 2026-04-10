@@ -447,6 +447,18 @@ ClientAppService::CreateClient(const HostConfig &config,
 }
 
 ECMData<ClientHandle>
+ClientAppService::CreateClient(const std::string &nickname,
+                               const ClientControlComponent &control,
+                               bool case_sensitive, bool silent) {
+  auto config_result =
+      ResolveHostConfig_(host_config_manager_, nickname, case_sensitive);
+  if (!(config_result.rcm)) {
+    return {nullptr, config_result.rcm};
+  }
+  return CreateClient(config_result.data, control, silent);
+}
+
+ECMData<ClientHandle>
 ClientAppService::EnsureClient(const std::string &nickname, bool case_sensitive,
                                bool silent) {
   const ClientControlComponent control = GetControlComponent(std::nullopt, -1);
@@ -917,23 +929,6 @@ void ClientAppService::ApplyCallbacksToClient_(const ClientHandle &client,
   }
   if (known_host) {
     client->IOPort().RegisterKnownHostCallback(known_host);
-  }
-
-  auto *terminal_port = client->TerminalPort();
-  if (!terminal_port) {
-    return;
-  }
-  if (trace) {
-    terminal_port->RegisterTraceCallback(trace);
-  }
-  if (connect_state) {
-    terminal_port->RegisterConnectStateCallback(connect_state);
-  }
-  if (auth) {
-    terminal_port->RegisterAuthCallback(auth);
-  }
-  if (known_host) {
-    terminal_port->RegisterKnownHostCallback(known_host);
   }
 }
 

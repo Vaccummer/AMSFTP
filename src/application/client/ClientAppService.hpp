@@ -71,6 +71,10 @@ public:
   ECMData<ClientHandle> CreateClient(const AMDomain::host::HostConfig &config,
                                      const ClientControlComponent &control,
                                      bool silent = false);
+  ECMData<ClientHandle> CreateClient(const std::string &nickname,
+                                     const ClientControlComponent &control,
+                                     bool case_sensitive = true,
+                                     bool silent = false);
 
   [[nodiscard]] ECMData<ClientHandle> EnsureClient(const std::string &nickname,
                                                    bool case_sensitive = true,
