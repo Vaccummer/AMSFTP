@@ -275,8 +275,13 @@ private:
     ctx->eof = false;
     ctx->exit_status = -1;
 
+    const AMDomain::client::amf control_token = control.ControlToken();
+    auto is_interrupted = [control_token]() -> bool {
+      return control_token && control_token->IsInterrupted();
+    };
+
     ECM init_ecm = ctx->channel->Init(
-        session_, [&control]() { return control.IsInterrupted(); },
+        session_, std::move(is_interrupted),
         TimeoutMs_(control), AMTime::miliseconds());
     if (init_ecm.code != ErrorCode::Success) {
       ctx->channel.reset();
@@ -681,6 +686,56 @@ public:
     return out;
   }
 
+  ECMData<AMT::ChannelRenameResult> RenameChannel(
+      const AMT::ChannelRenameArgs &rename_args,
+      const AMDomain::client::ClientControlComponent &control) override {
+    (void)control;
+    ECMData<AMT::ChannelRenameResult> out = {};
+    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+
+    const std::string src_name = AMStr::Strip(rename_args.src_channel_name);
+    const std::string dst_name = AMStr::Strip(rename_args.dst_channel_name);
+    out.data.src_channel_name = src_name;
+    out.data.dst_channel_name = dst_name;
+    if (src_name.empty() || dst_name.empty()) {
+      out.rcm = Err(EC::InvalidArg, "terminal.rename", "channel_name",
+                    "src_channel_name and dst_channel_name must be non-empty");
+      return out;
+    }
+    if (!AMDomain::host::HostService::ValidateNickname(src_name) ||
+        !AMDomain::host::HostService::ValidateNickname(dst_name)) {
+      out.rcm = Err(EC::InvalidArg, "terminal.rename", src_name + "->" + dst_name,
+                    "Channel names must be valid nicknames");
+      return out;
+    }
+    if (src_name == dst_name) {
+      out.rcm = OK;
+      out.data.renamed = true;
+      return out;
+    }
+
+    auto src_it = channels_.find(src_name);
+    if (src_it == channels_.end()) {
+      out.rcm = Err(EC::ClientNotFound, "terminal.rename", src_name,
+                    "Source channel does not exist");
+      return out;
+    }
+    if (channels_.find(dst_name) != channels_.end()) {
+      out.rcm = Err(EC::TargetAlreadyExists, "terminal.rename", dst_name,
+                    "Target channel already exists");
+      return out;
+    }
+
+    channels_.emplace(dst_name, std::move(src_it->second));
+    channels_.erase(src_it);
+    if (current_channel_.has_value() && *current_channel_ == src_name) {
+      current_channel_ = dst_name;
+    }
+    out.rcm = OK;
+    out.data.renamed = true;
+    return out;
+  }
+
   ECMData<AMT::ChannelListResult> ListChannels(
       const AMT::ChannelListArgs &list_args,
       const AMDomain::client::ClientControlComponent &control) override {
@@ -764,6 +819,30 @@ public:
         current_channel_.has_value() && (*current_channel_ == target_name);
     out.rcm = OK;
     return out;
+  }
+
+  [[nodiscard]] AMDomain::client::ClientStatus GetSessionState() const override {
+    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    if (!owner_client_) {
+      return AMDomain::client::ClientStatus::NotInitialized;
+    }
+    return owner_client_->ConfigPort().GetState().data.status;
+  }
+
+  [[nodiscard]] ECMData<std::intptr_t> GetRemoteSocketHandle() const override {
+    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    if (!sftp_core_) {
+      return {static_cast<std::intptr_t>(-1),
+              Err(EC::NoSession, "terminal.remote_socket", request_.hostname,
+                  "SFTP IO core is unavailable")};
+    }
+    const std::intptr_t handle = sftp_core_->RemoteSocketHandle();
+    if (handle < 0) {
+      return {handle,
+              Err(EC::NoConnection, "terminal.remote_socket", request_.hostname,
+                  "Client socket is unavailable")};
+    }
+    return {handle, OK};
   }
 };
 

@@ -1085,4 +1085,271 @@ ECM FilesystemInterfaceSerivce::LaunchTerminal(
   return run_rcm;
 }
 
+ECM FilesystemInterfaceSerivce::AddTerminal(
+    const FilesystemTermAddArg &arg,
+    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string nickname = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(arg.nickname));
+  if (nickname.empty()) {
+    nickname = AMDomain::host::HostService::NormalizeNickname(
+        AMStr::Strip(filesystem_service_.CurrentNickname()));
+  }
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+
+  auto existing = terminal_service_.GetTerminalByNickname(nickname, false);
+  if (existing.rcm && existing.data) {
+    if (!arg.force) {
+      const ECM rcm = Err(EC::TargetAlreadyExists, __func__, nickname,
+                          "Terminal already exists");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return rcm;
+    }
+    const ECM rm_rcm = terminal_service_.RemoveTerminal(nickname, control);
+    if (!(rm_rcm)) {
+      prompt_io_manager_.ErrorFormat(rm_rcm);
+      return rm_rcm;
+    }
+  } else if (existing.rcm.code != EC::ClientNotFound) {
+    prompt_io_manager_.ErrorFormat(existing.rcm);
+    return existing.rcm;
+  }
+
+  auto client_result = client_service_.CreateClient(nickname, control, false);
+  if (!(client_result.rcm) || !client_result.data) {
+    const ECM rcm =
+        (client_result.rcm)
+            ? Err(EC::InvalidHandle, __func__, nickname, "Created client is null")
+            : client_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto terminal_result = terminal_service_.CreateTerminal(client_result.data, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    const ECM rcm = (terminal_result.rcm.code == EC::OperationUnsupported)
+                        ? BuildTerminalUnsupportedError_(nickname)
+                        : terminal_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  prompt_io_manager_.FmtPrint("✅ Terminal added: {}", nickname);
+  return OK;
+}
+
+ECM FilesystemInterfaceSerivce::RemoveTerminal(
+    const FilesystemTermRemoveArg &arg,
+    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string nickname = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(arg.nickname));
+  if (nickname.empty()) {
+    nickname = AMDomain::host::HostService::NormalizeNickname(
+        AMStr::Strip(filesystem_service_.CurrentNickname()));
+  }
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+
+  const ECM rcm = terminal_service_.RemoveTerminal(nickname, control);
+  if (!(rcm)) {
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+  prompt_io_manager_.FmtPrint("✅ Terminal removed: {}", nickname);
+  return OK;
+}
+
+ECM FilesystemInterfaceSerivce::AddChannel(
+    const FilesystemChannelAddArg &arg,
+    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(filesystem_service_.CurrentNickname()));
+  if (default_nickname.empty()) {
+    default_nickname = "local";
+  }
+
+  auto target_result = ParseTerminalTargetSpec_(arg.target, default_nickname);
+  if (!(target_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(target_result.rcm);
+    return target_result.rcm;
+  }
+  const TerminalTargetSpec_ target = target_result.data;
+  const std::string channel_name =
+      target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
+  if (channel_name.empty()) {
+    const ECM rcm = Err(EC::InvalidArg, __func__, arg.target,
+                        "Channel name is required");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto terminal_result = terminal_service_.GetTerminalByNickname(target.nickname, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    const ECM rcm = terminal_result.rcm
+                        ? Err(EC::InvalidHandle, __func__, target.nickname,
+                              "Terminal handle is null")
+                        : terminal_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+  if (terminal_result.data->GetSessionState() !=
+      AMDomain::client::ClientStatus::OK) {
+    const ECM rcm =
+        Err(EC::NoConnection, __func__, target.nickname,
+            "Terminal session is disconnected");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  const AMTerminalTools::TerminalViewportInfo geometry =
+      AMTerminalTools::GetTerminalViewportInfo();
+  auto open_result =
+      terminal_result.data->OpenChannel(BuildChannelOpenArgs_(channel_name, geometry),
+                                        control);
+  if (!(open_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(open_result.rcm);
+    return open_result.rcm;
+  }
+  prompt_io_manager_.FmtPrint("✅ Channel added: {}@{}", target.nickname,
+                              channel_name);
+  return OK;
+}
+
+ECM FilesystemInterfaceSerivce::RemoveChannel(
+    const FilesystemChannelRemoveArg &arg,
+    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(filesystem_service_.CurrentNickname()));
+  if (default_nickname.empty()) {
+    default_nickname = "local";
+  }
+
+  auto target_result = ParseTerminalTargetSpec_(arg.target, default_nickname);
+  if (!(target_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(target_result.rcm);
+    return target_result.rcm;
+  }
+  const TerminalTargetSpec_ target = target_result.data;
+  const std::string channel_name =
+      target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
+  if (channel_name.empty()) {
+    const ECM rcm = Err(EC::InvalidArg, __func__, arg.target,
+                        "Channel name is required");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto terminal_result = terminal_service_.GetTerminalByNickname(target.nickname, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    const ECM rcm = terminal_result.rcm
+                        ? Err(EC::InvalidHandle, __func__, target.nickname,
+                              "Terminal handle is null")
+                        : terminal_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+  if (terminal_result.data->GetSessionState() !=
+      AMDomain::client::ClientStatus::OK) {
+    const ECM rcm =
+        Err(EC::NoConnection, __func__, target.nickname,
+            "Terminal session is disconnected");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto close_result = terminal_result.data->CloseChannel({channel_name, arg.force}, control);
+  if (!(close_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(close_result.rcm);
+    return close_result.rcm;
+  }
+  prompt_io_manager_.FmtPrint("✅ Channel removed: {}@{}", target.nickname,
+                              channel_name);
+  return OK;
+}
+
+ECM FilesystemInterfaceSerivce::RenameChannel(
+    const FilesystemChannelRenameArg &arg,
+    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(filesystem_service_.CurrentNickname()));
+  if (default_nickname.empty()) {
+    default_nickname = "local";
+  }
+
+  auto src_result = ParseTerminalTargetSpec_(arg.src, default_nickname);
+  if (!(src_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(src_result.rcm);
+    return src_result.rcm;
+  }
+  auto dst_result = ParseTerminalTargetSpec_(arg.dst, default_nickname);
+  if (!(dst_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(dst_result.rcm);
+    return dst_result.rcm;
+  }
+
+  const TerminalTargetSpec_ src_target = src_result.data;
+  const TerminalTargetSpec_ dst_target = dst_result.data;
+  const std::string src_channel =
+      src_target.channel_name.has_value() ? AMStr::Strip(*src_target.channel_name)
+                                          : "";
+  const std::string dst_channel =
+      dst_target.channel_name.has_value() ? AMStr::Strip(*dst_target.channel_name)
+                                          : "";
+  if (src_channel.empty() || dst_channel.empty()) {
+    const ECM rcm = Err(EC::InvalidArg, __func__, "channel_name",
+                        "Both source and destination channels are required");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+  if (src_target.nickname != dst_target.nickname) {
+    const ECM rcm =
+        Err(EC::InvalidArg, __func__, arg.dst,
+            "Channel rename must stay in the same terminal scope");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto terminal_result =
+      terminal_service_.GetTerminalByNickname(src_target.nickname, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    const ECM rcm = terminal_result.rcm
+                        ? Err(EC::InvalidHandle, __func__, src_target.nickname,
+                              "Terminal handle is null")
+                        : terminal_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+  if (terminal_result.data->GetSessionState() !=
+      AMDomain::client::ClientStatus::OK) {
+    const ECM rcm =
+        Err(EC::NoConnection, __func__, src_target.nickname,
+            "Terminal session is disconnected");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto rename_result = terminal_result.data->RenameChannel(
+      {src_channel, dst_channel}, control);
+  if (!(rename_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(rename_result.rcm);
+    return rename_result.rcm;
+  }
+  prompt_io_manager_.FmtPrint("✅ Channel renamed: {}@{} -> {}@{}",
+                              src_target.nickname, src_channel,
+                              dst_target.nickname, dst_channel);
+  return OK;
+}
+
 } // namespace AMInterface::filesystem

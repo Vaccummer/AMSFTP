@@ -21,67 +21,67 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
                          StyleIndex style_index) {
   switch (style_index) {
   case StyleIndex::Protocol:
-    return &cfg.input_highlight.protocol;
+    return &cfg.common.protocol;
   case StyleIndex::Abort:
-    return &cfg.input_highlight.abort;
+    return &cfg.common.abort;
   case StyleIndex::Common:
-    return &cfg.input_highlight.common;
+    return &cfg.common.common;
   case StyleIndex::Module:
-    return &cfg.input_highlight.module;
+    return &cfg.common.module;
   case StyleIndex::Command:
-    return &cfg.input_highlight.command;
+    return &cfg.common.command;
   case StyleIndex::IllegalCommand:
-    return &cfg.input_highlight.illegal_command;
+    return &cfg.common.illegal_command;
   case StyleIndex::Option:
-    return &cfg.input_highlight.option;
+    return &cfg.common.option;
   case StyleIndex::String:
-    return &cfg.input_highlight.string;
+    return &cfg.common.string;
   case StyleIndex::PublicVarname:
-    return &cfg.input_highlight.public_varname;
+    return &cfg.common.public_varname;
   case StyleIndex::PrivateVarname:
-    return &cfg.input_highlight.private_varname;
+    return &cfg.common.private_varname;
   case StyleIndex::NonexistentVarname:
-    return &cfg.input_highlight.nonexistent_varname;
+    return &cfg.common.nonexistent_varname;
   case StyleIndex::VarValue:
-    return &cfg.input_highlight.varvalue;
+    return &cfg.common.varvalue;
   case StyleIndex::Nickname:
-    return &cfg.input_highlight.nickname;
+    return &cfg.common.nickname;
   case StyleIndex::DisconnectedNickname:
-    return &cfg.input_highlight.disconnected_nickname;
+    return &cfg.common.disconnected_nickname;
   case StyleIndex::UnestablishedNickname:
-    return &cfg.input_highlight.unestablished_nickname;
+    return &cfg.common.unestablished_nickname;
   case StyleIndex::NonexistentNickname:
-    return &cfg.input_highlight.nonexistent_nickname;
+    return &cfg.common.nonexistent_nickname;
   case StyleIndex::ValidNewNickname:
-    return &cfg.input_highlight.valid_new_nickname;
+    return &cfg.common.valid_new_nickname;
   case StyleIndex::InvalidNewNickname:
-    return &cfg.input_highlight.invalid_new_nickname;
+    return &cfg.common.invalid_new_nickname;
   case StyleIndex::BuiltinArg:
-    return &cfg.input_highlight.builtin_arg;
+    return &cfg.common.builtin_arg;
   case StyleIndex::NonexistentBuiltinArg:
-    return &cfg.input_highlight.nonexistent_builtin_arg;
+    return &cfg.common.nonexistent_builtin_arg;
   case StyleIndex::Username:
-    return &cfg.input_highlight.username;
+    return &cfg.common.username;
   case StyleIndex::AtSign:
-    return &cfg.input_highlight.atsign;
+    return &cfg.common.atsign;
   case StyleIndex::DollarSign:
-    return &cfg.input_highlight.dollarsign;
+    return &cfg.common.dollarsign;
   case StyleIndex::EqualSign:
-    return &cfg.input_highlight.equalsign;
+    return &cfg.common.equalsign;
   case StyleIndex::EscapedSign:
-    return &cfg.input_highlight.escapedsign;
+    return &cfg.common.escapedsign;
   case StyleIndex::BangSign:
-    return &cfg.input_highlight.bangsign;
+    return &cfg.common.bangsign;
   case StyleIndex::ShellCmd:
-    return &cfg.input_highlight.shell_cmd;
+    return &cfg.common.shell_cmd;
   case StyleIndex::Cwd:
     return &cfg.path.cwd;
   case StyleIndex::Number:
-    return &cfg.input_highlight.number;
+    return &cfg.common.number;
   case StyleIndex::Timestamp:
-    return &cfg.input_highlight.timestamp;
+    return &cfg.common.timestamp;
   case StyleIndex::PathLike:
-    return &cfg.input_highlight.path_like;
+    return &cfg.common.path_like;
   case StyleIndex::PromptUn:
     return LookupPromptShortcut_(cfg, "un");
   case StyleIndex::PromptAt:

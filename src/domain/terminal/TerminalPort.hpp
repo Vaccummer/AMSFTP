@@ -2,6 +2,7 @@
 
 #include "domain/client/ClientPort.hpp"
 #include "domain/terminal/TerminalModel.hpp"
+#include <cstdint>
 #include <memory>
 
 namespace AMDomain::terminal {
@@ -39,6 +40,10 @@ public:
   CloseChannel(const ChannelCloseArgs &close_args,
                const ClientControlComponent &control = {}) = 0;
 
+  virtual ECMData<ChannelRenameResult>
+  RenameChannel(const ChannelRenameArgs &rename_args,
+                const ClientControlComponent &control = {}) = 0;
+
   virtual ECMData<ChannelListResult>
   ListChannels(const ChannelListArgs &list_args,
                const ClientControlComponent &control = {}) = 0;
@@ -50,6 +55,11 @@ public:
   virtual ECMData<ChannelCheckResult>
   CheckChannel(const ChannelCheckArgs &check_args,
                const ClientControlComponent &control = {}) = 0;
+
+  [[nodiscard]] virtual ClientStatus GetSessionState() const = 0;
+
+  [[nodiscard]] virtual ECMData<std::intptr_t>
+  GetRemoteSocketHandle() const = 0;
 };
 
 using TerminalHandle = std::shared_ptr<ITerminalPort>;

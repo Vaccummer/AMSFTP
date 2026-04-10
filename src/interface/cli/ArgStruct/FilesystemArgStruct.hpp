@@ -617,6 +617,67 @@ struct TerminalArgs : BaseArgStruct {
   void reset() override { request = {}; }
 };
 
+struct TermAddArgs : BaseArgStruct {
+  AMInterface::filesystem::FilesystemTermAddArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    arg.nickname = AMStr::Strip(arg.nickname);
+    return managers.interfaces.filesystem_interface_service->AddTerminal(arg);
+  }
+  void reset() override { request = {}; }
+};
+
+struct TermRemoveArgs : BaseArgStruct {
+  AMInterface::filesystem::FilesystemTermRemoveArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    arg.nickname = AMStr::Strip(arg.nickname);
+    return managers.interfaces.filesystem_interface_service->RemoveTerminal(arg);
+  }
+  void reset() override { request = {}; }
+};
+
+struct ChannelAddArgs : BaseArgStruct {
+  AMInterface::filesystem::FilesystemChannelAddArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    arg.target = AMStr::Strip(arg.target);
+    return managers.interfaces.filesystem_interface_service->AddChannel(arg);
+  }
+  void reset() override { request = {}; }
+};
+
+struct ChannelRemoveArgs : BaseArgStruct {
+  AMInterface::filesystem::FilesystemChannelRemoveArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    arg.target = AMStr::Strip(arg.target);
+    return managers.interfaces.filesystem_interface_service->RemoveChannel(arg);
+  }
+  void reset() override { request = {}; }
+};
+
+struct ChannelRenameArgs : BaseArgStruct {
+  AMInterface::filesystem::FilesystemChannelRenameArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    arg.src = AMStr::Strip(arg.src);
+    arg.dst = AMStr::Strip(arg.dst);
+    return managers.interfaces.filesystem_interface_service->RenameChannel(arg);
+  }
+  void reset() override { request = {}; }
+};
+
 struct BashArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {

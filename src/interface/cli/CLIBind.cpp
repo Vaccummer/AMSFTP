@@ -726,19 +726,113 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
                         "timeout)");
   }
 
-  CommandNode *term_node =
-      root->AddFunction("term",
+  CommandNode *ssh_node =
+      root->AddFunction("ssh",
                         "Open an interactive terminal on the current client "
                         "(local escape: Ctrl+])",
-                        args, &CliArgsPool::fs, &CliFilesystemArgs::term);
-  commands.fs.term = term_node ? term_node->app : nullptr;
-  if (commands.fs.term) {
-    commands.fs.term
-        ->add_option("target", args.fs.term.request.target,
+                        args, &CliArgsPool::fs, &CliFilesystemArgs::ssh);
+  commands.fs.ssh = ssh_node ? ssh_node->app : nullptr;
+  if (commands.fs.ssh) {
+    commands.fs.ssh
+        ->add_option("target", args.fs.ssh.request.target,
                      "Optional terminal target spec: [nickname]@[channel] or channel")
         ->expected(0, 1);
   }
-  (void)term_node;
+  if (ssh_node) {
+    ssh_node->AddPositionalRule(0, Sem::Path, false);
+  }
+
+  CommandNode *term_module_node = root->AddFunction("term", "Terminal manager");
+  commands.term.root = term_module_node ? term_module_node->app : nullptr;
+  if (term_module_node) {
+    CommandNode *term_add_node = term_module_node->AddFunction(
+        "add", "Add one terminal by nickname", args, &CliArgsPool::term,
+        &CliTermArgs::add);
+    commands.term.add = term_add_node ? term_add_node->app : nullptr;
+    if (commands.term.add) {
+      commands.term.add
+          ->add_option("nickname", args.term.add.request.nickname,
+                       "Target nickname")
+          ->expected(0, 1);
+    }
+    if (term_add_node) {
+      term_add_node->AddFlag("-f", "--force", args.term.add.request.force,
+                             "Recreate terminal if it already exists");
+      term_add_node->AddPositionalRule(0, Sem::HostNickname, false);
+    }
+
+    CommandNode *term_rm_node = term_module_node->AddFunction(
+        "rm", "Remove one terminal by nickname", args, &CliArgsPool::term,
+        &CliTermArgs::rm);
+    commands.term.rm = term_rm_node ? term_rm_node->app : nullptr;
+    if (commands.term.rm) {
+      commands.term.rm
+          ->add_option("nickname", args.term.rm.request.nickname,
+                       "Target nickname")
+          ->expected(0, 1);
+    }
+    if (term_rm_node) {
+      term_rm_node->AddPositionalRule(0, Sem::HostNickname, false);
+    }
+  }
+
+  CommandNode *channel_module_node =
+      root->AddFunction("channel", "Terminal channel manager");
+  commands.channel.root = channel_module_node ? channel_module_node->app : nullptr;
+  if (channel_module_node) {
+    CommandNode *channel_add_node = channel_module_node->AddFunction(
+        "add", "Add one channel", args, &CliArgsPool::channel,
+        &CliChannelArgs::add);
+    commands.channel.add = channel_add_node ? channel_add_node->app : nullptr;
+    if (commands.channel.add) {
+      commands.channel.add
+          ->add_option("target", args.channel.add.request.target,
+                       "Channel target: [termname]@channel")
+          ->required()
+          ->expected(1, 1);
+    }
+    if (channel_add_node) {
+      channel_add_node->AddPositionalRule(0, Sem::Path, false);
+    }
+
+    CommandNode *channel_rm_node = channel_module_node->AddFunction(
+        "rm", "Remove one channel", args, &CliArgsPool::channel,
+        &CliChannelArgs::rm);
+    commands.channel.rm = channel_rm_node ? channel_rm_node->app : nullptr;
+    if (commands.channel.rm) {
+      commands.channel.rm
+          ->add_option("target", args.channel.rm.request.target,
+                       "Channel target: [termname]@channel")
+          ->required()
+          ->expected(1, 1);
+    }
+    if (channel_rm_node) {
+      channel_rm_node->AddFlag("-f", "--force", args.channel.rm.request.force,
+                               "Force close channel");
+      channel_rm_node->AddPositionalRule(0, Sem::Path, false);
+    }
+
+    CommandNode *channel_rn_node = channel_module_node->AddFunction(
+        "rn", "Rename one channel inside one terminal", args,
+        &CliArgsPool::channel, &CliChannelArgs::rn);
+    commands.channel.rn = channel_rn_node ? channel_rn_node->app : nullptr;
+    if (commands.channel.rn) {
+      commands.channel.rn
+          ->add_option("src", args.channel.rn.request.src,
+                       "Source: [termname]@channel")
+          ->required()
+          ->expected(1, 1);
+      commands.channel.rn
+          ->add_option("dst", args.channel.rn.request.dst,
+                       "Destination: [termname]@channel")
+          ->required()
+          ->expected(1, 1);
+    }
+    if (channel_rn_node) {
+      channel_rn_node->AddPositionalRule(0, Sem::Path, false);
+      channel_rn_node->AddPositionalRule(1, Sem::Path, false);
+    }
+  }
 
   CommandNode *bash_node = root->AddFunction("bash", "Enter interactive mode",
                                              args, &CliArgsPool::fs, &CliFilesystemArgs::bash);
@@ -1015,5 +1109,4 @@ void DispatchCliCommands(const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
-
 

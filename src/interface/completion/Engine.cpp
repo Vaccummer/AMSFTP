@@ -350,8 +350,8 @@ void AMCompleteEngine::LoadConfig() {
   std::string module_tag = "";
   if (style_service_ != nullptr) {
     const auto style_cfg = style_service_->GetInitArg().style;
-    command_tag = style_cfg.input_highlight.command;
-    module_tag = style_cfg.input_highlight.module;
+    command_tag = style_cfg.common.command;
+    module_tag = style_cfg.common.module;
   }
   args_.input_tag_command = NormalizeStyleTag_(command_tag);
   args_.input_tag_module = NormalizeStyleTag_(module_tag);

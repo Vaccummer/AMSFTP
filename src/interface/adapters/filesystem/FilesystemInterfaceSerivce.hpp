@@ -74,6 +74,29 @@ struct FilesystemTerminalArg {
   std::string target = {};
 };
 
+struct FilesystemTermAddArg {
+  std::string nickname = {};
+  bool force = false;
+};
+
+struct FilesystemTermRemoveArg {
+  std::string nickname = {};
+};
+
+struct FilesystemChannelAddArg {
+  std::string target = {};
+};
+
+struct FilesystemChannelRemoveArg {
+  std::string target = {};
+  bool force = false;
+};
+
+struct FilesystemChannelRenameArg {
+  std::string src = {};
+  std::string dst = {};
+};
+
 struct FilesystemRenameArg {
   std::string target = {};
   std::string dst = {};
@@ -164,6 +187,26 @@ public:
 
   ECM LaunchTerminal(
       const FilesystemTerminalArg &arg = {},
+      const std::optional<AMDomain::client::ClientControlComponent>
+          &control_opt = std::nullopt) const;
+  ECM AddTerminal(
+      const FilesystemTermAddArg &arg,
+      const std::optional<AMDomain::client::ClientControlComponent>
+          &control_opt = std::nullopt) const;
+  ECM RemoveTerminal(
+      const FilesystemTermRemoveArg &arg,
+      const std::optional<AMDomain::client::ClientControlComponent>
+          &control_opt = std::nullopt) const;
+  ECM AddChannel(
+      const FilesystemChannelAddArg &arg,
+      const std::optional<AMDomain::client::ClientControlComponent>
+          &control_opt = std::nullopt) const;
+  ECM RemoveChannel(
+      const FilesystemChannelRemoveArg &arg,
+      const std::optional<AMDomain::client::ClientControlComponent>
+          &control_opt = std::nullopt) const;
+  ECM RenameChannel(
+      const FilesystemChannelRenameArg &arg,
       const std::optional<AMDomain::client::ClientControlComponent>
           &control_opt = std::nullopt) const;
 
