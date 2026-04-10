@@ -13,6 +13,21 @@ namespace AMInterface::completion {
 using TASKID = AMDomain::transfer::TaskInfo::ID;
 class ICompletionRuntime {
 public:
+  enum class TerminalNameState {
+    OK = 0,
+    Disconnected = 1,
+    Unestablished = 2,
+    Nonexistent = 3,
+  };
+
+  enum class ChannelNameState {
+    OK = 0,
+    Disconnected = 1,
+    Nonexistent = 2,
+    ValidNew = 3,
+    InvalidNew = 4,
+  };
+
   struct ModePolicy {
     bool enable = true;
     bool use_async = false;
@@ -36,7 +51,17 @@ public:
 
   [[nodiscard]] virtual std::vector<std::string> ListClientNames() const = 0;
   [[nodiscard]] virtual std::vector<std::string> ListHostNames() const = 0;
+  [[nodiscard]] virtual std::vector<std::string> ListTerminalNames() const = 0;
+  [[nodiscard]] virtual std::vector<std::string>
+  ListChannelNames(const std::string &terminal_nickname) const = 0;
   [[nodiscard]] virtual bool HostExists(const std::string &nickname) const = 0;
+  [[nodiscard]] virtual bool TerminalExists(const std::string &nickname) const = 0;
+  [[nodiscard]] virtual TerminalNameState
+  QueryTerminalNameState(const std::string &nickname) const = 0;
+  [[nodiscard]] virtual ChannelNameState
+  QueryChannelNameState(const std::string &terminal_nickname,
+                        const std::string &channel_name,
+                        bool allow_new) const = 0;
 
   [[nodiscard]] virtual std::vector<std::string> ListVarDomains() const = 0;
   [[nodiscard]] virtual bool HasVarDomain(const std::string &zone) const = 0;

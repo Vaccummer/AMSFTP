@@ -1,9 +1,11 @@
 #include "interface/token_analyser/TokenAnalyzerRuntimeAdapter.hpp"
 
 #include "domain/filesystem/FileSystemDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
+#include <optional>
 
 namespace AMInterface::parser {
 namespace {
@@ -29,6 +31,19 @@ std::string ResolveWorkdir_(const AMDomain::host::ClientMetaData &metadata,
   return ".";
 }
 
+std::string NormalizeNicknameOrDefault_(const std::string &nickname,
+                                        const std::string &fallback) {
+  std::string key = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(nickname));
+  if (key.empty()) {
+    key = AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(fallback));
+  }
+  if (key.empty()) {
+    key = "local";
+  }
+  return key;
+}
+
 } // namespace
 
 AMDomain::client::ClientHandle
@@ -49,8 +64,79 @@ TokenAnalyzerRuntimeAdapter::GetClient(const std::string &nickname) const {
   return client.data;
 }
 
+std::string TokenAnalyzerRuntimeAdapter::CurrentNickname() const {
+  std::string nickname = AMStr::Strip(client_service_.CurrentNickname());
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+  return AMDomain::host::HostService::NormalizeNickname(nickname);
+}
+
 bool TokenAnalyzerRuntimeAdapter::HostExists(const std::string &nickname) const {
   return host_service_.HostExists(nickname);
+}
+
+bool TokenAnalyzerRuntimeAdapter::TerminalExists(
+    const std::string &nickname) const {
+  auto terminal =
+      terminal_service_.GetTerminalByNickname(nickname, false);
+  return (terminal.rcm) && terminal.data;
+}
+
+ITokenAnalyzerRuntime::TerminalNameState
+TokenAnalyzerRuntimeAdapter::QueryTerminalNameState(
+    const std::string &nickname) const {
+  const std::string key = NormalizeNicknameOrDefault_(nickname, CurrentNickname());
+  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    if (host_service_.HostExists(key)) {
+      return TerminalNameState::Unestablished;
+    }
+    return TerminalNameState::Nonexistent;
+  }
+
+  auto check_result = terminal_result.data->CheckSession({}, {});
+  if ((check_result.rcm) &&
+      check_result.data.status == AMDomain::client::ClientStatus::OK) {
+    return TerminalNameState::OK;
+  }
+  return TerminalNameState::Disconnected;
+}
+
+ITokenAnalyzerRuntime::ChannelNameState
+TokenAnalyzerRuntimeAdapter::QueryChannelNameState(const std::string &nickname,
+                                                   const std::string &channel_name,
+                                                   bool allow_new) const {
+  const std::string key = NormalizeNicknameOrDefault_(nickname, CurrentNickname());
+  const std::string channel = AMStr::Strip(channel_name);
+  const bool valid_literal = AMDomain::host::HostService::ValidateNickname(channel);
+  if (channel.empty()) {
+    return allow_new ? ChannelNameState::InvalidNew : ChannelNameState::Nonexistent;
+  }
+
+  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    if (!allow_new) {
+      return ChannelNameState::Nonexistent;
+    }
+    if (!valid_literal || QueryTerminalNameState(key) == TerminalNameState::Nonexistent) {
+      return ChannelNameState::InvalidNew;
+    }
+    return ChannelNameState::ValidNew;
+  }
+
+  auto check_result =
+      terminal_result.data->CheckChannel({std::optional<std::string>(channel)}, {});
+  if ((check_result.rcm) && check_result.data.exists) {
+    return check_result.data.is_open ? ChannelNameState::OK
+                                     : ChannelNameState::Disconnected;
+  }
+
+  if (!allow_new) {
+    return ChannelNameState::Nonexistent;
+  }
+  return valid_literal ? ChannelNameState::ValidNew
+                       : ChannelNameState::InvalidNew;
 }
 
 bool TokenAnalyzerRuntimeAdapter::HasVarDomain(const std::string &zone) const {
@@ -160,6 +246,24 @@ std::string TokenAnalyzerRuntimeAdapter::ResolveInputHighlightStyle(
     return style_cfg.common.valid_new_nickname;
   case AMTokenType::InvalidNewNickname:
     return style_cfg.common.invalid_new_nickname;
+  case AMTokenType::TerminalName:
+    return style_cfg.common.termname;
+  case AMTokenType::DisconnectedTerminalName:
+    return style_cfg.common.disconnected_termname;
+  case AMTokenType::UnestablishedTerminalName:
+    return style_cfg.common.unestablished_termname;
+  case AMTokenType::NonexistentTerminalName:
+    return style_cfg.common.nonexistent_termname;
+  case AMTokenType::ChannelName:
+    return style_cfg.common.channelname;
+  case AMTokenType::DisconnectedChannelName:
+    return style_cfg.common.disconnected_channelname;
+  case AMTokenType::NonexistentChannelName:
+    return style_cfg.common.nonexistent_channelname;
+  case AMTokenType::ValidNewChannelName:
+    return style_cfg.common.valid_new_channelname;
+  case AMTokenType::InvalidNewChannelName:
+    return style_cfg.common.invalid_new_channelname;
   case AMTokenType::String:
     return style_cfg.common.string;
   case AMTokenType::Option:

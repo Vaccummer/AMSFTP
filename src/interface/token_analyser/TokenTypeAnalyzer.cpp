@@ -72,6 +72,15 @@ int PriorityForType_(AMTokenType type) {
   case AMTokenType::DisconnectedNickname:
   case AMTokenType::UnestablishedNickname:
   case AMTokenType::NonexistentNickname:
+  case AMTokenType::TerminalName:
+  case AMTokenType::DisconnectedTerminalName:
+  case AMTokenType::UnestablishedTerminalName:
+  case AMTokenType::NonexistentTerminalName:
+  case AMTokenType::ChannelName:
+  case AMTokenType::DisconnectedChannelName:
+  case AMTokenType::NonexistentChannelName:
+  case AMTokenType::ValidNewChannelName:
+  case AMTokenType::InvalidNewChannelName:
     return 70;
   case AMTokenType::BuiltinArg:
   case AMTokenType::NonexistentBuiltinArg:

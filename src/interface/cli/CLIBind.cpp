@@ -741,7 +741,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
         ->expected(0, 1);
   }
   if (ssh_node) {
-    ssh_node->AddPositionalRule(0, Sem::Path, false);
+    ssh_node->AddPositionalRule(0, Sem::SshChannelTarget, false);
   }
 
   CommandNode *term_module_node = root->AddFunction("term", "Terminal manager");
@@ -760,8 +760,13 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     if (term_add_node) {
       term_add_node->AddFlag("-f", "--force", args.term.add.request.force,
                              "Recreate terminal if it already exists");
-      term_add_node->AddPositionalRule(0, Sem::HostNickname, false);
+      term_add_node->AddPositionalRule(0, Sem::TerminalName, false);
     }
+
+    CommandNode *term_ls_node = term_module_node->AddFunction(
+        "ls", "List terminals", args, &CliArgsPool::term, &CliTermArgs::ls);
+    commands.term.ls = term_ls_node ? term_ls_node->app : nullptr;
+    (void)term_ls_node;
 
     CommandNode *term_rm_node = term_module_node->AddFunction(
         "rm", "Remove one terminal by nickname", args, &CliArgsPool::term,
@@ -774,7 +779,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
           ->expected(0, 1);
     }
     if (term_rm_node) {
-      term_rm_node->AddPositionalRule(0, Sem::HostNickname, false);
+      term_rm_node->AddPositionalRule(0, Sem::TerminalName, false);
     }
   }
 
@@ -794,7 +799,21 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
           ->expected(1, 1);
     }
     if (channel_add_node) {
-      channel_add_node->AddPositionalRule(0, Sem::Path, false);
+      channel_add_node->AddPositionalRule(0, Sem::ChannelTargetNew, false);
+    }
+
+    CommandNode *channel_ls_node = channel_module_node->AddFunction(
+        "ls", "List channels in one terminal", args, &CliArgsPool::channel,
+        &CliChannelArgs::ls);
+    commands.channel.ls = channel_ls_node ? channel_ls_node->app : nullptr;
+    if (commands.channel.ls) {
+      commands.channel.ls
+          ->add_option("nickname", args.channel.ls.request.nickname,
+                       "Terminal nickname (optional, default current)")
+          ->expected(0, 1);
+    }
+    if (channel_ls_node) {
+      channel_ls_node->AddPositionalRule(0, Sem::TerminalName, false);
     }
 
     CommandNode *channel_rm_node = channel_module_node->AddFunction(
@@ -811,7 +830,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     if (channel_rm_node) {
       channel_rm_node->AddFlag("-f", "--force", args.channel.rm.request.force,
                                "Force close channel");
-      channel_rm_node->AddPositionalRule(0, Sem::Path, false);
+      channel_rm_node->AddPositionalRule(0, Sem::ChannelTargetExisting, false);
     }
 
     CommandNode *channel_rn_node = channel_module_node->AddFunction(
@@ -831,8 +850,8 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
           ->expected(1, 1);
     }
     if (channel_rn_node) {
-      channel_rn_node->AddPositionalRule(0, Sem::Path, false);
-      channel_rn_node->AddPositionalRule(1, Sem::Path, false);
+      channel_rn_node->AddPositionalRule(0, Sem::ChannelTargetExisting, false);
+      channel_rn_node->AddPositionalRule(1, Sem::ChannelTargetNew, false);
     }
   }
 
@@ -1111,4 +1130,3 @@ void DispatchCliCommands(const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
-

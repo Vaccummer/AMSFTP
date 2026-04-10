@@ -56,6 +56,24 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.common.valid_new_nickname;
   case StyleIndex::InvalidNewNickname:
     return &cfg.common.invalid_new_nickname;
+  case StyleIndex::TerminalName:
+    return &cfg.common.termname;
+  case StyleIndex::DisconnectedTerminalName:
+    return &cfg.common.disconnected_termname;
+  case StyleIndex::UnestablishedTerminalName:
+    return &cfg.common.unestablished_termname;
+  case StyleIndex::NonexistentTerminalName:
+    return &cfg.common.nonexistent_termname;
+  case StyleIndex::ChannelName:
+    return &cfg.common.channelname;
+  case StyleIndex::DisconnectedChannelName:
+    return &cfg.common.disconnected_channelname;
+  case StyleIndex::NonexistentChannelName:
+    return &cfg.common.nonexistent_channelname;
+  case StyleIndex::ValidNewChannelName:
+    return &cfg.common.valid_new_channelname;
+  case StyleIndex::InvalidNewChannelName:
+    return &cfg.common.invalid_new_channelname;
   case StyleIndex::BuiltinArg:
     return &cfg.common.builtin_arg;
   case StyleIndex::NonexistentBuiltinArg:

@@ -237,7 +237,16 @@ enum class AMTokenType {
   NonexistentBuiltinArg = 30,
   ValidNewNickname = 31,
   InvalidNewNickname = 32,
-  DisconnectedNickname = 33
+  DisconnectedNickname = 33,
+  TerminalName = 34,
+  DisconnectedTerminalName = 35,
+  UnestablishedTerminalName = 36,
+  NonexistentTerminalName = 37,
+  ChannelName = 38,
+  DisconnectedChannelName = 39,
+  NonexistentChannelName = 40,
+  ValidNewChannelName = 41,
+  InvalidNewChannelName = 42
 };
 
 enum class TraceSource { Client = 0, Programm = 1 };
