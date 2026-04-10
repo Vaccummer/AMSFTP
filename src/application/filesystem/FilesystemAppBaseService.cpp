@@ -2,10 +2,9 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "foundation/tools/path.hpp"
-#include "foundation/tools/string.hpp"
 #include <chrono>
-#include <thread>
 #include <stdexcept>
+#include <thread>
 
 namespace AMApplication::filesystem {
 namespace {
@@ -286,7 +285,16 @@ ECM FilesystemAppBaseService::Init() {
   }
   const FilesystemArg arg = init_arg_.lock().load();
   if (arg.max_cd_history <= 0) {
-    return Err(EC::InvalidArg, __func__, "", "max_cd_history must be greater than 0");
+    return Err(EC::InvalidArg, __func__, "",
+               "max_cd_history must be greater than 0");
+  }
+  if (arg.terminal_read_timeout_ms == 0 || arg.terminal_read_timeout_ms < -1) {
+    return Err(EC::InvalidArg, __func__, "",
+               "terminal_read_timeout_ms must be -1 or > 0");
+  }
+  if (arg.terminal_send_timeout_ms == 0 || arg.terminal_send_timeout_ms < -1) {
+    return Err(EC::InvalidArg, __func__, "",
+               "terminal_send_timeout_ms must be -1 or > 0");
   }
   return OK;
 }
@@ -316,14 +324,15 @@ std::string FilesystemAppBaseService::CurrentNickname() const {
 
 ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
     const std::string &nickname,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ClientControlComponent &control, bool detach) {
   if (!host_service_ || !client_service_) {
     return {nullptr, Err(EC::InvalidHandle, __func__, "",
                          "filesystem app base service deps are null")};
   }
 
   if (nickname.empty()) {
-    return {nullptr, Err(EC::InvalidArg, __func__, "", "Client nickname is empty")};
+    return {nullptr,
+            Err(EC::InvalidArg, __func__, "", "Client nickname is empty")};
   }
 
   auto existing = client_service_->GetClient(nickname, true);
@@ -345,10 +354,14 @@ ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
     return {create_result.data, create_result.rcm};
   }
 
+  if (detach) {
+    return {create_result.data, OK};
+  }
+
   const ECM add_rcm = client_service_->AddClient(create_result.data, false);
-  if (!(add_rcm)) {
+  if (!add_rcm) {
     auto raced = client_service_->GetClient(nickname, true);
-    if ((raced.rcm) && raced.data) {
+    if (raced.rcm && raced.data) {
       return raced;
     }
     return {nullptr, add_rcm};
@@ -369,7 +382,8 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
   }
 
   if (nickname.empty()) {
-    return {nullptr, Err(EC::InvalidArg, __func__, "", "Client nickname is empty")};
+    return {nullptr,
+            Err(EC::InvalidArg, __func__, "", "Client nickname is empty")};
   }
 
   constexpr int kPublicClientLeaseRetryTimes = 8;
@@ -450,9 +464,10 @@ FilesystemAppBaseService::ResolvePath(const PathTarget &target,
     }
     auto get_result = GetClient(out.target.nickname, control);
     if (!get_result.rcm || !get_result.data) {
-      return {ResolvedPath{}, (get_result.rcm) ? Err(EC::InvalidHandle, __func__, "",
-                                                     "Resolved client is null")
-                                               : get_result.rcm};
+      return {ResolvedPath{}, (get_result.rcm)
+                                  ? Err(EC::InvalidHandle, __func__, "",
+                                        "Resolved client is null")
+                                  : get_result.rcm};
     }
     out.client = get_result.data;
   }

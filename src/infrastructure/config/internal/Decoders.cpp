@@ -765,6 +765,10 @@ public:
                            &typed->max_cd_history);
     (void)AMJson::QueryKey(options, {"FileSystem", "wget_max_redirect"},
                            &typed->wget_max_redirect);
+    (void)AMJson::QueryKey(options, {"Terminal", "read_timeout_ms"},
+                           &typed->terminal_read_timeout_ms);
+    (void)AMJson::QueryKey(options, {"Terminal", "send_timeout_ms"},
+                           &typed->terminal_send_timeout_ms);
     return true;
   }
 
@@ -781,6 +785,10 @@ public:
     (*root)["Options"]["FileSystem"]["max_cd_history"] = typed->max_cd_history;
     (*root)["Options"]["FileSystem"]["wget_max_redirect"] =
         typed->wget_max_redirect;
+    (*root)["Options"]["Terminal"]["read_timeout_ms"] =
+        typed->terminal_read_timeout_ms;
+    (*root)["Options"]["Terminal"]["send_timeout_ms"] =
+        typed->terminal_send_timeout_ms;
     return true;
   }
 
@@ -791,6 +799,7 @@ public:
       return codec_common::Fail_(error, "null root json");
     }
     (void)AMJson::DelKey(*root, {"Options", "FileSystem"});
+    (void)AMJson::DelKey(*root, {"Options", "Terminal"});
     return true;
   }
 };
