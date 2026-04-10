@@ -48,6 +48,7 @@ struct CliFilesystemArgs {
   RttArgs rtt = {};
   ClearArgs clear = {};
   CpArgs cp = {};
+  MoveArgs move = {};
   CloneArgs clone = {};
   WgetArgs wget = {};
   SftpArgs sftp = {};
@@ -56,8 +57,20 @@ struct CliFilesystemArgs {
   CdArgs cd = {};
   ConnectArgs connect = {};
   CmdArgs cmd = {};
+  TerminalArgs ssh = {};
   BashArgs bash = {};
   ExitArgs exit = {};
+};
+
+struct CliTermArgs {
+  TermAddArgs add = {};
+  TermRemoveArgs rm = {};
+};
+
+struct CliChannelArgs {
+  ChannelAddArgs add = {};
+  ChannelRemoveArgs rm = {};
+  ChannelRenameArgs rn = {};
 };
 
 struct CliClientArgs {
@@ -94,6 +107,8 @@ struct CliArgsPool {
   CliHostArgs host = {};
   CliProfileArgs profile = {};
   CliFilesystemArgs fs = {};
+  CliTermArgs term = {};
+  CliChannelArgs channel = {};
   CliClientArgs client = {};
   CliVarArgs var = {};
   CliTaskArgs task = {};
@@ -158,6 +173,7 @@ struct FilesystemCommands {
   CLI::App *rtt = nullptr;
   CLI::App *clear = nullptr;
   CLI::App *cp = nullptr;
+  CLI::App *move = nullptr;
   CLI::App *clone = nullptr;
   CLI::App *wget = nullptr;
   CLI::App *sftp = nullptr;
@@ -166,8 +182,22 @@ struct FilesystemCommands {
   CLI::App *cd = nullptr;
   CLI::App *connect = nullptr;
   CLI::App *cmd = nullptr;
+  CLI::App *ssh = nullptr;
   CLI::App *bash = nullptr;
   CLI::App *exit = nullptr;
+};
+
+struct TermCommands {
+  CLI::App *root = nullptr;
+  CLI::App *add = nullptr;
+  CLI::App *rm = nullptr;
+};
+
+struct ChannelCommands {
+  CLI::App *root = nullptr;
+  CLI::App *add = nullptr;
+  CLI::App *rm = nullptr;
+  CLI::App *rn = nullptr;
 };
 
 struct VarCommands {
@@ -202,6 +232,8 @@ struct CliCommands {
   ProfileCommands profile = {};
   ClientCommands client = {};
   FilesystemCommands fs = {};
+  TermCommands term = {};
+  ChannelCommands channel = {};
   VarCommands var = {};
   TaskCommands task = {};
   CliArgsPool *args = nullptr;

@@ -59,39 +59,39 @@ void ApplyProfileInitData_(
       style_arg.style.value_query_highlight.invalid_value);
   (void)profile->DefineStyle(kInlineHintStyleKey,
                              style_arg.style.internal_style.inline_hint);
-  if (!AMStr::Strip(style_arg.style.input_highlight.nickname).empty()) {
+  if (!AMStr::Strip(style_arg.style.common.nickname).empty()) {
     (void)profile->DefineStyle("nickname",
-                               style_arg.style.input_highlight.nickname);
+                               style_arg.style.common.nickname);
   }
-  if (!AMStr::Strip(style_arg.style.input_highlight.disconnected_nickname)
+  if (!AMStr::Strip(style_arg.style.common.disconnected_nickname)
            .empty()) {
     (void)profile->DefineStyle(
         "disconnected_nickname",
-        style_arg.style.input_highlight.disconnected_nickname);
+        style_arg.style.common.disconnected_nickname);
   }
-  if (!AMStr::Strip(style_arg.style.input_highlight.unestablished_nickname)
+  if (!AMStr::Strip(style_arg.style.common.unestablished_nickname)
            .empty()) {
     (void)profile->DefineStyle(
         "unestablished_nickname",
-        style_arg.style.input_highlight.unestablished_nickname);
+        style_arg.style.common.unestablished_nickname);
   }
-  if (!AMStr::Strip(style_arg.style.input_highlight.nonexistent_nickname)
+  if (!AMStr::Strip(style_arg.style.common.nonexistent_nickname)
            .empty()) {
     (void)profile->DefineStyle(
         "nonexistent_nickname",
-        style_arg.style.input_highlight.nonexistent_nickname);
+        style_arg.style.common.nonexistent_nickname);
   }
-  if (!AMStr::Strip(style_arg.style.input_highlight.valid_new_nickname)
+  if (!AMStr::Strip(style_arg.style.common.valid_new_nickname)
            .empty()) {
     (void)profile->DefineStyle(
         "valid_new_nickname",
-        style_arg.style.input_highlight.valid_new_nickname);
+        style_arg.style.common.valid_new_nickname);
   }
-  if (!AMStr::Strip(style_arg.style.input_highlight.invalid_new_nickname)
+  if (!AMStr::Strip(style_arg.style.common.invalid_new_nickname)
            .empty()) {
     (void)profile->DefineStyle(
         "invalid_new_nickname",
-        style_arg.style.input_highlight.invalid_new_nickname);
+        style_arg.style.common.invalid_new_nickname);
   }
 
   // Register prompt shortcut styles (dynamic map keys).

@@ -131,57 +131,57 @@ std::string TokenAnalyzerRuntimeAdapter::ResolveInputHighlightStyle(
   const auto style_cfg = style_service_.GetInitArg().style;
   switch (type) {
   case AMTokenType::Module:
-    return style_cfg.input_highlight.module;
+    return style_cfg.common.module;
   case AMTokenType::Command:
-    return style_cfg.input_highlight.command;
+    return style_cfg.common.command;
   case AMTokenType::VarName:
-    return style_cfg.input_highlight.public_varname;
+    return style_cfg.common.public_varname;
   case AMTokenType::VarNameMissing:
-    return style_cfg.input_highlight.nonexistent_varname;
+    return style_cfg.common.nonexistent_varname;
   case AMTokenType::VarValue:
-    return style_cfg.input_highlight.varvalue;
+    return style_cfg.common.varvalue;
   case AMTokenType::Nickname:
-    return style_cfg.input_highlight.nickname;
+    return style_cfg.common.nickname;
   case AMTokenType::DisconnectedNickname:
-    return style_cfg.input_highlight.disconnected_nickname;
+    return style_cfg.common.disconnected_nickname;
   case AMTokenType::UnestablishedNickname:
-    return style_cfg.input_highlight.unestablished_nickname;
+    return style_cfg.common.unestablished_nickname;
   case AMTokenType::NonexistentNickname:
-    return style_cfg.input_highlight.nonexistent_nickname;
+    return style_cfg.common.nonexistent_nickname;
   case AMTokenType::BuiltinArg:
-    return style_cfg.input_highlight.builtin_arg;
+    return style_cfg.common.builtin_arg;
   case AMTokenType::NonexistentBuiltinArg:
-    return style_cfg.input_highlight.nonexistent_builtin_arg;
+    return style_cfg.common.nonexistent_builtin_arg;
   case AMTokenType::ValidValue:
     return style_cfg.value_query_highlight.valid_value;
   case AMTokenType::InvalidValue:
     return style_cfg.value_query_highlight.invalid_value;
   case AMTokenType::ValidNewNickname:
-    return style_cfg.input_highlight.valid_new_nickname;
+    return style_cfg.common.valid_new_nickname;
   case AMTokenType::InvalidNewNickname:
-    return style_cfg.input_highlight.invalid_new_nickname;
+    return style_cfg.common.invalid_new_nickname;
   case AMTokenType::String:
-    return style_cfg.input_highlight.string;
+    return style_cfg.common.string;
   case AMTokenType::Option:
-    return style_cfg.input_highlight.option;
+    return style_cfg.common.option;
   case AMTokenType::AtSign:
-    return style_cfg.input_highlight.atsign;
+    return style_cfg.common.atsign;
   case AMTokenType::DollarSign:
-    return style_cfg.input_highlight.dollarsign;
+    return style_cfg.common.dollarsign;
   case AMTokenType::EqualSign:
-    return style_cfg.input_highlight.equalsign;
+    return style_cfg.common.equalsign;
   case AMTokenType::EscapeSign:
-    return style_cfg.input_highlight.escapedsign;
+    return style_cfg.common.escapedsign;
   case AMTokenType::Path:
-    return style_cfg.input_highlight.path_like;
+    return style_cfg.common.path_like;
   case AMTokenType::BangSign:
-    return style_cfg.input_highlight.bangsign;
+    return style_cfg.common.bangsign;
   case AMTokenType::ShellCmd:
-    return style_cfg.input_highlight.shell_cmd;
+    return style_cfg.common.shell_cmd;
   case AMTokenType::IllegalCommand:
-    return style_cfg.input_highlight.illegal_command;
+    return style_cfg.common.illegal_command;
   case AMTokenType::Common:
-    return style_cfg.input_highlight.common;
+    return style_cfg.common.common;
   default:
     return default_value;
   }

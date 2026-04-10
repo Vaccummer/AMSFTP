@@ -1341,6 +1341,22 @@ void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"number"}, &out->number);
   (void)AMJson::QueryKey(json, {"timestamp"}, &out->timestamp);
   (void)AMJson::QueryKey(json, {"path_like"}, &out->path_like);
+  (void)AMJson::QueryKey(json, {"termname"}, &out->termname);
+  (void)AMJson::QueryKey(json, {"disconnected_termname"},
+                         &out->disconnected_termname);
+  (void)AMJson::QueryKey(json, {"unestablished_termname"},
+                         &out->unestablished_termname);
+  (void)AMJson::QueryKey(json, {"nonexistent_termname"},
+                         &out->nonexistent_termname);
+  (void)AMJson::QueryKey(json, {"channelname"}, &out->channelname);
+  (void)AMJson::QueryKey(json, {"disconnected_channelname"},
+                         &out->disconnected_channelname);
+  (void)AMJson::QueryKey(json, {"nonexistent_channelname"},
+                         &out->nonexistent_channelname);
+  (void)AMJson::QueryKey(json, {"valid_new_channelname"},
+                         &out->valid_new_channelname);
+  (void)AMJson::QueryKey(json, {"invalid_new_channelname"},
+                         &out->invalid_new_channelname);
 }
 
 Json EncodeInputHighlight_(const InputHighlightStyle &in) {
@@ -1375,6 +1391,137 @@ Json EncodeInputHighlight_(const InputHighlightStyle &in) {
   out["number"] = in.number;
   out["timestamp"] = in.timestamp;
   out["path_like"] = in.path_like;
+  out["termname"] = in.termname;
+  out["disconnected_termname"] = in.disconnected_termname;
+  out["unestablished_termname"] = in.unestablished_termname;
+  out["nonexistent_termname"] = in.nonexistent_termname;
+  out["channelname"] = in.channelname;
+  out["disconnected_channelname"] = in.disconnected_channelname;
+  out["nonexistent_channelname"] = in.nonexistent_channelname;
+  out["valid_new_channelname"] = in.valid_new_channelname;
+  out["invalid_new_channelname"] = in.invalid_new_channelname;
+  return out;
+}
+
+void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
+  if (!out || !json.is_object()) {
+    return;
+  }
+
+  DecodeInputHighlight_(json, out);
+
+  (void)AMJson::QueryKey(json, {"type", "string"}, &out->string);
+  (void)AMJson::QueryKey(json, {"type", "number"}, &out->number);
+  (void)AMJson::QueryKey(json, {"type", "protocol"}, &out->protocol);
+  (void)AMJson::QueryKey(json, {"type", "username"}, &out->username);
+  (void)AMJson::QueryKey(json, {"type", "abort"}, &out->abort);
+  (void)AMJson::QueryKey(json, {"type", "hostname"}, &out->nickname);
+
+  (void)AMJson::QueryKey(json, {"sign", "at"}, &out->atsign);
+  (void)AMJson::QueryKey(json, {"sign", "dollar"}, &out->dollarsign);
+  (void)AMJson::QueryKey(json, {"sign", "equal"}, &out->equalsign);
+  (void)AMJson::QueryKey(json, {"sign", "escaped"}, &out->escapedsign);
+  (void)AMJson::QueryKey(json, {"sign", "bang"}, &out->bangsign);
+
+  (void)AMJson::QueryKey(json, {"cli", "command"}, &out->command);
+  (void)AMJson::QueryKey(json, {"cli", "illegal_command"},
+                         &out->illegal_command);
+  (void)AMJson::QueryKey(json, {"cli", "module"}, &out->module);
+  (void)AMJson::QueryKey(json, {"cli", "option"}, &out->option);
+
+  (void)AMJson::QueryKey(json, {"varname", "public"}, &out->public_varname);
+  (void)AMJson::QueryKey(json, {"varname", "private"}, &out->private_varname);
+  (void)AMJson::QueryKey(json, {"varname", "nonexistent"},
+                         &out->nonexistent_varname);
+  (void)AMJson::QueryKey(json, {"varvalue"}, &out->varvalue);
+
+  (void)AMJson::QueryKey(json, {"nickname", "ok"}, &out->nickname);
+  (void)AMJson::QueryKey(json, {"nickname", "disconnected"},
+                         &out->disconnected_nickname);
+  (void)AMJson::QueryKey(json, {"nickname", "unestablished"},
+                         &out->unestablished_nickname);
+  (void)AMJson::QueryKey(json, {"nickname", "nonexistent"},
+                         &out->nonexistent_nickname);
+  (void)AMJson::QueryKey(json, {"nickname", "new", "valid"},
+                         &out->valid_new_nickname);
+  (void)AMJson::QueryKey(json, {"nickname", "new", "invalid"},
+                         &out->invalid_new_nickname);
+
+  (void)AMJson::QueryKey(json, {"termname", "ok"}, &out->termname);
+  (void)AMJson::QueryKey(json, {"termname", "disconnected"},
+                         &out->disconnected_termname);
+  (void)AMJson::QueryKey(json, {"termname", "unestablished"},
+                         &out->unestablished_termname);
+  (void)AMJson::QueryKey(json, {"termname", "nonexistent"},
+                         &out->nonexistent_termname);
+
+  (void)AMJson::QueryKey(json, {"channelname", "ok"}, &out->channelname);
+  (void)AMJson::QueryKey(json, {"channelname", "disconnected"},
+                         &out->disconnected_channelname);
+  (void)AMJson::QueryKey(json, {"channelname", "nonexistent"},
+                         &out->nonexistent_channelname);
+  (void)AMJson::QueryKey(json, {"channelname", "new", "valid"},
+                         &out->valid_new_channelname);
+  (void)AMJson::QueryKey(json, {"channelname", "new", "invalid"},
+                         &out->invalid_new_channelname);
+
+  (void)AMJson::QueryKey(json, {"attr", "valid"}, &out->builtin_arg);
+  (void)AMJson::QueryKey(json, {"attr", "invalid"},
+                         &out->nonexistent_builtin_arg);
+
+  if (out->shell_cmd.empty()) {
+    out->shell_cmd = out->command;
+  }
+  if (out->common.empty()) {
+    out->common = out->command;
+  }
+}
+
+Json EncodeCommon_(const InputHighlightStyle &in) {
+  Json out = Json::object();
+  out["type"]["string"] = in.string;
+  out["type"]["number"] = in.number;
+  out["type"]["protocol"] = in.protocol;
+  out["type"]["username"] = in.username;
+  out["type"]["abort"] = in.abort;
+  out["type"]["hostname"] = in.nickname;
+
+  out["sign"]["at"] = in.atsign;
+  out["sign"]["dollar"] = in.dollarsign;
+  out["sign"]["equal"] = in.equalsign;
+  out["sign"]["escaped"] = in.escapedsign;
+  out["sign"]["bang"] = in.bangsign;
+
+  out["cli"]["command"] = in.command;
+  out["cli"]["illegal_command"] = in.illegal_command;
+  out["cli"]["module"] = in.module;
+  out["cli"]["option"] = in.option;
+
+  out["varname"]["public"] = in.public_varname;
+  out["varname"]["private"] = in.private_varname;
+  out["varname"]["nonexistent"] = in.nonexistent_varname;
+  out["varvalue"] = in.varvalue;
+
+  out["nickname"]["ok"] = in.nickname;
+  out["nickname"]["disconnected"] = in.disconnected_nickname;
+  out["nickname"]["unestablished"] = in.unestablished_nickname;
+  out["nickname"]["nonexistent"] = in.nonexistent_nickname;
+  out["nickname"]["new"]["valid"] = in.valid_new_nickname;
+  out["nickname"]["new"]["invalid"] = in.invalid_new_nickname;
+
+  out["termname"]["ok"] = in.termname;
+  out["termname"]["disconnected"] = in.disconnected_termname;
+  out["termname"]["unestablished"] = in.unestablished_termname;
+  out["termname"]["nonexistent"] = in.nonexistent_termname;
+
+  out["channelname"]["ok"] = in.channelname;
+  out["channelname"]["disconnected"] = in.disconnected_channelname;
+  out["channelname"]["nonexistent"] = in.nonexistent_channelname;
+  out["channelname"]["new"]["valid"] = in.valid_new_channelname;
+  out["channelname"]["new"]["invalid"] = in.invalid_new_channelname;
+
+  out["attr"]["valid"] = in.builtin_arg;
+  out["attr"]["invalid"] = in.nonexistent_builtin_arg;
   return out;
 }
 
@@ -1505,7 +1652,9 @@ public:
     }
     DecodeInputHighlight_(
         codec_common::QueryObjectAt_(style, {"InputHighlight"}),
-        &typed->style.input_highlight);
+        &typed->style.common);
+    DecodeCommon_(codec_common::QueryObjectAt_(style, {"Common"}),
+                  &typed->style.common);
     DecodeValueQueryHighlight_(
         codec_common::QueryObjectAt_(style, {"ValueQueryHighlight"}),
         &typed->style.value_query_highlight);
@@ -1537,8 +1686,7 @@ public:
     style["ProgressBar"] = EncodeProgressBar_(typed->style.progress_bar);
     style["shortcut"] = codec_common::WriteStringMap_(typed->style.cli_prompt.shortcut);
     style["CLIPrompt"] = EncodeCliPrompt_(typed->style.cli_prompt);
-    style["InputHighlight"] =
-        EncodeInputHighlight_(typed->style.input_highlight);
+    style["Common"] = EncodeCommon_(typed->style.common);
     style["ValueQueryHighlight"] =
         EncodeValueQueryHighlight_(typed->style.value_query_highlight);
     style["InternalStyle"] = EncodeInternalStyle_(typed->style.internal_style);

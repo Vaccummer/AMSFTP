@@ -110,6 +110,15 @@ struct InputHighlightStyle {
   std::string number = "";
   std::string timestamp = "";
   std::string path_like = "";
+  std::string termname = "";
+  std::string disconnected_termname = "";
+  std::string unestablished_termname = "";
+  std::string nonexistent_termname = "";
+  std::string channelname = "";
+  std::string disconnected_channelname = "";
+  std::string nonexistent_channelname = "";
+  std::string valid_new_channelname = "";
+  std::string invalid_new_channelname = "";
 };
 
 struct ValueQueryHighlightStyle {
@@ -148,7 +157,7 @@ struct StyleConfig {
   TableStyle table = {};
   ProgressBarStyle progress_bar = {};
   CLIPromptStyle cli_prompt = {};
-  InputHighlightStyle input_highlight = {};
+  InputHighlightStyle common = {};
   ValueQueryHighlightStyle value_query_highlight = {};
   InternalStyle internal_style = {};
   PathHighlightStyle path = {};

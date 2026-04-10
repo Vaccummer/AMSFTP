@@ -45,6 +45,11 @@ struct ChannelCloseArgs {
   bool force = false;
 };
 
+struct ChannelRenameArgs {
+  std::string src_channel_name = "";
+  std::string dst_channel_name = "";
+};
+
 struct ChannelListArgs {
   std::string channel_name = "";
 };
@@ -85,6 +90,12 @@ struct ChannelCloseResult {
   bool closed = false;
   int exit_code = -1;
   std::string channel_name = "";
+};
+
+struct ChannelRenameResult {
+  bool renamed = false;
+  std::string src_channel_name = "";
+  std::string dst_channel_name = "";
 };
 
 struct ChannelListResult {

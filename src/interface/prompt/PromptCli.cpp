@@ -216,7 +216,7 @@ void PromptIOManager::Print(const std::string &text) {
 void PromptIOManager::PrintOperationAbort() {
   const std::string abort_style =
       isocline_profile_manager_.style_config_manager_.GetInitArg()
-          .style.input_highlight.abort;
+          .style.common.abort;
   if (abort_style.empty()) {
     Print("⚠️  " + kvars::operation_abort_text);
     return;

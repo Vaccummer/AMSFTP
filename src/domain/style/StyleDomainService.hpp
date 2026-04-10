@@ -340,6 +340,22 @@ inline void NormalizeInputHighlight(InputHighlightStyle *style) {
   NormalizeStyleToken(&style->number, defaults.number);
   NormalizeStyleToken(&style->timestamp, defaults.timestamp);
   NormalizeStyleToken(&style->path_like, defaults.path_like);
+  NormalizeStyleToken(&style->termname, defaults.termname);
+  NormalizeStyleToken(&style->disconnected_termname,
+                      defaults.disconnected_termname);
+  NormalizeStyleToken(&style->unestablished_termname,
+                      defaults.unestablished_termname);
+  NormalizeStyleToken(&style->nonexistent_termname,
+                      defaults.nonexistent_termname);
+  NormalizeStyleToken(&style->channelname, defaults.channelname);
+  NormalizeStyleToken(&style->disconnected_channelname,
+                      defaults.disconnected_channelname);
+  NormalizeStyleToken(&style->nonexistent_channelname,
+                      defaults.nonexistent_channelname);
+  NormalizeStyleToken(&style->valid_new_channelname,
+                      defaults.valid_new_channelname);
+  NormalizeStyleToken(&style->invalid_new_channelname,
+                      defaults.invalid_new_channelname);
 }
 
 inline void NormalizeValueQueryHighlight(ValueQueryHighlightStyle *style) {
@@ -397,7 +413,7 @@ inline void NormalizeStyleConfig(StyleConfig *config) {
   NormalizeTable(&config->table);
   NormalizeProgressBar(&config->progress_bar);
   NormalizeCLIPrompt(&config->cli_prompt);
-  NormalizeInputHighlight(&config->input_highlight);
+  NormalizeInputHighlight(&config->common);
   NormalizeValueQueryHighlight(&config->value_query_highlight);
   NormalizeInternalStyle(&config->internal_style);
   NormalizePathHighlight(&config->path);
