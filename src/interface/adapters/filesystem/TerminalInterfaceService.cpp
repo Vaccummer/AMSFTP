@@ -467,6 +467,9 @@ public:
     if (remote_socket_result.rcm && remote_socket_result.data >= 0) {
       remote_socket_ = remote_socket_result.data;
     }
+    const auto request = terminal_.GetRequest();
+    remote_handle_is_socket_ =
+        (request.protocol == AMDomain::host::ClientProtocol::SFTP);
 
 #ifdef _WIN32
     InitWindows_();
@@ -526,17 +529,22 @@ private:
     }
 
     if (remote_socket_ >= 0) {
-      remote_sock_ = static_cast<SOCKET>(remote_socket_);
-      socket_event_ = WSACreateEvent();
-      if (socket_event_ != WSA_INVALID_EVENT) {
-        if (WSAEventSelect(remote_sock_, socket_event_,
-                           FD_READ | FD_WRITE | FD_CLOSE) == 0) {
-          PushWaitHandle_(socket_event_, &socket_index_);
-        } else {
-          (void)WSACloseEvent(socket_event_);
-          socket_event_ = WSA_INVALID_EVENT;
-          remote_sock_ = INVALID_SOCKET;
+      if (remote_handle_is_socket_) {
+        remote_sock_ = static_cast<SOCKET>(remote_socket_);
+        socket_event_ = WSACreateEvent();
+        if (socket_event_ != WSA_INVALID_EVENT) {
+          if (WSAEventSelect(remote_sock_, socket_event_,
+                             FD_READ | FD_WRITE | FD_CLOSE) == 0) {
+            PushWaitHandle_(socket_event_, &socket_index_);
+          } else {
+            (void)WSACloseEvent(socket_event_);
+            socket_event_ = WSA_INVALID_EVENT;
+            remote_sock_ = INVALID_SOCKET;
+          }
         }
+      } else {
+        PushWaitHandle_(reinterpret_cast<HANDLE>(remote_socket_),
+                        &remote_native_index_);
       }
     }
   }
@@ -578,6 +586,10 @@ private:
       }
       return {TerminalWaitStatus_::RemoteReady, {}};
     }
+    if (remote_native_index_ != kInvalidIndex_ &&
+        signaled_index == remote_native_index_) {
+      return {TerminalWaitStatus_::RemoteReady, {}};
+    }
     if (input_index_ != kInvalidIndex_ && signaled_index == input_index_) {
       return {TerminalWaitStatus_::LocalInput, {}};
     }
@@ -605,6 +617,7 @@ private:
     input_index_ = kInvalidIndex_;
     wake_index_ = kInvalidIndex_;
     socket_index_ = kInvalidIndex_;
+    remote_native_index_ = kInvalidIndex_;
   }
 #else
   void InitPosix_() {
@@ -730,13 +743,15 @@ private:
   const AMDomain::client::ClientControlComponent &control_;
   bool initialized_ = false;
   std::intptr_t remote_socket_ = -1;
+  bool remote_handle_is_socket_ = true;
 
 #ifdef _WIN32
-  std::array<HANDLE, 3> wait_handles_ = {nullptr, nullptr, nullptr};
+  std::array<HANDLE, 4> wait_handles_ = {nullptr, nullptr, nullptr, nullptr};
   DWORD wait_count_ = 0;
   DWORD input_index_ = kInvalidIndex_;
   DWORD wake_index_ = kInvalidIndex_;
   DWORD socket_index_ = kInvalidIndex_;
+  DWORD remote_native_index_ = kInvalidIndex_;
   HANDLE input_handle_ = INVALID_HANDLE_VALUE;
   HANDLE wake_event_ = nullptr;
   SOCKET remote_sock_ = INVALID_SOCKET;
