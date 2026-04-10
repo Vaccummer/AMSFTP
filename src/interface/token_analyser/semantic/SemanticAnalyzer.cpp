@@ -255,6 +255,13 @@ SemanticAnalyzer::Classify(
         }
         continue;
       }
+
+      // Current command node still expects a subcommand, but token is neither
+      // a known subcommand nor an option token. Mark it as illegal command.
+      if (node && !node->subcommands.empty() && !StartsWithLongOption_(text) &&
+          !StartsWithShortOption_(text)) {
+        token.type = AMTokenType::IllegalCommand;
+      }
       parsing = false;
     }
   }
