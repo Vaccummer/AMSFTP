@@ -81,11 +81,10 @@ public:
 
   ~SocketConnector() = default;
 
-  bool Connect(
-      const std::string &hostname, int port,
-      const AMDomain::client::ClientControlComponent &control = {},
-      std::function<void(const std::string &, const std::string &)> state_cb =
-          {}) {
+  bool Connect(const std::string &hostname, int port,
+               const AMDomain::client::ClientControlComponent &control = {},
+               std::function<void(const std::string &, const std::string &)>
+                   state_cb = {}) {
     static constexpr int64_t kDefaultConnectTimeoutMs = 6000;
     const int64_t connect_start_ms = AMTime::miliseconds();
 
@@ -236,9 +235,9 @@ public:
           break;
         }
 
-        const int64_t wait_ms =
-            current_remaining_ms > 100 ? static_cast<int64_t>(100)
-                                       : current_remaining_ms;
+        const int64_t wait_ms = current_remaining_ms > 100
+                                    ? static_cast<int64_t>(100)
+                                    : current_remaining_ms;
 
         fd_set write_fds, error_fds;
         FD_ZERO(&write_fds);
@@ -799,6 +798,14 @@ private:
   }
 
 public:
+  /**
+   * @brief Update control context used by close/retry operations.
+   */
+  void SetControlContext(std::function<bool()> is_interrupted_cb,
+                         int timeout_ms, int64_t start_time = -1) {
+    StoreInitContext_(std::move(is_interrupted_cb), timeout_ms, start_time);
+  }
+
   ~SafeChannel() {
     if (channel) {
       if (!closed) {
@@ -1254,7 +1261,7 @@ private:
 public:
   LIBSSH2_SESSION *session = nullptr;
   LIBSSH2_SFTP *sftp = nullptr;
-  ~SFTPSessionBase() { Disconnect(); }
+  ~SFTPSessionBase() override { Disconnect(); }
 
   /**
    * @brief Expose the transfer serialization mutex for runtime transfer
@@ -1717,9 +1724,7 @@ public:
         goto OK;
       }
       trace(TraceLevel::Error, EC::PublickeyAuthFailed, request.keyfile,
-            "DedicatedPrivateKeyAuthorizeResult",
-            AMStr::fmt("Dedicated private key \"{}\" authorize failed",
-                       request.keyfile));
+            "DedicatedPrivateKeyAuthorizeResult", GetLastErrorMsg());
       NotifyAuth(false, "", false);
     }
 
@@ -2049,6 +2054,10 @@ public:
   }
 
   ~AMSFTPIOCore() override = default;
+
+  [[nodiscard]] std::intptr_t RemoteSocketHandle() const {
+    return static_cast<std::intptr_t>(sock);
+  }
 
 public:
   ECMData<AMFSI::UpdateOSTypeResult> UpdateOSType(
