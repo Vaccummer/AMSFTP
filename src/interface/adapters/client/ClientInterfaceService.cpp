@@ -769,6 +769,64 @@ void PrintHostCompact_(
   }
 }
 
+struct HostListRow {
+  std::string protocol = {};
+  std::string nickname = {};
+  std::string username = {};
+  std::string port = {};
+  std::string hostname = {};
+};
+
+HostListRow BuildHostListRow_(const std::string &nickname,
+                              const HostConfig &entry) {
+  HostListRow row = {};
+  row.protocol =
+      AMStr::fmt("[{}]", AMStr::uppercase(AMStr::ToString(entry.request.protocol)));
+  row.nickname = nickname;
+  row.username = entry.request.username;
+  row.port = std::to_string(entry.request.port);
+  row.hostname = entry.request.hostname;
+  return row;
+}
+
+void PrintHostListTable_(AMPromptIOManager &prompt,
+                         const std::vector<HostListRow> &rows) {
+  if (rows.empty()) {
+    prompt.Print("");
+    return;
+  }
+
+  size_t protocol_width = std::string("Protocol").size();
+  size_t nickname_width = std::string("Nickname").size();
+  size_t username_width = std::string("Username").size();
+  size_t port_width = std::string("Port").size();
+  size_t hostname_width = std::string("Hostname").size();
+
+  for (const auto &row : rows) {
+    protocol_width = std::max(protocol_width, row.protocol.size());
+    nickname_width = std::max(nickname_width, row.nickname.size());
+    username_width = std::max(username_width, row.username.size());
+    port_width = std::max(port_width, row.port.size());
+    hostname_width = std::max(hostname_width, row.hostname.size());
+  }
+
+  auto print_row = [&](const HostListRow &row) {
+    const std::string line = AMStr::fmt(
+        "{} {} {} {} {}",
+        AMStr::PadRightUtf8(row.protocol, protocol_width),
+        AMStr::PadRightUtf8(row.nickname, nickname_width),
+        AMStr::PadRightUtf8(row.username, username_width),
+        AMStr::PadRightUtf8(row.port, port_width),
+        AMStr::PadRightUtf8(row.hostname, hostname_width));
+    prompt.Print(line);
+  };
+
+  print_row({"Protocol", "Nickname", "Username", "Port", "Hostname"});
+  for (const auto &row : rows) {
+    print_row(row);
+  }
+}
+
 std::string HostFieldDisplay_(const HostConfig &entry,
                               const std::string &field) {
   if (field == "hostname") {
@@ -2313,12 +2371,12 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   return OK;
 }
 
-ECM ClientInterfaceService::ListHosts(bool detail) {
-  return ListHosts({}, detail);
+ECM ClientInterfaceService::ListHosts(bool detail, bool list) {
+  return ListHosts({}, detail, list);
 }
 
 ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
-                                      bool detail) {
+                                      bool detail, bool list) {
   std::vector<std::string> nicknames = {};
   if (filters.empty()) {
     nicknames = host_config_manager_.ListNames();
@@ -2353,6 +2411,22 @@ ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
         nicknames.push_back(resolved);
       }
     }
+  }
+
+  if (!detail && list) {
+    std::vector<hostui::HostListRow> rows = {};
+    rows.reserve(nicknames.size());
+    for (const auto &nickname : nicknames) {
+      HostConfig entry = {};
+      const ECM get_rcm =
+          hostui::ResolveHostConfig_(host_config_manager_, nickname, &entry);
+      if (!(get_rcm)) {
+        return get_rcm;
+      }
+      rows.push_back(hostui::BuildHostListRow_(nickname, entry));
+    }
+    hostui::PrintHostListTable_(prompt_io_manager_, rows);
+    return OK;
   }
 
   if (!detail) {

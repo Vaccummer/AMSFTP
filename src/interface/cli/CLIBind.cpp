@@ -125,6 +125,8 @@ void BindHostCommands(CommandNode *root, CliArgsPool &args,
         ->expected(0, -1);
     host_ls_node->AddFlag("-d", "--detail", args.host.ls.detail,
                           "Show full host details");
+    host_ls_node->AddFlag("-l", "--list", args.host.ls.list,
+                          "Show host list table");
   }
   if (commands.host.get) {
     commands.host.get

@@ -12,15 +12,17 @@ namespace AMInterface::cli {
  */
 struct HostLsArgs : BaseArgStruct {
   bool detail = false;
+  bool list = false;
   std::vector<std::string> nicknames = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
     return managers.interfaces.client_interface_service->ListHosts(nicknames,
-                                                                    detail);
+                                                                    detail, list);
   }
   void reset() override {
     detail = false;
+    list = false;
     nicknames.clear();
   }
 };
