@@ -241,6 +241,13 @@ SemanticAnalyzer::Classify(
           }
           continue;
         }
+        const bool should_mark_illegal =
+            (idx == 0) && !text.empty() && text.front() != '!' &&
+            !StartsWithLongOption_(text) && !StartsWithShortOption_(text) &&
+            !IsVarShortcutDefineToken_(text);
+        if (should_mark_illegal) {
+          token.type = AMTokenType::IllegalCommand;
+        }
         parsing = false;
         continue;
       }

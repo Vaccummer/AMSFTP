@@ -1425,6 +1425,7 @@ void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"type", "username"}, &out->username);
   (void)AMJson::QueryKey(json, {"type", "abort"}, &out->abort);
   (void)AMJson::QueryKey(json, {"type", "hostname"}, &out->nickname);
+  (void)AMJson::QueryKey(json, {"type", "shell_cmd"}, &out->shell_cmd);
 
   (void)AMJson::QueryKey(json, {"sign", "at"}, &out->atsign);
   (void)AMJson::QueryKey(json, {"sign", "dollar"}, &out->dollarsign);
@@ -1494,6 +1495,7 @@ Json EncodeCommon_(const InputHighlightStyle &in) {
   out["type"]["username"] = in.username;
   out["type"]["abort"] = in.abort;
   out["type"]["hostname"] = in.nickname;
+  out["type"]["shell_cmd"] = in.shell_cmd;
 
   out["sign"]["at"] = in.atsign;
   out["sign"]["dollar"] = in.dollarsign;
