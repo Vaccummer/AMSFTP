@@ -1,9 +1,11 @@
 #include "interface/completion/CompletionRuntimeAdapter.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include <algorithm>
+#include <optional>
 #include <unordered_set>
 
 namespace AMInterface::completion {
@@ -28,6 +30,19 @@ std::string ResolveWorkdir_(const AMDomain::host::ClientMetaData &metadata,
     return home;
   }
   return ".";
+}
+
+std::string NormalizeNicknameOrDefault_(const std::string &nickname,
+                                        const std::string &fallback) {
+  std::string key = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(nickname));
+  if (key.empty()) {
+    key = AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(fallback));
+  }
+  if (key.empty()) {
+    key = "local";
+  }
+  return key;
 }
 
 } // namespace
@@ -65,8 +80,89 @@ std::vector<std::string> CompletionRuntimeAdapter::ListHostNames() const {
   return host_service_.ListNames();
 }
 
+std::vector<std::string> CompletionRuntimeAdapter::ListTerminalNames() const {
+  return terminal_service_.ListTerminalNames();
+}
+
+std::vector<std::string> CompletionRuntimeAdapter::ListChannelNames(
+    const std::string &terminal_nickname) const {
+  std::vector<std::string> out = {};
+  auto terminal_result =
+      terminal_service_.GetTerminalByNickname(terminal_nickname, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    return out;
+  }
+  auto list_result = terminal_result.data->ListChannels({}, {});
+  if (!(list_result.rcm)) {
+    return out;
+  }
+  return list_result.data.channel_names;
+}
+
 bool CompletionRuntimeAdapter::HostExists(const std::string &nickname) const {
   return host_service_.HostExists(nickname);
+}
+
+bool CompletionRuntimeAdapter::TerminalExists(const std::string &nickname) const {
+  auto terminal = terminal_service_.GetTerminalByNickname(nickname, false);
+  return (terminal.rcm) && terminal.data;
+}
+
+ICompletionRuntime::TerminalNameState
+CompletionRuntimeAdapter::QueryTerminalNameState(
+    const std::string &nickname) const {
+  const std::string key = NormalizeNicknameOrDefault_(nickname, CurrentNickname());
+  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    if (host_service_.HostExists(key)) {
+      return TerminalNameState::Unestablished;
+    }
+    return TerminalNameState::Nonexistent;
+  }
+
+  auto check_result = terminal_result.data->CheckSession({}, {});
+  if ((check_result.rcm) &&
+      check_result.data.status == AMDomain::client::ClientStatus::OK) {
+    return TerminalNameState::OK;
+  }
+  return TerminalNameState::Disconnected;
+}
+
+ICompletionRuntime::ChannelNameState
+CompletionRuntimeAdapter::QueryChannelNameState(
+    const std::string &terminal_nickname, const std::string &channel_name,
+    bool allow_new) const {
+  const std::string key =
+      NormalizeNicknameOrDefault_(terminal_nickname, CurrentNickname());
+  const std::string channel = AMStr::Strip(channel_name);
+  const bool valid_literal = AMDomain::host::HostService::ValidateNickname(channel);
+  if (channel.empty()) {
+    return allow_new ? ChannelNameState::InvalidNew : ChannelNameState::Nonexistent;
+  }
+
+  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    if (!allow_new) {
+      return ChannelNameState::Nonexistent;
+    }
+    if (!valid_literal || QueryTerminalNameState(key) == TerminalNameState::Nonexistent) {
+      return ChannelNameState::InvalidNew;
+    }
+    return ChannelNameState::ValidNew;
+  }
+
+  auto check_result =
+      terminal_result.data->CheckChannel({std::optional<std::string>(channel)}, {});
+  if ((check_result.rcm) && check_result.data.exists) {
+    return check_result.data.is_open ? ChannelNameState::OK
+                                     : ChannelNameState::Disconnected;
+  }
+
+  if (!allow_new) {
+    return ChannelNameState::Nonexistent;
+  }
+  return valid_literal ? ChannelNameState::ValidNew
+                       : ChannelNameState::InvalidNew;
 }
 
 std::vector<std::string> CompletionRuntimeAdapter::ListVarDomains() const {

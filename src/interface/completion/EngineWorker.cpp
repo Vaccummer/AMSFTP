@@ -516,8 +516,18 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
     return AMCompletionTarget::HostNickname;
   case AMCommandArgSemantic::HostNicknameNew:
     return AMCompletionTarget::Disabled;
+  case AMCommandArgSemantic::TerminalName:
+    return AMCompletionTarget::TerminalName;
+  case AMCommandArgSemantic::ChannelTargetExisting:
+    return AMCompletionTarget::ChannelTargetExisting;
+  case AMCommandArgSemantic::ChannelTargetNew:
+    return AMCompletionTarget::ChannelTargetNew;
+  case AMCommandArgSemantic::SshChannelTarget:
+    return AMCompletionTarget::SshChannelTarget;
   case AMCommandArgSemantic::HostAttr:
     return AMCompletionTarget::HostAttr;
+  case AMCommandArgSemantic::HostAttrValue:
+    return AMCompletionTarget::Disabled;
   case AMCommandArgSemantic::ClientName:
     return AMCompletionTarget::ClientName;
   case AMCommandArgSemantic::TaskId:
@@ -873,6 +883,12 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
        ctx.token_prefix.front() == '/' || ctx.token_prefix.front() == '\\' ||
        ctx.token_prefix.front() == '.');
   const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
+  const bool semantic_terminal_channel =
+      semantic_target.has_value() &&
+      (*semantic_target == AMCompletionTarget::TerminalName ||
+       *semantic_target == AMCompletionTarget::ChannelTargetExisting ||
+       *semantic_target == AMCompletionTarget::ChannelTargetNew ||
+       *semantic_target == AMCompletionTarget::SshChannelTarget);
   const bool semantic_path = semantic_target.has_value() &&
                              *semantic_target == AMCompletionTarget::Path;
   const bool prefix_has_path_sign = prefix_starts_with_path_sign || has_at ||
@@ -887,7 +903,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       push_target(AMCompletionTarget::ClientName);
       push_target(AMCompletionTarget::Path);
     }
-  } else if (has_at || IsPathLikeText_(ctx.token_prefix)) {
+  } else if (!semantic_terminal_channel &&
+             (has_at || IsPathLikeText_(ctx.token_prefix))) {
     push_target(AMCompletionTarget::Path);
   }
 

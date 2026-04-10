@@ -46,6 +46,103 @@ bool IsPathSemantic_(AMCommandArgSemantic semantic) {
   return semantic == AMCommandArgSemantic::Path;
 }
 
+bool IsTerminalChannelSemantic_(AMCommandArgSemantic semantic) {
+  return semantic == AMCommandArgSemantic::TerminalName ||
+         semantic == AMCommandArgSemantic::ChannelTargetExisting ||
+         semantic == AMCommandArgSemantic::ChannelTargetNew ||
+         semantic == AMCommandArgSemantic::SshChannelTarget;
+}
+
+AMTokenType TerminalTokenTypeFromState_(
+    ITokenAnalyzerRuntime::TerminalNameState state) {
+  switch (state) {
+  case ITokenAnalyzerRuntime::TerminalNameState::OK:
+    return AMTokenType::TerminalName;
+  case ITokenAnalyzerRuntime::TerminalNameState::Disconnected:
+    return AMTokenType::DisconnectedTerminalName;
+  case ITokenAnalyzerRuntime::TerminalNameState::Unestablished:
+    return AMTokenType::UnestablishedTerminalName;
+  case ITokenAnalyzerRuntime::TerminalNameState::Nonexistent:
+  default:
+    return AMTokenType::NonexistentTerminalName;
+  }
+}
+
+AMTokenType ChannelTokenTypeFromState_(
+    ITokenAnalyzerRuntime::ChannelNameState state) {
+  switch (state) {
+  case ITokenAnalyzerRuntime::ChannelNameState::OK:
+    return AMTokenType::ChannelName;
+  case ITokenAnalyzerRuntime::ChannelNameState::Disconnected:
+    return AMTokenType::DisconnectedChannelName;
+  case ITokenAnalyzerRuntime::ChannelNameState::Nonexistent:
+    return AMTokenType::NonexistentChannelName;
+  case ITokenAnalyzerRuntime::ChannelNameState::ValidNew:
+    return AMTokenType::ValidNewChannelName;
+  case ITokenAnalyzerRuntime::ChannelNameState::InvalidNew:
+  default:
+    return AMTokenType::InvalidNewChannelName;
+  }
+}
+
+struct ParsedTerminalChannelTarget_ {
+  std::string terminal_name = "local";
+  std::string channel_name = "";
+};
+
+ParsedTerminalChannelTarget_ ParseTerminalChannelTarget_(
+    const std::string &token, const std::string &default_terminal_name) {
+  ParsedTerminalChannelTarget_ out = {};
+  out.terminal_name =
+      AMDomain::host::HostService::NormalizeNickname(default_terminal_name);
+  if (out.terminal_name.empty()) {
+    out.terminal_name = "local";
+  }
+
+  const std::string text = AMStr::Strip(token);
+  if (text.empty()) {
+    return out;
+  }
+
+  const size_t at_pos = FindUnescapedChar_(text, '@');
+  if (at_pos == std::string::npos) {
+    out.channel_name = AMStr::Strip(UnescapeBackticks_(text));
+    return out;
+  }
+
+  const std::string terminal_part =
+      AMStr::Strip(UnescapeBackticks_(text.substr(0, at_pos)));
+  if (!terminal_part.empty()) {
+    out.terminal_name =
+        AMDomain::host::HostService::NormalizeNickname(terminal_part);
+  }
+  out.channel_name = AMStr::Strip(UnescapeBackticks_(text.substr(at_pos + 1)));
+  return out;
+}
+
+AMTokenType ClassifyTerminalNameTokenType_(
+    std::shared_ptr<ITokenAnalyzerRuntime> runtime,
+    const std::string &nickname_raw, const std::string &default_terminal_name) {
+  if (!runtime) {
+    return AMTokenType::NonexistentTerminalName;
+  }
+  const std::string key = AMStr::Strip(nickname_raw).empty()
+                              ? default_terminal_name
+                              : nickname_raw;
+  return TerminalTokenTypeFromState_(runtime->QueryTerminalNameState(key));
+}
+
+AMTokenType ClassifyChannelTargetTokenType_(
+    std::shared_ptr<ITokenAnalyzerRuntime> runtime,
+    const ParsedTerminalChannelTarget_ &target, bool allow_new) {
+  if (!runtime) {
+    return allow_new ? AMTokenType::InvalidNewChannelName
+                     : AMTokenType::NonexistentChannelName;
+  }
+  return ChannelTokenTypeFromState_(runtime->QueryChannelNameState(
+      target.terminal_name, target.channel_name, allow_new));
+}
+
 AMTokenType
 ClassifyNicknameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
                            const std::string &nickname_raw) {
@@ -343,12 +440,10 @@ SemanticAnalyzer::Classify(
 
   AMDomain::client::ClientHandle current_client =
       runtime_ ? runtime_->CurrentClient() : nullptr;
-  std::string current_nickname = "local";
-  if (current_client) {
-    current_nickname = current_client->ConfigPort().GetNickname();
-    if (current_nickname.empty()) {
-      current_nickname = "local";
-    }
+  std::string current_nickname =
+      runtime_ ? runtime_->CurrentNickname() : std::string("local");
+  if (current_nickname.empty()) {
+    current_nickname = "local";
   }
 
   std::optional<CommandNode::OptionValueRule> pending_value_rule = std::nullopt;
@@ -521,6 +616,30 @@ SemanticAnalyzer::Classify(
         continue;
       }
 
+      if (*semantic_hint == AMCommandArgSemantic::TerminalName) {
+        token.type = ClassifyTerminalNameTokenType_(
+            runtime_, unescaped_text, current_nickname);
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+
+      if (*semantic_hint == AMCommandArgSemantic::ChannelTargetExisting ||
+          *semantic_hint == AMCommandArgSemantic::ChannelTargetNew ||
+          *semantic_hint == AMCommandArgSemantic::SshChannelTarget) {
+        const ParsedTerminalChannelTarget_ target =
+            ParseTerminalChannelTarget_(raw_text, current_nickname);
+        const bool allow_new =
+            (*semantic_hint == AMCommandArgSemantic::ChannelTargetNew ||
+             *semantic_hint == AMCommandArgSemantic::SshChannelTarget);
+        token.type = ClassifyChannelTargetTokenType_(runtime_, target, allow_new);
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+
       if (*semantic_hint == AMCommandArgSemantic::VarZone) {
         token.type = ClassifyVarZoneTokenType_(runtime_, unescaped_text);
         if (positional_consumed) {
@@ -559,6 +678,8 @@ SemanticAnalyzer::Classify(
     const bool has_unescaped_at = at_pos != std::string::npos;
     const bool force_path =
         semantic_hint.has_value() && IsPathSemantic_(*semantic_hint);
+    const bool terminal_channel_semantic =
+        semantic_hint.has_value() && IsTerminalChannelSemantic_(*semantic_hint);
     const bool has_clear_path_sign =
         has_unescaped_at || HasClearPathSign_(unescaped_text);
 
@@ -575,8 +696,9 @@ SemanticAnalyzer::Classify(
       }
     }
 
-    const bool treat_as_path =
-        force_path || has_clear_path_sign || IsPathLikeText_(unescaped_text);
+    const bool treat_as_path = !terminal_channel_semantic &&
+                               (force_path || has_clear_path_sign ||
+                                IsPathLikeText_(unescaped_text));
     if (!treat_as_path) {
       if (positional_consumed) {
         ++arg_index;

@@ -478,7 +478,11 @@ std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
   out.push_back(
       {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
         AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
-        AMCompletionTarget::TaskId, AMCompletionTarget::VarZone},
+        AMCompletionTarget::TaskId, AMCompletionTarget::VarZone,
+        AMCompletionTarget::TerminalName,
+        AMCompletionTarget::ChannelTargetExisting,
+        AMCompletionTarget::ChannelTargetNew,
+        AMCompletionTarget::SshChannelTarget},
        internal_engine});
 
   auto path_engine =

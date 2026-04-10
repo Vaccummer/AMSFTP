@@ -71,6 +71,34 @@ AMTokenType ClassifyVarZoneTokenType_(
   return AMTokenType::NonexistentNickname;
 }
 
+AMTokenType TerminalTokenTypeFromState_(
+    ITokenAnalyzerRuntime::TerminalNameState state) {
+  switch (state) {
+  case ITokenAnalyzerRuntime::TerminalNameState::OK:
+    return AMTokenType::TerminalName;
+  case ITokenAnalyzerRuntime::TerminalNameState::Disconnected:
+    return AMTokenType::DisconnectedTerminalName;
+  case ITokenAnalyzerRuntime::TerminalNameState::Unestablished:
+    return AMTokenType::UnestablishedTerminalName;
+  case ITokenAnalyzerRuntime::TerminalNameState::Nonexistent:
+  default:
+    return AMTokenType::NonexistentTerminalName;
+  }
+}
+
+bool IsChannelTokenType_(AMTokenType type) {
+  switch (type) {
+  case AMTokenType::ChannelName:
+  case AMTokenType::DisconnectedChannelName:
+  case AMTokenType::NonexistentChannelName:
+  case AMTokenType::ValidNewChannelName:
+  case AMTokenType::InvalidNewChannelName:
+    return true;
+  default:
+    return false;
+  }
+}
+
 std::string NormalizeStyleTag_(const std::string &raw) {
   std::string trimmed = AMStr::Strip(raw);
   if (trimmed.empty()) {
@@ -213,6 +241,15 @@ int PriorityForType_(AMTokenType type) {
   case AMTokenType::DisconnectedNickname:
   case AMTokenType::UnestablishedNickname:
   case AMTokenType::NonexistentNickname:
+  case AMTokenType::TerminalName:
+  case AMTokenType::DisconnectedTerminalName:
+  case AMTokenType::UnestablishedTerminalName:
+  case AMTokenType::NonexistentTerminalName:
+  case AMTokenType::ChannelName:
+  case AMTokenType::DisconnectedChannelName:
+  case AMTokenType::NonexistentChannelName:
+  case AMTokenType::ValidNewChannelName:
+  case AMTokenType::InvalidNewChannelName:
     return 70;
   case AMTokenType::BuiltinArg:
   case AMTokenType::NonexistentBuiltinArg:
@@ -512,7 +549,14 @@ public:
         }
         const std::string scan = text.substr(prefix_offset);
         const size_t at_pos_local = FindUnescapedChar_(scan, '@');
-        if (at_pos_local == std::string::npos || at_pos_local == 0) {
+        if (at_pos_local == std::string::npos) {
+          continue;
+        }
+        if (at_pos_local == 0) {
+          if (IsChannelTokenType_(token.type)) {
+            apply_range(token.start + prefix_offset, token.start + prefix_offset + 1,
+                        AMTokenType::AtSign);
+          }
           continue;
         }
         const size_t at_pos = prefix_offset + at_pos_local;
@@ -523,7 +567,11 @@ public:
         const size_t nick_start = token.start + prefix_offset;
         const size_t nick_end = token.start + at_pos;
         const size_t at_index = nick_end;
-        const AMTokenType nick_type = ClassifyNicknameTokenType_(runtime_, prefix);
+        AMTokenType nick_type = ClassifyNicknameTokenType_(runtime_, prefix);
+        if (runtime_ && IsChannelTokenType_(token.type)) {
+          nick_type = TerminalTokenTypeFromState_(
+              runtime_->QueryTerminalNameState(prefix));
+        }
         apply_range(nick_start, nick_end, nick_type);
         apply_range(at_index, at_index + 1, AMTokenType::AtSign);
       }
@@ -601,6 +649,15 @@ public:
       case AMTokenType::InvalidValue:
       case AMTokenType::ValidNewNickname:
       case AMTokenType::InvalidNewNickname:
+      case AMTokenType::TerminalName:
+      case AMTokenType::DisconnectedTerminalName:
+      case AMTokenType::UnestablishedTerminalName:
+      case AMTokenType::NonexistentTerminalName:
+      case AMTokenType::ChannelName:
+      case AMTokenType::DisconnectedChannelName:
+      case AMTokenType::NonexistentChannelName:
+      case AMTokenType::ValidNewChannelName:
+      case AMTokenType::InvalidNewChannelName:
       case AMTokenType::Path:
       case AMTokenType::Nonexistentpath:
       case AMTokenType::File:
@@ -632,7 +689,7 @@ public:
     }
 
     constexpr size_t kTokenTypeCount =
-        static_cast<size_t>(AMTokenType::DisconnectedNickname) + 1;
+        static_cast<size_t>(AMTokenType::InvalidNewChannelName) + 1;
     std::array<std::string, kTokenTypeCount> style_tags = {};
     for (size_t i = 0; i < kTokenTypeCount; ++i) {
       style_tags[i] =

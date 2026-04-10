@@ -45,6 +45,10 @@ enum class AMCompletionTarget {
   TaskId = 9,
   Path = 10,
   VarZone = 11,
+  TerminalName = 12,
+  ChannelTargetExisting = 13,
+  ChannelTargetNew = 14,
+  SshChannelTarget = 15,
 };
 
 /**
@@ -58,6 +62,8 @@ enum class AMCompletionKind {
   VarZone,
   ClientName,
   HostNickname,
+  TerminalName,
+  ChannelName,
   HostAttr,
   TaskId,
   PathLocal,
