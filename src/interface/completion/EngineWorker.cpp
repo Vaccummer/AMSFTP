@@ -736,14 +736,26 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   ctx.options = state.options;
   ctx.args = state.args;
 
-  if (state.unknown_before_command) {
-    ctx.targets = {AMCompletionTarget::Disabled};
-    return ctx;
-  }
-  if (!state.has_module && !state.has_cmd) {
-    ctx.targets = {AMCompletionTarget::TopCommand};
-    return ctx;
-  }
+    if (state.unknown_before_command) {
+      ctx.targets = {AMCompletionTarget::Disabled};
+      return ctx;
+    }
+    if (!state.has_module && !state.has_cmd) {
+      const bool prefix_starts_with_path_sign =
+          !ctx.token_prefix.empty() &&
+          (ctx.token_prefix.front() == '@' || ctx.token_prefix.front() == '~' ||
+           ctx.token_prefix.front() == '/' || ctx.token_prefix.front() == '\\' ||
+           ctx.token_prefix.front() == '.');
+      const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
+      const bool prefix_has_path_sign = prefix_starts_with_path_sign || has_at ||
+                                        IsPathLikeText_(ctx.token_prefix);
+      if (prefix_has_path_sign) {
+        ctx.targets = {AMCompletionTarget::Path};
+        return ctx;
+      }
+      ctx.targets = {AMCompletionTarget::TopCommand};
+      return ctx;
+    }
   if (state.has_module && !state.has_cmd) {
     ctx.targets = {AMCompletionTarget::Subcommand};
     return ctx;

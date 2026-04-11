@@ -308,7 +308,7 @@ struct TerminalWaitResult_ {
   std::string error = {};
 };
 
-void WriteTerminalBytes_(const std::string &text) {
+void WriteTerminalBytes_(std::string_view text) {
   if (text.empty()) {
     return;
   }
@@ -867,10 +867,10 @@ BuildChannelOpenArgs_(const std::string &channel_name,
 }
 
 ECM ExecuteTerminalSession_(
+    AMApplication::terminal::TermAppService &terminal_service,
     AMDomain::terminal::ITerminalPort &terminal,
     const TerminalTargetSpec_ &target,
     const AMDomain::client::ClientControlComponent &control,
-    int read_timeout_ms,
     int send_timeout_ms,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager) {
   enum class BreakReason_ {
@@ -984,9 +984,68 @@ ECM ExecuteTerminalSession_(
   bool pending_prompt_refresh = refresh_prompt_on_enter;
   bool in_local_control_state = false;
   BreakReason_ break_reason = BreakReason_::None;
+  bool stream_attached = false;
 
-  while (true) {
+  auto classify_stream_closed = [&](const ECM &stream_rcm) -> BreakReason_ {
+    if ((stream_rcm)) {
+      return BreakReason_::RemoteChannelClosed;
+    }
+    if (stream_rcm.code == EC::ClientNotFound) {
+      return BreakReason_::RemoteChannelClosed;
+    }
+    if (stream_rcm.code == EC::Terminate) {
+      return BreakReason_::Interrupted;
+    }
+    if (stream_rcm.code == EC::OperationTimeout) {
+      return BreakReason_::Timeout;
+    }
+    if (stream_rcm.code == EC::NoConnection ||
+        stream_rcm.code == EC::ConnectionLost ||
+        stream_rcm.code == EC::NoSession) {
+      return BreakReason_::ConnectionBroken;
+    }
+    const auto session_state = terminal.GetSessionState();
+    if (session_state == AMDomain::client::ClientStatus::NoConnection ||
+        session_state == AMDomain::client::ClientStatus::ConnectionBroken) {
+      return BreakReason_::ConnectionBroken;
+    }
+    return BreakReason_::Error;
+  };
+
+  auto attach_result = terminal_service.AttachChannelStream(
+      target.nickname, channel_name,
+      [](std::string_view chunk) { WriteTerminalBytes_(chunk); });
+  if (!(attach_result.rcm)) {
+    raw_terminal.Restore();
+    RestoreCliPromptStateAfterTerminalExit_();
+    prompt_cache_guard.Disable();
+    prompt_io_manager.Print("");
+    return attach_result.rcm;
+  }
+  stream_attached = true;
+  if (attach_result.data.overflowed) {
+    prompt_io_manager.Print("⚠ Terminal output cache overflowed; oldest output was dropped");
+  }
+  if (attach_result.data.closed) {
+    loop_outcome = {(attach_result.data.last_error)
+                        ? OK
+                        : attach_result.data.last_error,
+                    true};
+    break_reason = classify_stream_closed(attach_result.data.last_error);
+  }
+
+  while (break_reason == BreakReason_::None) {
     bool had_activity = false;
+    if (stream_attached) {
+      auto stream_state =
+          terminal_service.GetChannelStreamState(target.nickname, channel_name);
+      if (stream_state.exists && stream_state.closed) {
+        loop_outcome = {(stream_state.last_error) ? OK : stream_state.last_error,
+                        true};
+        break_reason = classify_stream_closed(stream_state.last_error);
+        break;
+      }
+    }
     if (control.IsInterrupted()) {
       loop_outcome = {Err(EC::Terminate, "terminal.loop", "<terminal>",
                           "Terminal interrupted"),
@@ -1078,48 +1137,6 @@ ECM ExecuteTerminalSession_(
       last_geometry = current_geometry;
       had_activity = true;
     }
-
-    const auto read_control = BuildTerminalOpControl_(control, read_timeout_ms);
-    auto read_result = terminal.ReadChannel(
-        AMDomain::terminal::ChannelReadArgs{
-            std::optional<std::string>(channel_name), 32U * 1024U},
-        read_control);
-    if (!read_result.rcm) {
-      if (read_result.rcm.code == EC::OperationTimeout) {
-        continue;
-      }
-      bool classify_remote_closed = false;
-      const auto session_state = terminal.GetSessionState();
-      auto check_result = terminal.CheckChannel(
-          {std::optional<std::string>(channel_name)}, control);
-      if (session_state == AMDomain::client::ClientStatus::OK) {
-        if ((check_result.rcm &&
-             (!check_result.data.exists || !check_result.data.is_open)) ||
-            (check_result.rcm.code == EC::ClientNotFound)) {
-          classify_remote_closed = true;
-        }
-      }
-      loop_outcome = {read_result.rcm, true};
-      break_reason =
-          classify_remote_closed
-              ? BreakReason_::RemoteChannelClosed
-              : ((session_state ==
-                      AMDomain::client::ClientStatus::NoConnection ||
-                  session_state ==
-                      AMDomain::client::ClientStatus::ConnectionBroken)
-                     ? BreakReason_::ConnectionBroken
-                     : BreakReason_::Error);
-      break;
-    }
-    if (!read_result.data.output.empty()) {
-      WriteTerminalBytes_(read_result.data.output);
-      had_activity = true;
-    }
-    if (read_result.data.eof) {
-      loop_outcome = {OK, false};
-      break_reason = BreakReason_::RemoteChannelClosed;
-      break;
-    }
     if (!had_activity) {
       const TerminalWaitResult_ wait_result = terminal_waiter.Wait();
       if (wait_result.status == TerminalWaitStatus_::Interrupted) {
@@ -1158,6 +1175,15 @@ ECM ExecuteTerminalSession_(
   prompt_io_manager.Print("");
 
   ECM final_rcm = loop_outcome.rcm;
+  if (stream_attached) {
+    const ECM stream_rcm =
+        (break_reason == BreakReason_::LocalEscape)
+            ? terminal_service.DetachChannelStream(target.nickname, channel_name)
+            : terminal_service.StopChannelStream(target.nickname, channel_name);
+    if (!(stream_rcm) && (final_rcm)) {
+      final_rcm = stream_rcm;
+    }
+  }
   if (break_reason == BreakReason_::RemoteChannelClosed) {
     auto close_result = terminal.CloseChannel({channel_name, true}, control);
     if (!close_result.rcm && close_result.rcm.code != EC::ClientNotFound &&
@@ -1258,7 +1284,6 @@ ECM FilesystemInterfaceSerivce::LaunchTerminal(
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const auto fs_arg = filesystem_service_.GetInitArg();
-  const int read_timeout_ms = fs_arg.terminal_read_timeout_ms;
   const int send_timeout_ms = fs_arg.terminal_send_timeout_ms;
   std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
       AMStr::Strip(filesystem_service_.CurrentNickname()));
@@ -1280,7 +1305,7 @@ ECM FilesystemInterfaceSerivce::LaunchTerminal(
 
   if (managed_terminal_result.rcm && managed_terminal_result.data) {
     const ECM run_rcm = ExecuteTerminalSession_(
-        *(managed_terminal_result.data), target, control, read_timeout_ms,
+        terminal_service_, *(managed_terminal_result.data), target, control,
         send_timeout_ms, prompt_io_manager_);
     if (!run_rcm) {
       prompt_io_manager_.ErrorFormat(run_rcm);
@@ -1322,7 +1347,7 @@ ECM FilesystemInterfaceSerivce::LaunchTerminal(
   }
 
   const ECM run_rcm = ExecuteTerminalSession_(
-      *temp_terminal_result.data, target, control, read_timeout_ms,
+      terminal_service_, *temp_terminal_result.data, target, control,
       send_timeout_ms, prompt_io_manager_);
   if (!(run_rcm)) {
     prompt_io_manager_.ErrorFormat(run_rcm);
@@ -1696,6 +1721,12 @@ ECM FilesystemInterfaceSerivce::RemoveChannel(
     prompt_io_manager_.ErrorFormat(close_result.rcm);
     return close_result.rcm;
   }
+  const ECM stop_stream_rcm =
+      terminal_service_.StopChannelStream(target.nickname, channel_name);
+  if (!(stop_stream_rcm)) {
+    prompt_io_manager_.ErrorFormat(stop_stream_rcm);
+    return stop_stream_rcm;
+  }
   prompt_io_manager_.FmtPrint("✅ Channel removed: {}@{}", target.nickname,
                               channel_name);
   return OK;
@@ -1767,6 +1798,12 @@ ECM FilesystemInterfaceSerivce::RenameChannel(
   if (!(rename_result.rcm)) {
     prompt_io_manager_.ErrorFormat(rename_result.rcm);
     return rename_result.rcm;
+  }
+  const ECM stop_stream_rcm =
+      terminal_service_.StopChannelStream(src_target.nickname, src_channel);
+  if (!(stop_stream_rcm)) {
+    prompt_io_manager_.ErrorFormat(stop_stream_rcm);
+    return stop_stream_rcm;
   }
   prompt_io_manager_.FmtPrint("✅ Channel renamed: {}@{} -> {}@{}",
                               src_target.nickname, src_channel,
