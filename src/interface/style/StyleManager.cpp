@@ -31,7 +31,7 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
   case StyleIndex::Command:
     return &cfg.common.command;
   case StyleIndex::IllegalCommand:
-    return &cfg.common.illegal_command;
+    return &cfg.common.unexpected;
   case StyleIndex::Option:
     return &cfg.common.option;
   case StyleIndex::String:

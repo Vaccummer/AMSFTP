@@ -271,9 +271,6 @@ void CommandNode::AddPositionalRule(const std::string &path, size_t index,
  */
 void CommandNode::AddPositionalRule(size_t index, AMCommandArgSemantic semantic,
                                     bool repeat_tail) {
-  if (semantic == AMCommandArgSemantic::None) {
-    return;
-  }
   for (auto &rule : positional_rules) {
     if (rule.index == index && rule.repeat_tail == repeat_tail) {
       rule.semantic = semantic;
@@ -347,19 +344,43 @@ CommandNode::ResolvePositionalSemantic(size_t index) const {
   size_t best_tail_index = 0;
   std::optional<AMCommandArgSemantic> best_tail;
   for (const auto &rule : positional_rules) {
-    if (rule.semantic == AMCommandArgSemantic::None) {
-      continue;
-    }
     if (rule.index == index) {
+      if (rule.semantic == AMCommandArgSemantic::None) {
+        return std::nullopt;
+      }
       return rule.semantic;
     }
     if (rule.repeat_tail && rule.index <= index &&
         (!best_tail.has_value() || rule.index >= best_tail_index)) {
-      best_tail = rule.semantic;
+      if (rule.semantic == AMCommandArgSemantic::None) {
+        best_tail.reset();
+      } else {
+        best_tail = rule.semantic;
+      }
       best_tail_index = rule.index;
     }
   }
   return best_tail;
+}
+
+bool CommandNode::HasPositionalRule(const std::string &path, size_t index) const {
+  const auto *node = Find(path);
+  if (!node) {
+    return false;
+  }
+  return node->HasPositionalRule(index);
+}
+
+bool CommandNode::HasPositionalRule(size_t index) const {
+  for (const auto &rule : positional_rules) {
+    if (rule.index == index) {
+      return true;
+    }
+    if (rule.repeat_tail && rule.index <= index) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

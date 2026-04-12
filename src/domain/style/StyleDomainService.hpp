@@ -309,6 +309,7 @@ inline void NormalizeInputHighlight(InputHighlightStyle *style) {
   NormalizeStyleToken(&style->common, defaults.common);
   NormalizeStyleToken(&style->module, defaults.module);
   NormalizeStyleToken(&style->command, defaults.command);
+  NormalizeStyleToken(&style->unexpected, defaults.unexpected);
   NormalizeStyleToken(&style->illegal_command, defaults.illegal_command);
   NormalizeStyleToken(&style->option, defaults.option);
   NormalizeStyleToken(&style->string, defaults.string);
@@ -356,6 +357,12 @@ inline void NormalizeInputHighlight(InputHighlightStyle *style) {
                       defaults.valid_new_channelname);
   NormalizeStyleToken(&style->invalid_new_channelname,
                       defaults.invalid_new_channelname);
+  if (style->unexpected.empty()) {
+    style->unexpected = style->illegal_command;
+  }
+  if (style->illegal_command.empty()) {
+    style->illegal_command = style->unexpected;
+  }
 }
 
 inline void NormalizeValueQueryHighlight(ValueQueryHighlightStyle *style) {

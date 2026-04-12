@@ -11,10 +11,10 @@ namespace {
 
 ECM CurrentStopError_(const ClientControlComponent &control) {
   if (control.IsInterrupted()) {
-    return {EC::Terminate, __func__, "<context>", "Operation interrupted"};
+    return {EC::Terminate, __func__, "", "Operation interrupted"};
   }
   if (control.IsTimeout()) {
-    return {EC::OperationTimeout, __func__, "<context>", "Operation timed out"};
+    return {EC::OperationTimeout, __func__, "", "Operation timed out"};
   }
   return OK;
 }
@@ -59,7 +59,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
 
   auto resolved_result = ResolvePath(path, control);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
-    return {total_size, (resolved_result.rcm) ? Err(EC::InvalidHandle, __func__, "<context>",
+    return {total_size, (resolved_result.rcm) ? Err(EC::InvalidHandle, __func__, "",
                                                     "Resolved client is null")
                                               : resolved_result.rcm};
   }
@@ -98,7 +98,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
       return cb_rcm;
     }
     if (!keep_going) {
-      const ECM stop_rcm = Err(EC::Terminate, __func__, "<context>",
+      const ECM stop_rcm = Err(EC::Terminate, __func__, "",
                                "GetSize terminated by on_progress callback");
       UpdateLastError_(&last_error, stop_rcm);
       return stop_rcm;

@@ -75,7 +75,7 @@ ECM AMTomlConfigStore::Configure(
 
   for (const auto kind : kRequiredKinds) {
     if (layout_.find(kind) == layout_.end()) {
-      return Err(EC::ConfigNotInitialized, __func__, "<context>", "missing document layout");
+      return Err(EC::ConfigNotInitialized, __func__, "", "missing document layout");
     }
   }
   writer_.Start();
@@ -86,7 +86,7 @@ ECM AMTomlConfigStore::Configure(
 ECM AMTomlConfigStore::Load(std::optional<AMDomain::config::DocumentKind> kind,
                             bool force) {
   if (!initialized_) {
-    return Err(EC::ConfigNotInitialized, __func__, "<context>",
+    return Err(EC::ConfigNotInitialized, __func__, "",
                "config store is not initialized");
   }
 
@@ -124,7 +124,7 @@ ECM AMTomlConfigStore::Dump(AMDomain::config::DocumentKind kind,
 
   auto handle = GetHandle_(kind);
   if (!handle) {
-    ECM rcm = Err(EC::ConfigNotInitialized, __func__, "<context>",
+    ECM rcm = Err(EC::ConfigNotInitialized, __func__, "",
                   "document handle not initialized");
     NotifyDumpError_(rcm);
     return rcm;
@@ -281,7 +281,7 @@ ECM AMTomlConfigStore::EnsureDirectory(const std::filesystem::path &dir) {
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
   if (ec) {
-    return Err(EC::ConfigDumpFailed, __func__, "<context>", ec.message());
+    return Err(EC::ConfigDumpFailed, __func__, "", ec.message());
   }
   return OK;
 }
@@ -342,7 +342,7 @@ ECM AMTomlConfigStore::LoadDocument_(AMDomain::config::DocumentKind kind) {
     std::lock_guard<std::mutex> lock(mtx_);
     auto spec_it = layout_.find(kind);
     if (spec_it == layout_.end()) {
-      return Err(EC::ConfigNotInitialized, __func__, "<context>", "missing document layout");
+      return Err(EC::ConfigNotInitialized, __func__, "", "missing document layout");
     }
     spec = spec_it->second;
   }

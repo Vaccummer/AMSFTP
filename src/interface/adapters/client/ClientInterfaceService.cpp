@@ -35,9 +35,14 @@ public:
       std::lock_guard<std::mutex> lock(mutex_);
       stop_requested_.store(false, std::memory_order_relaxed);
       running_.store(true, std::memory_order_relaxed);
-      state_info_ = AMStr::fmt("resolving hostname: {}", config.request.hostname);
+      state_info_ =
+          AMStr::fmt("resolving hostname: {}", config.request.hostname);
       refresh_active_ = true;
-      prompt_io_manager_.RefreshBegin(1);
+      if (!cursor_hidden_) {
+        prompt_io_manager_.SetCursorVisible(false);
+        cursor_hidden_ = true;
+      }
+      prompt_io_manager_.RefreshBegin();
       worker_ = std::thread([this]() { RenderLoop_(); });
     }
   }
@@ -45,6 +50,7 @@ public:
   void Stop() {
     std::thread worker = {};
     bool should_refresh_end = false;
+    bool should_show_cursor = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!refresh_active_ && !worker_.joinable() &&
@@ -59,6 +65,8 @@ public:
       }
       should_refresh_end = refresh_active_;
       refresh_active_ = false;
+      should_show_cursor = cursor_hidden_;
+      cursor_hidden_ = false;
     }
 
     if (worker.joinable()) {
@@ -66,6 +74,9 @@ public:
     }
     if (should_refresh_end) {
       prompt_io_manager_.RefreshEnd();
+    }
+    if (should_show_cursor) {
+      prompt_io_manager_.SetCursorVisible(true);
     }
   }
 
@@ -87,8 +98,7 @@ public:
 private:
   void RenderLoop_() {
     static const std::vector<std::string> frames = {
-        "⠉⠉", "⠈⠙", "⠀⠹", "⠀⢸", "⠀⣰", "⢀⣠",
-        "⣀⣀", "⣄⡀", "⣆⠀", "⡇⠀", "⠏⠀", "⠋⠁"};
+        "⠉⠉", "⠈⠙", "⠀⠹", "⠀⢸", "⠀⣰", "⢀⣠", "⣀⣀", "⣄⡀", "⣆⠀", "⡇⠀", "⠏⠀", "⠋⠁"};
     size_t idx = 0;
     while (running_.load(std::memory_order_relaxed) &&
            !stop_requested_.load(std::memory_order_relaxed)) {
@@ -114,6 +124,7 @@ private:
   std::atomic<bool> stop_requested_ = true;
   std::string state_info_ = "";
   bool refresh_active_ = false;
+  bool cursor_hidden_ = false;
 };
 
 namespace {
@@ -398,8 +409,8 @@ void PrintClientStatusLine(AMPromptIOManager &prompt,
       AMStr::PadRightUtf8(nickname, format.nickname_width);
   const std::string padded_cwd = AMStr::PadRightUtf8(cwd, format.cwd_width);
 
-  const std::string styled_protocol =
-      style_service.Format(padded_protocol, AMInterface::style::StyleIndex::Protocol);
+  const std::string styled_protocol = style_service.Format(
+      padded_protocol, AMInterface::style::StyleIndex::Protocol);
   const auto nickname_style = ResolveClientNicknameStyleByState_(client);
   const std::string styled_nickname =
       style_service.Format(padded_nickname, nickname_style);
@@ -447,8 +458,8 @@ void PrintHostConfigDetail(AMPromptIOManager &prompt,
       render_value = "\"\"";
     }
     if (is_protocol) {
-      render_value =
-          style_service.Format(render_value, AMInterface::style::StyleIndex::Protocol);
+      render_value = style_service.Format(
+          render_value, AMInterface::style::StyleIndex::Protocol);
     }
     std::ostringstream line;
     line << std::left << std::setw(static_cast<int>(width)) << field.first
@@ -503,9 +514,9 @@ void PrintClientDetail(
 
   prompt.Print(AMStr::fmt("\\[{}]", nickname));
   if (include_status) {
-    const ECM rcm = check_result.has_value()
-                        ? check_result->rcm
-                        : Err(EC::ClientNotFound, __func__, "", "Client not found");
+    const ECM rcm = check_result.has_value() ? check_result->rcm
+                                             : Err(EC::ClientNotFound, __func__,
+                                                   "", "Client not found");
     print_field("status", (rcm) ? "✅" : "❌");
   }
   for (const auto &field : fields) {
@@ -690,7 +701,8 @@ bool PromptHostInt64_(AMPromptIOManager &prompt, const std::string &label,
     }
     int64_t parsed = 0;
     if (!ParseInt64_(stripped, &parsed)) {
-      prompt.ErrorFormat(Err(EC::InvalidArg, __func__, "", "invalid integer value"));
+      prompt.ErrorFormat(
+          Err(EC::InvalidArg, __func__, "", "invalid integer value"));
       continue;
     }
     if (parsed < min_v || parsed > max_v) {
@@ -789,7 +801,7 @@ HostListRow BuildHostListRow_(const std::string &nickname,
   return row;
 }
 
-void PrintHostListTable_(AMPromptIOManager &prompt,
+void PrintHostListTable_(AMPromptIOManager &prompt, AMStyleService &style_service,
                          const std::vector<HostListRow> &rows) {
   if (rows.empty()) {
     prompt.Print("");
@@ -810,20 +822,35 @@ void PrintHostListTable_(AMPromptIOManager &prompt,
     hostname_width = std::max(hostname_width, row.hostname.size());
   }
 
-  auto print_row = [&](const HostListRow &row) {
-    const std::string line = AMStr::fmt(
-        "{} {} {} {} {}",
-        AMStr::PadRightUtf8(row.protocol, protocol_width),
-        AMStr::PadRightUtf8(row.nickname, nickname_width),
-        AMStr::PadRightUtf8(row.username, username_width),
-        AMStr::PadRightUtf8(row.port, port_width),
-        AMStr::PadRightUtf8(row.hostname, hostname_width));
-    prompt.Print(line);
+  auto print_row = [&](const HostListRow &row, bool is_header) {
+    const std::string protocol =
+        AMStr::PadRightUtf8(row.protocol, protocol_width);
+    const std::string nickname =
+        AMStr::PadRightUtf8(row.nickname, nickname_width);
+    const std::string username =
+        AMStr::PadRightUtf8(row.username, username_width);
+    const std::string port = AMStr::PadRightUtf8(row.port, port_width);
+    const std::string hostname =
+        AMStr::PadRightUtf8(row.hostname, hostname_width);
+
+    if (is_header) {
+      prompt.Print(AMStr::fmt("{}  {}  {}  {}  {}", protocol, nickname, username,
+                              port, hostname));
+      return;
+    }
+
+    prompt.Print(AMStr::fmt(
+        "{}  {}  {}  {}  {}",
+        style_service.Format(protocol, AMInterface::style::StyleIndex::Protocol),
+        style_service.Format(nickname, AMInterface::style::StyleIndex::Nickname),
+        style_service.Format(username, AMInterface::style::StyleIndex::Username),
+        style_service.Format(port, AMInterface::style::StyleIndex::Number),
+        style_service.Format(hostname, AMInterface::style::StyleIndex::Nickname)));
   };
 
-  print_row({"Protocol", "Nickname", "Username", "Port", "Hostname"});
+  print_row({"Protocol", "Nickname", "Username", "Port", "Hostname"}, true);
   for (const auto &row : rows) {
-    print_row(row);
+    print_row(row, false);
   }
 }
 
@@ -910,8 +937,8 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     if (protocol == "sftp" || protocol == "ftp" || protocol == "local") {
       break;
     }
-    prompt.ErrorFormat(
-        Err(EC::InvalidArg, __func__, "", "protocol must be sftp, ftp or local"));
+    prompt.ErrorFormat(Err(EC::InvalidArg, __func__, "",
+                           "protocol must be sftp, ftp or local"));
   }
 
   const bool hostname_required =
@@ -989,7 +1016,8 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     if (first != second) {
       AMAuth::SecureZero(first);
       AMAuth::SecureZero(second);
-      prompt.ErrorFormat(Err(EC::InvalidArg, __func__, "", "Passwords do not match"));
+      prompt.ErrorFormat(
+          Err(EC::InvalidArg, __func__, "", "Passwords do not match"));
       continue;
     }
     entry.request.password = AMAuth::EncryptPassword(first);
@@ -1048,8 +1076,8 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
     if (protocol == "sftp" || protocol == "ftp" || protocol == "local") {
       break;
     }
-    prompt.ErrorFormat(
-        Err(EC::InvalidArg, __func__, "", "protocol must be sftp, ftp or local"));
+    prompt.ErrorFormat(Err(EC::InvalidArg, __func__, "",
+                           "protocol must be sftp, ftp or local"));
   }
 
   const ClientProtocol selected_protocol = entry.request.protocol;
@@ -1186,11 +1214,13 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
 } // namespace
 
 ClientInterfaceService::ClientInterfaceService(
-    ClientAppService &client_service, FilesystemAppService &filesystem_service,
+    ClientAppService &client_service, TermAppService &terminal_service,
+    FilesystemAppService &filesystem_service,
     AMHostConfigManager &host_config_manager,
     AMKnownHostsManager &known_hosts_manager,
     AMPromptIOManager &prompt_io_manager, AMStyleService &style_service)
-    : client_service_(client_service), filesystem_service_(filesystem_service),
+    : client_service_(client_service), terminal_service_(terminal_service),
+      filesystem_service_(filesystem_service),
       host_config_manager_(host_config_manager),
       known_hosts_manager_(known_hosts_manager),
       prompt_io_manager_(prompt_io_manager), style_service_(style_service),
@@ -1252,12 +1282,15 @@ void ClientInterfaceService::BindInteractionCallbacks() {
         const std::string nickname = request.nickname.empty()
                                          ? client->ConfigPort().GetNickname()
                                          : request.nickname;
+        if (!nickname.empty()) {
+          (void)terminal_service_.RemoveTerminal(nickname, {});
+        }
         const std::string error_text = AMStr::Strip(rcm.error).empty()
                                            ? AMStr::Strip(rcm.msg())
                                            : AMStr::Strip(rcm.error);
-        std::string disconnect_note = AMStr::fmt(
-            "🛑 \\[{}] Client {} disconnected! (ec={}, error={})", protocol,
-            nickname, ec_name, error_text);
+        std::string disconnect_note =
+            AMStr::fmt("🛑 \\[{}] Client {} disconnected! (ec={}, error={})",
+                       protocol, nickname, ec_name, error_text);
         if (!disconnect_note.empty() && disconnect_note.front() != '\n' &&
             ic_is_editline_active()) {
           disconnect_note.insert(disconnect_note.begin(), '\n');
@@ -1355,11 +1388,10 @@ void ClientInterfaceService::BindInteractionCallbacks() {
       disconnect_callback, make_trace_callback(maintainer_trace_prev),
       make_connect_state_callback(maintainer_connect_state_prev),
       known_host_callback, auth_callback);
-  client_service_.RegisterPublicCallbacks(disconnect_callback,
-                                          make_trace_callback(public_trace_prev),
-                                          make_connect_state_callback(
-                                              public_connect_state_prev),
-                                          known_host_callback, auth_callback);
+  client_service_.RegisterPublicCallbacks(
+      disconnect_callback, make_trace_callback(public_trace_prev),
+      make_connect_state_callback(public_connect_state_prev),
+      known_host_callback, auth_callback);
   ClientAppService::ConnectHooks hooks = {};
   hooks.before_connect = [this](const HostConfig &hook_config,
                                 const ClientHandle &, bool silent) {
@@ -1403,19 +1435,19 @@ ECM ClientInterfaceService::Connect(
 
     const std::string nickname = AMStr::Strip(raw);
     if (nickname.empty()) {
-      status =
-          MergeStatus_(status, Err(EC::InvalidArg, __func__, "", "Empty nickname"));
+      status = MergeStatus_(
+          status, Err(EC::InvalidArg, __func__, "", "Empty nickname"));
       continue;
     }
     if (!IsLocalNickname(nickname) &&
         !AMDomain::host::HostService::ValidateNickname(nickname)) {
-      status =
-          MergeStatus_(status, Err(EC::InvalidArg, __func__, "", "Invalid nickname"));
+      status = MergeStatus_(
+          status, Err(EC::InvalidArg, __func__, "", "Invalid nickname"));
       continue;
     }
     if (IsLocalNickname(nickname)) {
-      prompt_io_manager_.Print(BuildConnectSuccessLine_(
-          style_service_, "local", ClientProtocol::LOCAL));
+      prompt_io_manager_.Print(BuildConnectSuccessLine_(style_service_, "local",
+                                                        ClientProtocol::LOCAL));
       continue;
     }
 
@@ -1443,9 +1475,9 @@ ECM ClientInterfaceService::Connect(
             checked = client_service_.CheckClient(ensured_nickname, false, true,
                                                   control);
         if (!checked.has_value()) {
-          status = MergeStatus_(
-              status, Err(EC::ClientNotFound, "connect_clients",
-                          ensured_nickname, "Client not found"));
+          status =
+              MergeStatus_(status, Err(EC::ClientNotFound, "connect_clients",
+                                       ensured_nickname, "Client not found"));
           continue;
         }
         if (!(checked.value().rcm)) {
@@ -1453,9 +1485,9 @@ ECM ClientInterfaceService::Connect(
               rechecked = client_service_.CheckClient(ensured_nickname, true,
                                                       true, control);
           if (!rechecked.has_value()) {
-            status = MergeStatus_(
-                status, Err(EC::ClientNotFound, "connect_clients",
-                            ensured_nickname, "Client not found"));
+            status =
+                MergeStatus_(status, Err(EC::ClientNotFound, "connect_clients",
+                                         ensured_nickname, "Client not found"));
             continue;
           }
           status = MergeStatus_(status, rechecked.value().rcm);
@@ -1572,18 +1604,17 @@ ECM ClientInterfaceService::ConnectProtocol_(
       auto prompted_nickname =
           prompt_io_manager_.Prompt("Enter a legal nickname: ");
       if (!prompted_nickname.has_value()) {
-        const ECM rcm = Err(EC::ConfigCanceled,
-                            "connect_protocol.prompt_nickname", "<prompt>",
-                            "Nickname input canceled");
+        const ECM rcm =
+            Err(EC::ConfigCanceled, "connect_protocol.prompt_nickname",
+                "<prompt>", "Nickname input canceled");
         prompt_io_manager_.ErrorFormat(rcm);
         return rcm;
       }
       nickname = AMStr::Strip(*prompted_nickname);
       if (nickname.empty()) {
-        prompt_io_manager_.ErrorFormat(Err(EC::InvalidArg,
-                                           "connect_protocol.prompt_nickname",
-                                           "<nickname>",
-                                           "Nickname cannot be empty"));
+        prompt_io_manager_.ErrorFormat(
+            Err(EC::InvalidArg, "connect_protocol.prompt_nickname",
+                "<nickname>", "Nickname cannot be empty"));
         continue;
       }
     }
@@ -1706,16 +1737,15 @@ ECM ClientInterfaceService::RemoveClients(
       continue;
     }
     if (lowered == "local") {
-      last = Err(EC::InvalidArg, kOp, "local",
-                 "Local client cannot be removed");
+      last =
+          Err(EC::InvalidArg, kOp, "local", "Local client cannot be removed");
       prompt_io_manager_.ErrorFormat(last);
       continue;
     }
     const std::string resolved =
         FindClientNicknameCaseInsensitive_(names, stripped);
     if (resolved.empty()) {
-      last = Err(EC::ClientNotFound, kOp, stripped,
-                 "Client not established");
+      last = Err(EC::ClientNotFound, kOp, stripped, "Client not established");
       prompt_io_manager_.ErrorFormat(last);
       continue;
     }
@@ -1732,10 +1762,10 @@ ECM ClientInterfaceService::RemoveClients(
     const auto state = client->ConfigPort().GetState();
     const std::string username = AMStr::Strip(request_info.username);
     const std::string host = AMStr::Strip(request_info.hostname);
-    const std::string endpoint = username.empty()
-                                     ? AMStr::fmt("{}:{}", host, request_info.port)
-                                     : AMStr::fmt("{}@{}:{}", username, host,
-                                                  request_info.port);
+    const std::string endpoint =
+        username.empty()
+            ? AMStr::fmt("{}:{}", host, request_info.port)
+            : AMStr::fmt("{}@{}:{}", username, host, request_info.port);
     const std::string protocol = AMStr::fmt(
         "[{}]", AMStr::uppercase(AMStr::ToString(request_info.protocol)));
     const bool healthy =
@@ -1768,12 +1798,11 @@ ECM ClientInterfaceService::RemoveClients(
     const std::string styled_protocol = style_service_.Format(
         AMStr::PadRightUtf8(entry.protocol, protocol_width),
         AMInterface::style::StyleIndex::Protocol);
-    const auto nickname_style = entry.healthy
-                                    ? AMInterface::style::StyleIndex::Nickname
-                                    : AMInterface::style::StyleIndex::DisconnectedNickname;
+    const auto nickname_style =
+        entry.healthy ? AMInterface::style::StyleIndex::Nickname
+                      : AMInterface::style::StyleIndex::DisconnectedNickname;
     const std::string styled_nickname = style_service_.Format(
-        AMStr::PadRightUtf8(entry.nickname, nickname_width),
-        nickname_style);
+        AMStr::PadRightUtf8(entry.nickname, nickname_width), nickname_style);
     const std::string padded_endpoint =
         AMStr::PadRightUtf8(entry.endpoint, endpoint_width);
     if (entry.healthy) {
@@ -1865,8 +1894,8 @@ ECM ClientInterfaceService::ListClients(
       const std::string resolved =
           FindClientNicknameCaseInsensitive_(established_names, nickname);
       if (resolved.empty()) {
-        const ECM rcm = Err(EC::ClientNotFound, kOp, nickname,
-                            "Client not found");
+        const ECM rcm =
+            Err(EC::ClientNotFound, kOp, nickname, "Client not found");
         prompt_io_manager_.ErrorFormat(rcm);
         status = MergeStatus_(status, rcm);
         continue;
@@ -1878,7 +1907,7 @@ ECM ClientInterfaceService::ListClients(
 
   if (resolved_names.empty()) {
     return (status) ? Err(EC::ClientNotFound, kOp, "<targets>",
-                        "No valid clients to list")
+                          "No valid clients to list")
                     : status;
   }
 
@@ -1898,8 +1927,8 @@ ECM ClientInterfaceService::ListClients(
           client = result.data;
         }
       }
-      styled_nicknames.emplace_back(
-          display_name, ResolveClientNicknameStyleByState_(client));
+      styled_nicknames.emplace_back(display_name,
+                                    ResolveClientNicknameStyleByState_(client));
     }
     PrintStyledNicknamesCompact_(prompt_io_manager_, style_service_,
                                  styled_nicknames);
@@ -1992,10 +2021,9 @@ ECM ClientInterfaceService::CheckClients(
     const auto checked =
         client_service_.CheckClient(display_name, false, true, control);
     checks[display_name] = checked;
-    const ECM rcm = checked.has_value()
-                        ? checked->rcm
-                        : Err(EC::ClientNotFound, kOp, display_name,
-                              "Client not found");
+    const ECM rcm = checked.has_value() ? checked->rcm
+                                        : Err(EC::ClientNotFound, kOp,
+                                              display_name, "Client not found");
     status = MergeStatus_(status, rcm);
   }
 
@@ -2005,8 +2033,7 @@ ECM ClientInterfaceService::CheckClients(
       const ECM rcm =
           (checks.count(entry.first) != 0 && checks.at(entry.first).has_value())
               ? checks.at(entry.first)->rcm
-              : Err(EC::ClientNotFound, kOp, entry.first,
-                    "Client not found");
+              : Err(EC::ClientNotFound, kOp, entry.first, "Client not found");
       render::PrintClientStatusLine(prompt_io_manager_, entry.first,
                                     entry.second, rcm, format, style_service_);
     }
@@ -2092,7 +2119,8 @@ ECM ClientInterfaceService::RenameHost(const std::string &old_nickname,
     return rcm;
   }
   if (old_nickname == new_nickname) {
-    rcm = Err(EC::InvalidArg, __func__, "", "new nickname same as old nickname");
+    rcm =
+        Err(EC::InvalidArg, __func__, "", "new nickname same as old nickname");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -2103,7 +2131,8 @@ ECM ClientInterfaceService::RenameHost(const std::string &old_nickname,
     return rcm;
   }
   if (host_config_manager_.HostExists(new_nickname)) {
-    rcm = Err(EC::KeyAlreadyExists, __func__, "", "new nickname already exists");
+    rcm =
+        Err(EC::KeyAlreadyExists, __func__, "", "new nickname already exists");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -2193,6 +2222,7 @@ ECM ClientInterfaceService::RemoveHosts(
                  listing),
       &canceled);
   if (canceled || !confirmed) {
+    prompt_io_manager_.PrintOperationAbort();
     return OK;
   }
 
@@ -2258,7 +2288,8 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   const auto parsed_field =
       AMDomain::host::HostService::ParseEditableHostSetField(field);
   if (!parsed_field.has_value()) {
-    const ECM err = Err(EC::InvalidArg, __func__, "", "unsupported property name");
+    const ECM err =
+        Err(EC::InvalidArg, __func__, "", "unsupported property name");
     prompt_io_manager_.ErrorFormat(err);
     return err;
   }
@@ -2301,13 +2332,11 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
     case AMDomain::host::ConRequest::Attr::username:
       updated.request.username = resolved_value;
       break;
-    case AMDomain::host::ConRequest::Attr::port:
-      {
-        int64_t port = 0;
-        (void)AMStr::GetNumber(resolved_value, &port);
-        updated.request.port = port;
-      }
-      break;
+    case AMDomain::host::ConRequest::Attr::port: {
+      int64_t port = 0;
+      (void)AMStr::GetNumber(resolved_value, &port);
+      updated.request.port = port;
+    } break;
     case AMDomain::host::ConRequest::Attr::protocol:
       updated.request.protocol = AMDomain::host::HostService::StrToProtocol(
           AMStr::Strip(resolved_value));
@@ -2318,22 +2347,19 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
     case AMDomain::host::ConRequest::Attr::keyfile:
       updated.request.keyfile = resolved_value;
       break;
-    case AMDomain::host::ConRequest::Attr::buffer_size:
-      {
-        int64_t buffer_size = 0;
-        (void)AMStr::GetNumber(resolved_value, &buffer_size);
-        updated.request.buffer_size = buffer_size;
-      }
-      break;
-    case AMDomain::host::ConRequest::Attr::compression:
-      {
-        bool compression = false;
-        (void)AMStr::GetBool(resolved_value, &compression);
-        updated.request.compression = compression;
-      }
-      break;
+    case AMDomain::host::ConRequest::Attr::buffer_size: {
+      int64_t buffer_size = 0;
+      (void)AMStr::GetNumber(resolved_value, &buffer_size);
+      updated.request.buffer_size = buffer_size;
+    } break;
+    case AMDomain::host::ConRequest::Attr::compression: {
+      bool compression = false;
+      (void)AMStr::GetBool(resolved_value, &compression);
+      updated.request.compression = compression;
+    } break;
     default:
-      set_rcm = Err(EC::InvalidArg, __func__, field, "unsupported property name");
+      set_rcm =
+          Err(EC::InvalidArg, __func__, field, "unsupported property name");
       break;
     }
   } else {
@@ -2348,7 +2374,8 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
       updated.metadata.cmd_template = resolved_value;
       break;
     default:
-      set_rcm = Err(EC::InvalidArg, __func__, field, "unsupported property name");
+      set_rcm =
+          Err(EC::InvalidArg, __func__, field, "unsupported property name");
       break;
     }
   }
@@ -2425,7 +2452,7 @@ ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
       }
       rows.push_back(hostui::BuildHostListRow_(nickname, entry));
     }
-    hostui::PrintHostListTable_(prompt_io_manager_, rows);
+    hostui::PrintHostListTable_(prompt_io_manager_, style_service_, rows);
     return OK;
   }
 

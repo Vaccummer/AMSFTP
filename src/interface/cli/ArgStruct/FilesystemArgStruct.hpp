@@ -57,7 +57,8 @@ inline TransferCliBuildResult BuildTransferArgsFromCli(
   }
 
   if (src_tokens.empty()) {
-    out.rcm = Err(EC::InvalidArg, __func__, "", "cp requires at least one source");
+    out.rcm =
+        Err(EC::InvalidArg, __func__, "", "cp requires at least one source");
     return out;
   }
 
@@ -139,7 +140,8 @@ struct StatArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.raw_paths);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_paths);
     return managers.interfaces.filesystem_interface_service->Stat(arg);
   }
   void reset() override { request = {}; }
@@ -151,7 +153,8 @@ struct LsArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.raw_path);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_path);
     return managers.interfaces.filesystem_interface_service->Ls(arg);
   }
   void reset() override { request = {}; }
@@ -163,7 +166,8 @@ struct SizeArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.raw_paths);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_paths);
     return managers.interfaces.filesystem_interface_service->GetSize(arg);
   }
   void reset() override { request = {}; }
@@ -189,7 +193,8 @@ struct MkdirArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.raw_paths);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_paths);
     return managers.interfaces.filesystem_interface_service->Mkdirs(arg);
   }
   void reset() override { request = {}; }
@@ -208,7 +213,8 @@ struct RmArgs : BaseArgStruct {
       AMInterface::filesystem::FilesystemPermanentRemoveArg arg = {};
       arg.targets = resolved;
       arg.quiet = quiet;
-      return managers.interfaces.filesystem_interface_service->PermanentRemove(arg);
+      return managers.interfaces.filesystem_interface_service->PermanentRemove(
+          arg);
     }
     AMInterface::filesystem::FilesystemSafermArg arg = {};
     arg.targets = resolved;
@@ -228,7 +234,8 @@ struct TreeArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.raw_path);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_path);
     arg.ignore_special_file = !include_special;
     return managers.interfaces.filesystem_interface_service->Tree(arg);
   }
@@ -245,7 +252,8 @@ struct RealpathArgs : BaseArgStruct {
     (void)ctx;
     AMInterface::filesystem::FilesystemRealpathArg arg = {};
     arg.raw_path = path;
-    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.raw_path);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_path);
     return managers.interfaces.filesystem_interface_service->Realpath(arg);
   }
   void reset() override { path.clear(); }
@@ -329,7 +337,8 @@ struct MoveArgs : BaseArgStruct {
 
     src_token = AMStr::Strip(src_token);
     if (src_token.empty()) {
-      return Err(EC::InvalidArg, __func__, "src", "move requires one source path");
+      return Err(EC::InvalidArg, __func__, "src",
+                 "move requires one source path");
     }
 
     AMInterface::filesystem::FilesystemMoveArg arg = {};
@@ -359,7 +368,8 @@ struct CloneArgs : BaseArgStruct {
     const std::string suffix = AMStr::Strip(async_suffix);
     if (!suffix.empty()) {
       if (suffix != "&") {
-        return Err(EC::InvalidArg, __func__, "", "clone async suffix must be '&'");
+        return Err(EC::InvalidArg, __func__, "",
+                   "clone async suffix must be '&'");
       }
       raw_srcs.push_back(suffix);
     }
@@ -561,7 +571,8 @@ struct CdArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.raw_path);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_path);
     ECM rcm = managers.interfaces.filesystem_interface_service->Cd(arg);
     argstruct_common::SetEnterInteractive(ctx, (rcm));
     return rcm;
@@ -612,7 +623,8 @@ struct TerminalArgs : BaseArgStruct {
     (void)ctx;
     auto arg = request;
     arg.target = AMStr::Strip(arg.target);
-    return managers.interfaces.filesystem_interface_service->LaunchTerminal(arg);
+    return managers.interfaces.filesystem_interface_service->LaunchTerminal(
+        arg);
   }
   void reset() override { request = {}; }
 };
@@ -623,8 +635,21 @@ struct TermAddArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    arg.nickname = AMStr::Strip(arg.nickname);
+    for (auto &nickname : arg.nicknames) {
+      nickname = AMStr::Strip(nickname);
+    }
     return managers.interfaces.filesystem_interface_service->AddTerminal(arg);
+  }
+  void reset() override { request = {}; }
+};
+
+struct TermListArgs : BaseArgStruct {
+  AMInterface::filesystem::FilesystemTermListArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    return managers.interfaces.filesystem_interface_service->ListTerminals(
+        request);
   }
   void reset() override { request = {}; }
 };
@@ -635,8 +660,11 @@ struct TermRemoveArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    arg.nickname = AMStr::Strip(arg.nickname);
-    return managers.interfaces.filesystem_interface_service->RemoveTerminal(arg);
+    for (auto &nickname : arg.nicknames) {
+      nickname = AMStr::Strip(nickname);
+    }
+    return managers.interfaces.filesystem_interface_service->RemoveTerminal(
+        arg);
   }
   void reset() override { request = {}; }
 };
@@ -649,6 +677,17 @@ struct ChannelAddArgs : BaseArgStruct {
     auto arg = request;
     arg.target = AMStr::Strip(arg.target);
     return managers.interfaces.filesystem_interface_service->AddChannel(arg);
+  }
+  void reset() override { request = {}; }
+};
+
+struct ChannelListArgs : BaseArgStruct {
+  AMInterface::filesystem::FilesystemChannelListArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    return managers.interfaces.filesystem_interface_service->ListChannels(arg);
   }
   void reset() override { request = {}; }
 };

@@ -56,6 +56,35 @@ struct RunResult {
   int exit_code = -1;
 };
 
+struct TerminalOpenResult {
+  bool opened = false;
+};
+
+struct TerminalReadResult {
+  std::string output = "";
+  bool eof = false;
+};
+
+struct TerminalWriteResult {
+  size_t bytes_written = 0;
+};
+
+struct TerminalResizeResult {
+  bool resized = false;
+};
+
+struct TerminalCloseResult {
+  bool closed = false;
+  int exit_code = -1;
+};
+
+struct TerminalStatusResult {
+  bool is_supported = false;
+  bool is_open = false;
+  bool can_resize = false;
+  ClientStatus status = ClientStatus::NotInitialized;
+};
+
 struct RTTResult {
   double rtt_ms = -1.0;
 };
@@ -117,6 +146,35 @@ struct ConductCmdArgs {
   std::string cmd = "";
   OutputProcessor processor = {};
 };
+
+struct TerminalOpenArgs {
+  int cols = 80;
+  int rows = 24;
+  int width = 0;
+  int height = 0;
+  std::string term = "xterm-256color";
+};
+
+struct TerminalReadArgs {
+  size_t max_bytes = 4096;
+};
+
+struct TerminalWriteArgs {
+  std::string input = "";
+};
+
+struct TerminalResizeArgs {
+  int cols = 80;
+  int rows = 24;
+  int width = 0;
+  int height = 0;
+};
+
+struct TerminalCloseArgs {
+  bool force = false;
+};
+
+struct TerminalStatusArgs {};
 
 struct RealpathArgs {
   std::string path = "";

@@ -1,9 +1,90 @@
 #include "domain/host/HostDomainService.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include <cctype>
 
 namespace AMDomain::host {
 namespace HostService {
+namespace {
+std::string NormalizeFieldName_(const std::string &field_name) {
+  return AMStr::lowercase(AMStr::Strip(field_name));
+}
+
+template <typename Attr> std::string AttrName_(Attr attr) {
+  return NormalizeFieldName_(std::string(magic_enum::enum_name(attr)));
+}
+} // namespace
+
+const std::vector<HostSetFieldRef> &EditableHostSetFields() {
+  static const std::vector<HostSetFieldRef> kFields = [] {
+    std::vector<HostSetFieldRef> out = {};
+
+    auto add_request = [&out](ConRequest::Attr attr) {
+      HostSetFieldRef item = {};
+      item.name = AttrName_(attr);
+      item.scope = HostSetFieldRef::Scope::Request;
+      item.request_attr = attr;
+      out.push_back(std::move(item));
+    };
+
+    auto add_metadata = [&out](ClientMetaData::Attr attr) {
+      HostSetFieldRef item = {};
+      item.name = AttrName_(attr);
+      item.scope = HostSetFieldRef::Scope::Metadata;
+      item.metadata_attr = attr;
+      out.push_back(std::move(item));
+    };
+
+    add_request(ConRequest::Attr::hostname);
+    add_request(ConRequest::Attr::username);
+    add_request(ConRequest::Attr::port);
+    add_request(ConRequest::Attr::protocol);
+    add_request(ConRequest::Attr::password);
+    add_request(ConRequest::Attr::keyfile);
+    add_request(ConRequest::Attr::buffer_size);
+    add_request(ConRequest::Attr::compression);
+
+    add_metadata(ClientMetaData::Attr::trash_dir);
+    add_metadata(ClientMetaData::Attr::login_dir);
+    add_metadata(ClientMetaData::Attr::cmd_template);
+    return out;
+  }();
+  return kFields;
+}
+
+const std::vector<std::string> &EditableHostSetFieldNames() {
+  static const std::vector<std::string> kNames = [] {
+    std::vector<std::string> names = {};
+    const auto &fields = EditableHostSetFields();
+    names.reserve(fields.size());
+    for (const auto &field : fields) {
+      names.push_back(field.name);
+    }
+    return names;
+  }();
+  return kNames;
+}
+
+std::optional<HostSetFieldRef>
+ParseEditableHostSetField(const std::string &field_name) {
+  const std::string normalized = NormalizeFieldName_(field_name);
+  if (normalized.empty()) {
+    return std::nullopt;
+  }
+  const auto &fields = EditableHostSetFields();
+  for (const auto &field : fields) {
+    if (field.name == normalized) {
+      return field;
+    }
+  }
+  return std::nullopt;
+}
+
+ECM ValidateEditableHostSetFieldValue(const HostSetFieldRef &field,
+                                      const std::string &value) {
+  if (field.scope == HostSetFieldRef::Scope::Request) {
+    return ValidateFieldValue(field.request_attr, value);
+  }
+  return ValidateFieldValue(field.metadata_attr, value);
+}
 
 const HostConfig &LocalConfigFallback() {
   static const HostConfig kFallback = []() {
@@ -20,7 +101,7 @@ const HostConfig &LocalConfigFallback() {
 
 void vNormalizeNickname(std::string &nickname) {
   AMStr::VStrip(nickname);
-  if (nickname.empty() || IsLocalNickname(nickname)) {
+  if (IsLocalNickname(nickname)) {
     nickname = "local";
   }
 }
@@ -147,9 +228,8 @@ ECM ValidateConfig(const ClientMetaData &metadata) {
     return validate_rcm;
   }
 
-  validate_rcm =
-      ValidateFieldValue(ClientMetaData::Attr::cmd_template,
-                         metadata.cmd_template);
+  validate_rcm = ValidateFieldValue(ClientMetaData::Attr::cmd_template,
+                                    metadata.cmd_template);
   if (!(validate_rcm)) {
     return validate_rcm;
   }
@@ -185,21 +265,24 @@ GetConfigByNickname(const HostConfigMap &host_configs,
                     const HostConfig *local_config) {
   const std::string key = AMStr::Strip(nickname);
   if (key.empty()) {
-    return {
-        Err(EC::HostConfigNotFound, __func__, "<context>", "host config not found: empty nickname"),
-        {}};
+    return {Err(EC::HostConfigNotFound, __func__, "",
+                "host config not found: empty nickname"),
+            {}};
   }
 
   if (IsLocalNickname(key)) {
     if (!local_config || local_config->request.nickname.empty()) {
-      return {Err(EC::HostConfigNotFound, __func__, "<context>", "local host config not found"), {}};
+      return {Err(EC::HostConfigNotFound, __func__, "",
+                  "local host config not found"),
+              {}};
     }
     return {OK, *local_config};
   }
 
   auto it = host_configs.find(key);
   if (it == host_configs.end()) {
-    return {Err(EC::HostConfigNotFound, __func__, "<context>", AMStr::fmt("host config not found: {}", key)),
+    return {Err(EC::HostConfigNotFound, __func__, "",
+                AMStr::fmt("host config not found: {}", key)),
             {}};
   }
   return {OK, it->second};
@@ -217,4 +300,3 @@ ECM ValidateConfig(const KnownHostQuery &request) {
 }
 } // namespace KnownHostRules
 } // namespace AMDomain::host
-

@@ -90,7 +90,7 @@ struct ClientMetaData {
   bool GetFieldValue(Attr attr, T *out_value, ECM *rcm = nullptr) const {
     if (!out_value) {
       if (rcm) {
-        *rcm = {EC::InvalidArg, __func__, "<context>", "null output pointer"};
+        *rcm = {EC::InvalidArg, __func__, "", "null output pointer"};
       }
       return false;
     }
@@ -101,7 +101,7 @@ struct ClientMetaData {
 
     auto fail = [rcm](const std::string &msg) -> bool {
       if (rcm) {
-        *rcm = {EC::InvalidArg, __func__, "<context>", msg};
+        *rcm = {EC::InvalidArg, __func__, "", msg};
       }
       return false;
     };
@@ -202,6 +202,9 @@ struct ConRequest {
     out.reserve(dict.size());
 
     for (const auto &entry : dict) {
+      if (entry.first == Attr::buffer_size) {
+        continue;
+      }
       const std::string key = std::string(magic_enum::enum_name(entry.first));
       const std::string value = std::visit(
           [&](const auto &item) -> std::string {
@@ -235,14 +238,14 @@ struct ConRequest {
   bool GetFieldValue(Attr attr, T *out_value, ECM *rcm = nullptr) const {
     if (!out_value) {
       if (rcm)
-        *rcm = {EC::InvalidArg, __func__, "<context>", "null output pointer"};
+        *rcm = {EC::InvalidArg, __func__, "", "null output pointer"};
       return false;
     }
 
     auto idx = magic_enum::enum_index(attr);
     if (!idx) {
       if (rcm)
-        *rcm = {EC::InvalidArg, __func__, "<context>", "invalid attr"};
+        *rcm = {EC::InvalidArg, __func__, "", "invalid attr"};
       return false;
     }
 
@@ -268,7 +271,7 @@ struct ConRequest {
         mp);
 
     if (!ok && rcm) {
-      *rcm = {EC::InvalidArg, __func__, "<context>", "type mismatch"};
+      *rcm = {EC::InvalidArg, __func__, "", "type mismatch"};
     }
 
     return ok;
@@ -414,7 +417,7 @@ public:
   bool GetFieldValue(Attr attr, T *out_value, ECM *rcm = nullptr) const {
     if (!out_value) {
       if (rcm) {
-        *rcm = {EC::InvalidArg, __func__, "<context>", "null output pointer"};
+        *rcm = {EC::InvalidArg, __func__, "", "null output pointer"};
       }
       return false;
     }
@@ -425,7 +428,7 @@ public:
 
     auto fail = [rcm](const std::string &msg) -> bool {
       if (rcm) {
-        *rcm = {EC::InvalidArg, __func__, "<context>", msg};
+        *rcm = {EC::InvalidArg, __func__, "", msg};
       }
       return false;
     };
@@ -483,4 +486,3 @@ struct KnownHostEntryArg {
   KnownHostMap entries = {};
 };
 } // namespace AMDomain::host
-

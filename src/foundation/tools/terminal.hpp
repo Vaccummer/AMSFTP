@@ -1,7 +1,7 @@
 #pragma once
 
 #include <algorithm>
-
+#define _WINSOCKAPI_
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -45,4 +45,3 @@ inline TerminalViewportInfo GetTerminalViewportInfo() {
 }
 
 } // namespace AMTerminalTools
-

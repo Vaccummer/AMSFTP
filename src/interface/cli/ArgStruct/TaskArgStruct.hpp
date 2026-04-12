@@ -12,7 +12,7 @@ namespace task_arg_detail {
 inline ECM UnsupportedCommand(AMInterface::prompt::AMPromptIOManager &prompt,
                               const std::string &message) {
   (void)prompt;
-  const ECM rcm = Err(EC::OperationUnsupported, __func__, "<context>", message);
+  const ECM rcm = Err(EC::OperationUnsupported, __func__, "", message);
   return rcm;
 }
 
@@ -140,7 +140,7 @@ struct TaskControlArgs : BaseArgStruct {
     case TaskControlArgs::Action::Resume:
       return managers.interfaces.transfer_service->TaskResume(arg);
     default:
-      return Err(EC::InvalidArg, __func__, "<context>", "Unknown task control action");
+      return Err(EC::InvalidArg, __func__, "", "Unknown task control action");
     }
   }
   void reset() override { ids.clear(); }

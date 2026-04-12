@@ -753,14 +753,15 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     commands.term.add = term_add_node ? term_add_node->app : nullptr;
     if (commands.term.add) {
       commands.term.add
-          ->add_option("nickname", args.term.add.request.nickname,
-                       "Target nickname")
-          ->expected(0, 1);
+          ->add_option("nickname", args.term.add.request.nicknames,
+                       "Target nicknames")
+          ->required()
+          ->expected(1, -1);
     }
     if (term_add_node) {
       term_add_node->AddFlag("-f", "--force", args.term.add.request.force,
                              "Recreate terminal if it already exists");
-      term_add_node->AddPositionalRule(0, Sem::TerminalName, false);
+      term_add_node->AddPositionalRule(0, Sem::TerminalName, true);
     }
 
     CommandNode *term_ls_node = term_module_node->AddFunction(
@@ -774,12 +775,13 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     commands.term.rm = term_rm_node ? term_rm_node->app : nullptr;
     if (commands.term.rm) {
       commands.term.rm
-          ->add_option("nickname", args.term.rm.request.nickname,
-                       "Target nickname")
-          ->expected(0, 1);
+          ->add_option("nickname", args.term.rm.request.nicknames,
+                       "Target nicknames")
+          ->required()
+          ->expected(1, -1);
     }
     if (term_rm_node) {
-      term_rm_node->AddPositionalRule(0, Sem::TerminalName, false);
+      term_rm_node->AddPositionalRule(0, Sem::TerminalName, true);
     }
   }
 

@@ -85,6 +85,8 @@ struct InputHighlightStyle {
   std::string common = "";
   std::string module = "";
   std::string command = "";
+  std::string unexpected = "";
+  // deprecated: use unexpected
   std::string illegal_command = "";
   std::string option = "";
   std::string string = "";

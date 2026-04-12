@@ -293,6 +293,17 @@ public:
   ResolvePositionalSemantic(size_t index) const;
 
   /**
+   * @brief Return true if positional index is legal by explicit or tail rule.
+   */
+  [[nodiscard]] bool HasPositionalRule(const std::string &path,
+                                       size_t index) const;
+
+  /**
+   * @brief Return true if positional index is legal on current node.
+   */
+  [[nodiscard]] bool HasPositionalRule(size_t index) const;
+
+  /**
    * @brief Resolve option-value rule by path.
    */
   [[nodiscard]] std::optional<OptionValueRule>

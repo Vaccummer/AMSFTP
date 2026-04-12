@@ -3,6 +3,7 @@
 #include "application/client/ClientAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
+#include "application/terminal/TermAppService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "interface/prompt/Prompt.hpp"
@@ -15,6 +16,7 @@
 
 namespace AMInterface::client {
 using ClientAppService = AMApplication::client::ClientAppService;
+using TermAppService = AMApplication::terminal::TermAppService;
 using FilesystemAppService = AMApplication::filesystem::FilesystemAppService;
 using AMHostConfigManager = AMApplication::host::HostAppService;
 using AMKnownHostsManager = AMApplication::host::KnownHostsAppService;
@@ -69,6 +71,7 @@ class ClientConnectSpinner;
 class ClientInterfaceService final : public NonCopyableNonMovable {
 public:
   ClientInterfaceService(ClientAppService &client_service,
+                         TermAppService &terminal_service,
                          FilesystemAppService &filesystem_service,
                          AMHostConfigManager &host_config_manager,
                          AMKnownHostsManager &known_hosts_manager,
@@ -124,6 +127,7 @@ private:
                    const std::optional<ClientControlComponent> &component);
 
   ClientAppService &client_service_;
+  TermAppService &terminal_service_;
   FilesystemAppService &filesystem_service_;
   AMHostConfigManager &host_config_manager_;
   AMKnownHostsManager &known_hosts_manager_;

@@ -4,6 +4,7 @@
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/cli/CLIBind.hpp"
+#include "interface/cli/ParseErrorFormatter.hpp"
 #include "interface/completion/CompletionRuntimeAdapter.hpp"
 #include "interface/completion/Engine.hpp"
 #include "interface/parser/CommandPreprocess.hpp"
@@ -478,7 +479,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
           0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
       continue;
     } catch (const CLI::ParseError &e) {
-      const std::string parse_msg = e.what();
+      const std::string parse_msg = FormatCliParseErrorMessage(e);
       managers.interfaces.prompt_io_manager->Print(parse_msg);
       ECM parse_rcm = {EC::InvalidArg, __func__, "", parse_msg};
       store_exit_code(static_cast<int>(parse_rcm.code));

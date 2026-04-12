@@ -1325,6 +1325,7 @@ void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"common"}, &out->common);
   (void)AMJson::QueryKey(json, {"module"}, &out->module);
   (void)AMJson::QueryKey(json, {"command"}, &out->command);
+  (void)AMJson::QueryKey(json, {"unexpected"}, &out->unexpected);
   (void)AMJson::QueryKey(json, {"illegal_command"}, &out->illegal_command);
   (void)AMJson::QueryKey(json, {"option"}, &out->option);
   (void)AMJson::QueryKey(json, {"string"}, &out->string);
@@ -1366,6 +1367,12 @@ void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
                          &out->valid_new_channelname);
   (void)AMJson::QueryKey(json, {"invalid_new_channelname"},
                          &out->invalid_new_channelname);
+  if (out->unexpected.empty()) {
+    out->unexpected = out->illegal_command;
+  }
+  if (out->illegal_command.empty()) {
+    out->illegal_command = out->unexpected;
+  }
 }
 
 Json EncodeInputHighlight_(const InputHighlightStyle &in) {
@@ -1375,6 +1382,7 @@ Json EncodeInputHighlight_(const InputHighlightStyle &in) {
   out["common"] = in.common;
   out["module"] = in.module;
   out["command"] = in.command;
+  out["unexpected"] = in.unexpected;
   out["illegal_command"] = in.illegal_command;
   out["option"] = in.option;
   out["string"] = in.string;
@@ -1434,6 +1442,7 @@ void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"sign", "bang"}, &out->bangsign);
 
   (void)AMJson::QueryKey(json, {"cli", "command"}, &out->command);
+  (void)AMJson::QueryKey(json, {"cli", "unexpected"}, &out->unexpected);
   (void)AMJson::QueryKey(json, {"cli", "illegal_command"},
                          &out->illegal_command);
   (void)AMJson::QueryKey(json, {"cli", "module"}, &out->module);
@@ -1482,6 +1491,12 @@ void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
   if (out->shell_cmd.empty()) {
     out->shell_cmd = out->command;
   }
+  if (out->unexpected.empty()) {
+    out->unexpected = out->illegal_command;
+  }
+  if (out->illegal_command.empty()) {
+    out->illegal_command = out->unexpected;
+  }
   if (out->common.empty()) {
     out->common = out->command;
   }
@@ -1504,7 +1519,7 @@ Json EncodeCommon_(const InputHighlightStyle &in) {
   out["sign"]["bang"] = in.bangsign;
 
   out["cli"]["command"] = in.command;
-  out["cli"]["illegal_command"] = in.illegal_command;
+  out["cli"]["unexpected"] = in.unexpected;
   out["cli"]["module"] = in.module;
   out["cli"]["option"] = in.option;
 
