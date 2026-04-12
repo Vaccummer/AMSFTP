@@ -205,9 +205,7 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
 
 } // namespace
 
-void PromptIOManager::PrintRaw(const std::string &text) {
-  EmitOutput_(text);
-}
+void PromptIOManager::PrintRaw(const std::string &text) { EmitOutput_(text); }
 
 void PromptIOManager::Print(const std::string &text) {
   EmitOutput_(EnsureTrailingNewline_(text));
@@ -218,10 +216,10 @@ void PromptIOManager::PrintOperationAbort() {
       isocline_profile_manager_.style_config_manager_.GetInitArg()
           .style.common.abort;
   if (abort_style.empty()) {
-    Print("⚠️  " + kvars::operation_abort_text);
+    Print("⛔  " + kvars::operation_abort_text);
     return;
   }
-  Print("⚠️  " + abort_style + AMStr::BBCEscape(kvars::operation_abort_text) +
+  Print("⛔  " + abort_style + AMStr::BBCEscape(kvars::operation_abort_text) +
         "[/]");
 }
 
@@ -247,7 +245,8 @@ void PromptIOManager::SetCacheOutputOnly(bool enabled) {
     return;
   }
 
-  int depth = io_state_.cache_output_lock_depth_.load(std::memory_order_relaxed);
+  int depth =
+      io_state_.cache_output_lock_depth_.load(std::memory_order_relaxed);
   if (depth <= 0) {
     io_state_.cache_output_lock_depth_.store(0, std::memory_order_relaxed);
     return;
@@ -657,6 +656,11 @@ void PromptIOManager::ErrorFormat(const std::string &error_name,
 }
 
 void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
+  if (rcm.code == EC::ConfigCanceled) {
+    PrintOperationAbort();
+    return;
+  }
+
   std::string reason = AMStr::Strip(rcm.error);
   if (reason.empty()) {
     reason = std::string(AMStr::ToString(rcm.code));
