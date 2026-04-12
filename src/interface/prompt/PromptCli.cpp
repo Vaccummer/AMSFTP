@@ -212,6 +212,7 @@ void PromptIOManager::Print(const std::string &text) {
 }
 
 void PromptIOManager::PrintOperationAbort() {
+  io_state_.cancel_abort_printed_.store(true, std::memory_order_relaxed);
   const std::string abort_style =
       isocline_profile_manager_.style_config_manager_.GetInitArg()
           .style.common.abort;
@@ -661,6 +662,7 @@ void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
       return;
     }
     PrintOperationAbort();
+    io_state_.cancel_abort_printed_.store(false, std::memory_order_relaxed);
     return;
   }
 
@@ -705,9 +707,6 @@ bool PromptIOManager::PromptYesNo(const std::string &prompt, bool *canceled) {
       answer.has_value() && AMStr::lowercase(AMStr::Strip(*answer)) == "y";
   if (!is_yes) {
     PrintOperationAbort();
-    if (!answer.has_value()) {
-      io_state_.cancel_abort_printed_.store(true);
-    }
   }
   return is_yes;
 }
