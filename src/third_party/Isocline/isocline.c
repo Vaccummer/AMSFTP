@@ -1076,7 +1076,13 @@ ic_public void ic_term_write_bbcode(const char *s) {
     return;
   if (env->bbcode == NULL)
     return;
+  if (env->term == NULL) {
+    bbcode_print(env->bbcode, s);
+    return;
+  }
+  const buffer_mode_t old_mode = term_set_buffer_mode(env->term, BUFFERED);
   bbcode_print(env->bbcode, s);
+  (void)term_set_buffer_mode(env->term, old_mode);
 }
 
 ic_public void ic_term_writeln(const char *s) {
@@ -1555,3 +1561,4 @@ ic_public void ic_init_custom_malloc(ic_malloc_fun_t *_malloc,
                                      ic_free_fun_t *_free) {
   ic_init_custom_alloc(_malloc, _realloc, _free);
 }
+
