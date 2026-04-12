@@ -657,6 +657,9 @@ void PromptIOManager::ErrorFormat(const std::string &error_name,
 
 void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
   if (rcm.code == EC::ConfigCanceled) {
+    if (io_state_.cancel_abort_printed_.exchange(false)) {
+      return;
+    }
     PrintOperationAbort();
     return;
   }
@@ -702,6 +705,9 @@ bool PromptIOManager::PromptYesNo(const std::string &prompt, bool *canceled) {
       answer.has_value() && AMStr::lowercase(AMStr::Strip(*answer)) == "y";
   if (!is_yes) {
     PrintOperationAbort();
+    if (!answer.has_value()) {
+      io_state_.cancel_abort_printed_.store(true);
+    }
   }
   return is_yes;
 }
