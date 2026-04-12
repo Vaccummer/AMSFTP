@@ -488,6 +488,7 @@ SemanticAnalyzer::Classify(
 
     bool positional_consumed = false;
     bool option_definition = false;
+    bool positional_rule_exists = false;
     const bool option_value_token = pending_value_rule.has_value();
     std::optional<AMCommandArgSemantic> semantic_hint = consume_option_value();
 
@@ -530,6 +531,8 @@ SemanticAnalyzer::Classify(
 
     if (!option_value_token && !semantic_hint.has_value() && !option_definition &&
         command_tree_ && !command_path.empty()) {
+      positional_rule_exists =
+          command_tree_->HasPositionalRule(command_path, arg_index);
       semantic_hint = command_tree_->ResolvePositionalSemantic(command_path, arg_index);
       positional_consumed = true;
     } else if (!option_definition && !option_value_token) {
@@ -549,6 +552,15 @@ SemanticAnalyzer::Classify(
     }
 
     const std::string unescaped_text = UnescapeBackticks_(raw_text);
+    if (token.type == AMTokenType::Common && positional_consumed &&
+        !option_value_token && !option_definition && command_tree_ &&
+        !command_path.empty() && !semantic_hint.has_value() &&
+        !positional_rule_exists) {
+      token.type = AMTokenType::IllegalCommand;
+      ++arg_index;
+      continue;
+    }
+
     if (token.type == AMTokenType::Common && semantic_hint.has_value()) {
       if (*semantic_hint == AMCommandArgSemantic::HostNicknameNew) {
         const bool is_sftp_or_ftp = (command_path == "sftp" || command_path == "ftp");

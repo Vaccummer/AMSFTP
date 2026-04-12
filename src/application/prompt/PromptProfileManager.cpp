@@ -31,11 +31,11 @@ PromptProfileArg PromptProfileManager::GetInitArg() const {
 ECM PromptProfileManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, __func__, "<context>",
+    return Err(EC::InvalidArg, __func__, "",
                "config service is null");
   }
   if (!config_service->Write<PromptProfileArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, __func__, "<context>",
+    return Err(EC::ConfigDumpFailed, __func__, "",
                "failed to flush prompt profile config");
   }
   return OK;

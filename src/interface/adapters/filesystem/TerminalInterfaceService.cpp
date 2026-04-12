@@ -1549,6 +1549,7 @@ ECM FilesystemInterfaceSerivce::RemoveTerminal(
   const bool confirmed = prompt_io_manager_.PromptYesNo(
       "Are you sure to remove these clients? (y/n): ", &canceled);
   if (canceled || !confirmed) {
+    prompt_io_manager_.PrintOperationAbort();
     return OK;
   }
 

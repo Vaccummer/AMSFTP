@@ -582,10 +582,11 @@ ECM FilesystemInterfaceSerivce::GetSize(
     std::string latest_size = "0KB";
     bool has_progress = false;
     bool refresh_started = false;
-    prompt_io_manager_.RefreshBegin(1);
+    bool cursor_hidden = false;
+    prompt_io_manager_.SetCursorVisible(false);
+    cursor_hidden = true;
+    prompt_io_manager_.RefreshBegin();
     refresh_started = true;
-    prompt_io_manager_.RefreshRender(
-        {AMStr::fmt("{} {}", styled_label, latest_size)});
 
     auto size_result = filesystem_service_.GetSize(
         target, control,
@@ -608,7 +609,10 @@ ECM FilesystemInterfaceSerivce::GetSize(
     if (refresh_started) {
       prompt_io_manager_.RefreshEnd();
     }
-    if (!has_progress && (size_result.rcm)) {
+    if (cursor_hidden) {
+      prompt_io_manager_.SetCursorVisible(true);
+    }
+    if (size_result.rcm) {
       latest_size = AMStr::FormatSize(size_result.data);
     }
     prompt_io_manager_.Print(AMStr::fmt("{} {}", styled_label, latest_size));
@@ -1437,7 +1441,10 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
     return Err(EC::ConfigCanceled, __func__, "", "permanent remove canceled");
   }
 
-  prompt_io_manager_.RefreshBegin(1);
+  bool cursor_hidden = false;
+  prompt_io_manager_.SetCursorVisible(false);
+  cursor_hidden = true;
+  prompt_io_manager_.RefreshBegin();
   auto execute_result = filesystem_service_.ExecutePermanentRemove(
       prepare_result.data, control,
       [this](const PathTarget &path) {
@@ -1450,6 +1457,9 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
         }
       });
   prompt_io_manager_.RefreshEnd();
+  if (cursor_hidden) {
+    prompt_io_manager_.SetCursorVisible(true);
+  }
 
   return MergeStatus_(status, execute_result.rcm);
 }

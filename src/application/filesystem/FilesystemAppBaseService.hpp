@@ -32,7 +32,8 @@ public:
   [[nodiscard]] std::string CurrentNickname() const;
 
   [[nodiscard]] ECMData<ClientHandle>
-  GetClient(const std::string &nickname, const ClientControlComponent &control);
+  GetClient(const std::string &nickname, const ClientControlComponent &control,
+            bool detach = false);
   [[nodiscard]] ECMData<ClientHandle>
   GetTransferClient(const std::string &nickname);
 

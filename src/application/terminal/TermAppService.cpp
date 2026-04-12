@@ -637,7 +637,7 @@ ECM TermAppService::RemoveTerminal(const std::string &nickname,
   }
 
   const auto session_state = target->GetSessionState();
-  if (session_state != AMDomain::client::ClientStatus::OK) {
+  if (session_state.status != AMDomain::client::ClientStatus::OK) {
     // Disconnected sessions can fail or block during graceful channel close.
     // Terminal map entry is already removed, so best-effort cleanup stops here.
     return OK;
@@ -674,3 +674,4 @@ ECM TermAppService::RemoveTerminal(const std::string &nickname,
 }
 
 } // namespace AMApplication::terminal
+

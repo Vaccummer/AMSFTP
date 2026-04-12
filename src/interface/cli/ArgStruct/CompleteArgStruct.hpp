@@ -10,7 +10,7 @@ namespace complete_arg_detail {
 inline ECM UnsupportedCommand(AMInterface::prompt::AMPromptIOManager &prompt,
                               const std::string &message) {
   (void)prompt;
-  const ECM rcm = Err(EC::OperationUnsupported, __func__, "<context>", message);
+  const ECM rcm = Err(EC::OperationUnsupported, __func__, "", message);
   return rcm;
 }
 

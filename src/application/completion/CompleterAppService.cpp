@@ -1,7 +1,5 @@
 #include "application/completion/CompleterAppService.hpp"
 
-#include "foundation/tools/enum_related.hpp"
-
 #include <algorithm>
 #include <limits>
 #include <utility>
@@ -18,7 +16,8 @@ void NormalizeCompleterArg_(CompleterArg *arg) {
   arg->async_workers = std::max<int64_t>(1, arg->async_workers);
   if (arg->maxrows_perpage >
       static_cast<int64_t>(std::numeric_limits<long>::max())) {
-    arg->maxrows_perpage = static_cast<int64_t>(std::numeric_limits<long>::max());
+    arg->maxrows_perpage =
+        static_cast<int64_t>(std::numeric_limits<long>::max());
   }
 }
 } // namespace
@@ -45,10 +44,11 @@ void CompleterConfigManager::SetInitArg(CompleterArg arg) {
 ECM CompleterConfigManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (!config_service) {
-    return Err(EC::InvalidArg, __func__, "<context>", "config service is null");
+    return Err(EC::InvalidArg, __func__, "", "config service is null");
   }
   if (!config_service->Write<CompleterArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, __func__, "<context>", "failed to flush completer config");
+    return Err(EC::ConfigDumpFailed, __func__, "",
+               "failed to flush completer config");
   }
   return OK;
 }
@@ -58,4 +58,3 @@ CompleterArg CompleterConfigManager::ExportConfigSnapshot() const {
 }
 
 } // namespace AMApplication::completion
-

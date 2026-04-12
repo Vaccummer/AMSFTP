@@ -4,9 +4,11 @@
 #include "bootstrap/BootstrapServices.hpp"
 #include "interface/cli/CLIBind.hpp"
 #include "interface/cli/InteractiveLoop.hpp"
+#include "interface/cli/ParseErrorFormatter.hpp"
 #include "interface/parser/CommandTree.hpp"
 #include <atomic>
 #include <iostream>
+#include <string>
 
 namespace AMBootstrap {
 inline bool HasParsedCommand(const CLI::App &app) {
@@ -41,6 +43,11 @@ inline int RunCLI(BootstrapServices &runtime, int argc, char **argv) {
     std::cout << runtime.cli_app->version() << std::endl;
     return e.get_exit_code();
   } catch (const CLI::ParseError &e) {
+    const std::string parse_msg = AMInterface::cli::FormatCliParseErrorMessage(e);
+    if (e.get_name() == "ExtrasError") {
+      std::cout << parse_msg << std::endl;
+      return e.get_exit_code();
+    }
     return runtime.cli_app->exit(e);
   }
   if (!HasParsedCommand(*runtime.cli_app)) {

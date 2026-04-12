@@ -8,6 +8,9 @@
 #include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/token_analyser/TokenAnalyzerRuntime.hpp"
 #include "interface/style/StyleManager.hpp"
+#include <chrono>
+#include <mutex>
+#include <unordered_map>
 
 namespace AMInterface::parser {
 
@@ -65,6 +68,18 @@ public:
                             const std::string &default_value) const override;
 
 private:
+  struct TerminalSnapshot_ {
+    bool found = false;
+    AMDomain::client::ClientStatus status =
+        AMDomain::client::ClientStatus::NotInitialized;
+    std::unordered_map<std::string, bool> channel_ok = {};
+    std::chrono::steady_clock::time_point updated_at =
+        std::chrono::steady_clock::time_point::min();
+  };
+
+  [[nodiscard]] TerminalSnapshot_
+  ResolveTerminalSnapshot_(const std::string &terminal_nickname) const;
+
   AMApplication::client::ClientAppService &client_service_;
   AMApplication::host::HostAppService &host_service_;
   AMApplication::terminal::TermAppService &terminal_service_;
@@ -72,6 +87,9 @@ private:
   AMInterface::var::VarInterfaceService &var_interface_service_;
   AMInterface::style::AMStyleService &style_service_;
   AMApplication::prompt::PromptProfileManager &prompt_profile_manager_;
+  mutable std::mutex terminal_snapshot_mutex_ = {};
+  mutable std::unordered_map<std::string, TerminalSnapshot_>
+      terminal_snapshots_ = {};
 };
 
 } // namespace AMInterface::parser

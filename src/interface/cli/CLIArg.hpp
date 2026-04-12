@@ -64,11 +64,13 @@ struct CliFilesystemArgs {
 
 struct CliTermArgs {
   TermAddArgs add = {};
+  TermListArgs ls = {};
   TermRemoveArgs rm = {};
 };
 
 struct CliChannelArgs {
   ChannelAddArgs add = {};
+  ChannelListArgs ls = {};
   ChannelRemoveArgs rm = {};
   ChannelRenameArgs rn = {};
 };
@@ -190,12 +192,14 @@ struct FilesystemCommands {
 struct TermCommands {
   CLI::App *root = nullptr;
   CLI::App *add = nullptr;
+  CLI::App *ls = nullptr;
   CLI::App *rm = nullptr;
 };
 
 struct ChannelCommands {
   CLI::App *root = nullptr;
   CLI::App *add = nullptr;
+  CLI::App *ls = nullptr;
   CLI::App *rm = nullptr;
   CLI::App *rn = nullptr;
 };

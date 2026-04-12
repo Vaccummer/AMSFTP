@@ -256,18 +256,18 @@ struct ConfigDecryptArgs : BaseArgStruct {
     if (!config_arg_detail::NormalizeEncryptedPassword(password,
                                                        &encrypted_input)) {
       return report_error(Err(
-          EC::InvalidArg, __func__, "<context>",
+          EC::InvalidArg, __func__, "",
           "decrypt requires encrypted password input: enc:<HEX> or <HEX>"));
     }
 
     std::string plain = AMAuth::DecryptPassword(encrypted_input);
     if (plain.empty()) {
       return report_error(
-          Err(EC::InvalidArg, __func__, "<context>", "invalid encrypted password"));
+          Err(EC::InvalidArg, __func__, "", "invalid encrypted password"));
     }
     if (!config_arg_detail::CopyTextToClipboard(plain)) {
       AMAuth::SecureZero(plain);
-      return report_error(Err(EC::OperationUnsupported, __func__, "<context>",
+      return report_error(Err(EC::OperationUnsupported, __func__, "",
                               "failed to copy password to clipboard"));
     }
     AMAuth::SecureZero(plain);

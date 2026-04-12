@@ -18,6 +18,9 @@ ECM CLIServices::Init(amf task_control_token) {
   if (!application.client_service.IsReady()) {
     return Err(EC::InvalidHandle, __func__, "<context>", "client service is not initialized");
   }
+  if (!application.terminal_service.IsReady()) {
+    return Err(EC::InvalidHandle, __func__, "<context>", "terminal service is not initialized");
+  }
   if (!interfaces.client_interface_service.IsReady()) {
     return Err(EC::InvalidHandle, __func__, "<context>", "client interface service is not initialized");
   }
@@ -61,5 +64,3 @@ ECM CLIServices::Init(amf task_control_token) {
 }
 
 } // namespace AMInterface::cli
-
-

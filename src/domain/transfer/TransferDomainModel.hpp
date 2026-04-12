@@ -31,13 +31,13 @@ public:
   [[nodiscard]] ECM AddSrcClient(const std::string &nickname,
                                  ClientHandle client) {
     if (!client) {
-      return Err(ErrorCode::InvalidHandle, __func__, "<context>",
+      return Err(ErrorCode::InvalidHandle, __func__, "",
                  "Source client handle is null");
     }
     const std::string key = NormalizeNickname_(nickname);
     auto &slot = holders_[key];
     if (slot.dst && slot.dst == client) {
-      return Err(ErrorCode::InvalidArg, __func__, "<context>",
+      return Err(ErrorCode::InvalidArg, __func__, "",
                  AMStr::fmt("Source and destination clients must be different "
                             "for host {}",
                             key));
@@ -51,13 +51,13 @@ public:
   [[nodiscard]] ECM AddDstClient(const std::string &nickname,
                                  ClientHandle client) {
     if (!client) {
-      return Err(ErrorCode::InvalidHandle, __func__, "<context>",
+      return Err(ErrorCode::InvalidHandle, __func__, "",
                  "Destination client handle is null");
     }
     const std::string key = NormalizeNickname_(nickname);
     auto &slot = holders_[key];
     if (slot.src && slot.src == client) {
-      return Err(ErrorCode::InvalidArg, __func__, "<context>",
+      return Err(ErrorCode::InvalidArg, __func__, "",
                  AMStr::fmt("Source and destination clients must be different "
                             "for host {}",
                             key));
@@ -255,12 +255,12 @@ struct TransferCallback {
       return progress_cb(info);
     } catch (const std::exception &e) {
       if (cb_error) {
-        *cb_error = {EC::PyCBError, __func__, "<context>", e.what()};
+        *cb_error = {EC::PyCBError, __func__, "", e.what()};
       }
       return TransferControl::Terminate;
     } catch (...) {
       if (cb_error) {
-        *cb_error = {EC::PyCBError, __func__, "<context>", "Unknown progress callback error"};
+        *cb_error = {EC::PyCBError, __func__, "", "Unknown progress callback error"};
       }
       return TransferControl::Terminate;
     }

@@ -36,10 +36,10 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
 
   const auto current_stop_error = [&control]() -> ECM {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "<context>", "Operation interrupted");
+      return Err(EC::Terminate, __func__, "", "Operation interrupted");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, "<context>", "Operation timed out");
+      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
     }
     return OK;
   };
@@ -185,7 +185,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
     return {{},
             (resolved_result.rcm)
-                ? Err(EC::InvalidHandle, __func__, "<context>", "Resolved client is null")
+                ? Err(EC::InvalidHandle, __func__, "", "Resolved client is null")
                 : resolved_result.rcm};
   }
   const auto &resolved = resolved_result.data;
@@ -267,7 +267,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
       return false;
     }
     if (!match_rcm.data) {
-      final_rcm = Err(EC::Terminate, __func__, "<context>", "Find terminated by on_match callback");
+      final_rcm = Err(EC::Terminate, __func__, "", "Find terminated by on_match callback");
       match_requested_stop = true;
       return false;
     }
