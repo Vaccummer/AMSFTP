@@ -4389,3 +4389,46 @@ Summary: 4 total | 2 success | 2 failed
 
 terminated or timeout:
 ❌ Terminated 1.0MB/1.2MB Task is terminated by user
+1. CLI11 parse error print
+
+can you get the ileagal argument from CLI11 and custom error to
+❌ Recieve {illeagal_arg_num} invalid args: {args}
+
+ am@localhost  0ms  ✅
+(local) D:/CodeLib > exi
+The following argument was not expected: exi
+
+2. unexpected tokens should be styled to "cli.unexpected" (abort use of cli.illegal_command)
+
+but current like "self2" is still syled as "cli.command"
+
+ am@localhost  0ms  ✅
+(local) D:/CodeLib > term add mac self2
+The following argument was not expected: self2
+
+3. term add improvement
+
+this function should support multi targets
+
+4. term rm improvement
+
+term rm should allow multi targets, print format you can refer to client rm
+
+5. term ls print format
+
+"""
+
+[wsl]  
+
+✅ channel1
+
+❌ channel2
+
+""""
+termname styled to termname.ok/disconnected
+
+remember to escape [
+
+6. ssh cli command complete improvement
+
+completion should be inteligent just like var zone and varname complete, detect cursor_prefix and cursor_postfix whether has @ then decide which part to complete
