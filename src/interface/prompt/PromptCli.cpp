@@ -1,5 +1,6 @@
 #include "Isocline/isocline.h"
 #include "foundation/tools/string.hpp"
+#include "foundation/tools/terminal.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
@@ -212,7 +213,6 @@ void PromptIOManager::Print(const std::string &text) {
 }
 
 void PromptIOManager::PrintOperationAbort() {
-  io_state_.cancel_abort_printed_.store(true, std::memory_order_relaxed);
   const std::string abort_style =
       isocline_profile_manager_.style_config_manager_.GetInitArg()
           .style.common.abort;
@@ -482,139 +482,262 @@ void PromptIOManager::PrintSyncRefreshLocked_(const std::string &text) {
   if (TryCacheOutput_(text)) {
     return;
   }
-  if (text.find('\x1b') != std::string::npos) {
-    ic_term_write_bbcode(text.c_str());
-  } else {
-    ic_print(text.c_str());
-  }
+  ic_term_write_bbcode(text.c_str());
   ic_term_flush();
 }
 
 void PromptIOManager::PrintInsertAndRepaintLocked_(const std::string &msg) {
-  const int old_rows = painted_refresh_rows_;
-  if (old_rows <= 0) {
+  const int old_rows = refresh_state_.rows_painted;
+  if (old_rows <= 0 || !refresh_state_.active) {
     PrintSyncRefreshLocked_(msg);
     return;
   }
 
-  const int new_rows = static_cast<int>(refresh_lines_.size());
-  const int total_rows = std::max(old_rows, new_rows);
-  const bool diff_mode =
-      io_state_.refresh_diff_mode_.load(std::memory_order_relaxed);
+  const int cols = TerminalCols_();
+  const int new_rows =
+      ComputeRefreshRowsLocked_(refresh_state_.logical_lines, cols);
+  const std::string frame = BuildInsertAndRepaintFrameLocked_(
+      old_rows, msg, new_rows, refresh_state_.logical_lines);
+  if (!frame.empty()) {
+    PrintSyncRefreshLocked_(frame);
+  }
 
-  std::string frame;
-  AppendMoveUpRows_(&frame, old_rows);
-  frame += "\x1b[2K\r";
-  frame += msg;
-  for (int i = 0; i < total_rows; ++i) {
-    const std::string old_line =
-        (i < old_rows && static_cast<size_t>(i) < painted_refresh_lines_.size())
-            ? painted_refresh_lines_[static_cast<size_t>(i)]
-            : std::string{};
-    const std::string new_line =
-        (i < new_rows) ? refresh_lines_[static_cast<size_t>(i)] : std::string{};
+  refresh_state_.rows_painted = new_rows;
+  refresh_state_.last_cols = cols;
+  refresh_state_.last_emitted_frame_hash =
+      BuildRefreshHash_(refresh_state_.logical_lines, cols);
+  io_state_.refresh_occupied_lines_.store(new_rows, std::memory_order_relaxed);
+}
 
-    if (diff_mode) {
-      AppendRowDiffUpdate_(&frame, old_line, new_line);
+std::string PromptIOManager::StripStyleForMeasure_(const std::string &text) {
+  auto is_style_tag = [](const std::string &tag) {
+    if (tag.empty()) {
+      return false;
+    }
+    return tag.front() == '#' || tag.front() == '/' || tag.front() == '!';
+  };
+
+  std::string out = {};
+  out.reserve(text.size());
+  for (size_t i = 0; i < text.size(); ++i) {
+    const char ch = text[i];
+    if (ch == '\\' && i + 1 < text.size() &&
+        (text[i + 1] == '[' || text[i + 1] == ']')) {
+      out.push_back(text[i + 1]);
+      ++i;
       continue;
     }
-    frame += "\x1b[2K\r";
-    frame += new_line;
-    frame += "\x1b[1B\r";
+    if (ch == '[') {
+      const size_t close = text.find(']', i + 1);
+      if (close != std::string::npos) {
+        const std::string token = text.substr(i + 1, close - i - 1);
+        if (is_style_tag(token)) {
+          i = close;
+          continue;
+        }
+      }
+    }
+    out.push_back(ch);
   }
-  AppendMoveUpRows_(&frame, total_rows - new_rows);
-  PrintSyncRefreshLocked_(frame);
-  painted_refresh_rows_ = new_rows;
-  painted_refresh_lines_ = refresh_lines_;
+  return out;
+}
+
+std::string PromptIOManager::NormalizeMeasureLine_(const std::string &text) {
+  std::string out = AMStr::replace_all(text, "\t", "   ");
+  out = AMStr::replace_all(out, "\r", "");
+  return out;
+}
+
+int PromptIOManager::TerminalCols_() {
+  return std::max(1, AMTerminalTools::GetTerminalViewportInfo().cols);
+}
+
+size_t PromptIOManager::BuildRefreshHash_(const std::vector<std::string> &lines,
+                                          int cols) {
+  size_t seed = std::hash<int>{}(cols);
+  for (const auto &line : lines) {
+    const size_t v = std::hash<std::string>{}(line);
+    seed ^= v + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+  }
+  return seed;
+}
+
+int PromptIOManager::ComputeRefreshRowsLocked_(
+    const std::vector<std::string> &lines, int cols) const {
+  if (lines.empty()) {
+    return 0;
+  }
+  const int width = std::max(1, cols);
+  int rows = 0;
+  for (const auto &line : lines) {
+    const std::string plain =
+        NormalizeMeasureLine_(StripStyleForMeasure_(line));
+    const size_t display_width = AMStr::DisplayWidthUtf8(plain);
+    const int line_rows =
+        std::max<int>(1, static_cast<int>((display_width +
+                                           static_cast<size_t>(width) - 1) /
+                                          static_cast<size_t>(width)));
+    rows += line_rows;
+  }
+  return rows;
+}
+
+void PromptIOManager::AppendRenderLinesToFrameLocked_(
+    std::string *frame, const std::vector<std::string> &lines) const {
+  if (frame == nullptr || lines.empty()) {
+    return;
+  }
+  for (const auto &line : lines) {
+    *frame += "\x1b[2K\r";
+    *frame += line;
+    *frame += "\n";
+  }
+}
+
+std::string PromptIOManager::BuildRepaintFrameLocked_(
+    int old_rows, int new_rows, const std::vector<std::string> &new_lines) const {
+  if (old_rows <= 0 && new_rows <= 0) {
+    return {};
+  }
+
+  std::string frame = {};
+  AppendMoveUpRows_(&frame, old_rows);
+  if (old_rows > 0) {
+    AppendClearRows_(&frame, old_rows);
+    AppendMoveUpRows_(&frame, old_rows);
+  }
+  AppendRenderLinesToFrameLocked_(&frame, new_lines);
+  return frame;
+}
+
+std::string PromptIOManager::BuildInsertAndRepaintFrameLocked_(
+    int old_rows, const std::string &msg, int new_rows,
+    const std::vector<std::string> &new_lines) const {
+  if (old_rows <= 0) {
+    return msg;
+  }
+
+  std::string frame = {};
+  AppendMoveUpRows_(&frame, old_rows);
+  AppendClearRows_(&frame, old_rows);
+  AppendMoveUpRows_(&frame, old_rows);
+  frame += msg;
+  AppendRenderLinesToFrameLocked_(&frame, new_lines);
+  (void)new_rows;
+  return frame;
+}
+
+std::string PromptIOManager::BuildClearFrameLocked_(int old_rows) const {
+  if (old_rows <= 0) {
+    return {};
+  }
+  std::string frame = {};
+  AppendMoveUpRows_(&frame, old_rows);
+  AppendClearRows_(&frame, old_rows);
+  AppendMoveUpRows_(&frame, old_rows);
+  return frame;
+}
+
+void PromptIOManager::ResetRefreshStateLocked_() {
+  refresh_state_.active = false;
+  refresh_state_.rows_painted = 0;
+  refresh_state_.logical_lines.clear();
+  refresh_state_.last_emitted_frame_hash = 0;
+  refresh_state_.last_cols = 0;
+  refresh_state_.cursor_mode = RefreshCursorMode::TailAnchored;
+}
+
+void PromptIOManager::AssignRefreshRowsFromRenderInputLocked_(
+    const std::vector<std::optional<std::string>> &lines) {
+  const size_t old_size = refresh_state_.logical_lines.size();
+  std::vector<std::string> normalized_rows = {};
+  normalized_rows.reserve(lines.size());
+
+  for (size_t i = 0; i < lines.size(); ++i) {
+    std::string value = {};
+    if (lines[i].has_value()) {
+      value = lines[i].value();
+    } else if (i < old_size) {
+      value = refresh_state_.logical_lines[i];
+    }
+
+    value = AMStr::replace_all(value, "\r\n", "\n");
+    value = AMStr::replace_all(value, "\r", "\n");
+    value = AMStr::replace_all(value, "\t", "   ");
+
+    size_t start = 0;
+    while (start <= value.size()) {
+      const size_t pos = value.find('\n', start);
+      if (pos == std::string::npos) {
+        normalized_rows.push_back(value.substr(start));
+        break;
+      }
+      normalized_rows.push_back(value.substr(start, pos - start));
+      start = pos + 1;
+      if (start > value.size()) {
+        break;
+      }
+    }
+  }
+
+  refresh_state_.logical_lines = std::move(normalized_rows);
 }
 
 void PromptIOManager::RepaintRefreshLocked_() {
-  const int new_rows = static_cast<int>(refresh_lines_.size());
-  const int old_rows = painted_refresh_rows_;
-  if (new_rows <= 0 && old_rows <= 0) {
-    painted_refresh_rows_ = 0;
+  const int cols = TerminalCols_();
+  const int old_rows = refresh_state_.rows_painted;
+  const int new_rows =
+      ComputeRefreshRowsLocked_(refresh_state_.logical_lines, cols);
+  const size_t new_hash =
+      BuildRefreshHash_(refresh_state_.logical_lines, cols);
+
+  if (refresh_state_.active && refresh_state_.last_cols == cols &&
+      refresh_state_.last_emitted_frame_hash == new_hash &&
+      refresh_state_.rows_painted == new_rows) {
+    io_state_.refresh_occupied_lines_.store(new_rows,
+                                            std::memory_order_relaxed);
     return;
   }
 
-  const int total_rows = std::max(old_rows, new_rows);
-  const bool diff_mode =
-      io_state_.refresh_diff_mode_.load(std::memory_order_relaxed);
-  std::string frame;
-  AppendMoveUpRows_(&frame, old_rows);
-  for (int i = 0; i < total_rows; ++i) {
-    const std::string old_line =
-        (i < old_rows && static_cast<size_t>(i) < painted_refresh_lines_.size())
-            ? painted_refresh_lines_[static_cast<size_t>(i)]
-            : std::string{};
-    const std::string new_line =
-        (i < new_rows) ? refresh_lines_[static_cast<size_t>(i)] : std::string{};
-
-    if (diff_mode) {
-      AppendRowDiffUpdate_(&frame, old_line, new_line);
-      continue;
-    }
-    frame += "\x1b[2K\r";
-    frame += new_line;
-    frame += "\x1b[1B\r";
+  const std::string frame = BuildRepaintFrameLocked_(
+      old_rows, new_rows, refresh_state_.logical_lines);
+  if (!frame.empty()) {
+    PrintSyncRefreshLocked_(frame);
   }
-  AppendMoveUpRows_(&frame, total_rows - new_rows);
-  PrintSyncRefreshLocked_(frame);
-  painted_refresh_rows_ = new_rows;
-  painted_refresh_lines_ = refresh_lines_;
+
+  refresh_state_.active = true;
+  refresh_state_.rows_painted = new_rows;
+  refresh_state_.last_cols = cols;
+  refresh_state_.last_emitted_frame_hash = new_hash;
+  refresh_state_.cursor_mode = RefreshCursorMode::TailAnchored;
+  io_state_.refresh_occupied_lines_.store(new_rows, std::memory_order_relaxed);
 }
 
 void PromptIOManager::ClearRefreshLocked_() {
-  if (painted_refresh_rows_ <= 0) {
-    refresh_lines_.clear();
-    painted_refresh_lines_.clear();
-    return;
+  const int old_rows = refresh_state_.rows_painted;
+  const std::string frame = BuildClearFrameLocked_(old_rows);
+  if (!frame.empty()) {
+    PrintSyncRefreshLocked_(frame);
   }
-
-  std::string frame;
-  AppendMoveUpRows_(&frame, painted_refresh_rows_);
-  AppendClearRows_(&frame, painted_refresh_rows_);
-  PrintSyncRefreshLocked_(frame);
-
-  painted_refresh_rows_ = 0;
-  refresh_lines_.clear();
-  painted_refresh_lines_.clear();
+  ResetRefreshStateLocked_();
+  io_state_.refresh_occupied_lines_.store(0, std::memory_order_relaxed);
 }
 
-void PromptIOManager::RefreshBegin(int lines) {
-  const int occupied = std::max(0, lines);
+void PromptIOManager::RefreshBegin() {
   std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
   if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
     (void)profile->Use();
   }
-  const bool detached_mode =
-      occupied > 0 && painted_refresh_rows_ <= 0 &&
-      !io_state_.prompt_active_.load(std::memory_order_relaxed) &&
-      !io_state_.secure_phase_.load(std::memory_order_relaxed);
-  io_state_.refresh_detached_mode_.store(detached_mode,
-                                         std::memory_order_relaxed);
-  if (detached_mode) {
-    PrintSyncLocked_("\n");
-  }
-  io_state_.refresh_occupied_lines_.store(occupied, std::memory_order_relaxed);
-  refresh_lines_.assign(static_cast<size_t>(occupied), "");
-  RepaintRefreshLocked_();
+  ResetRefreshStateLocked_();
+  refresh_state_.active = true;
+  io_state_.refresh_occupied_lines_.store(0, std::memory_order_relaxed);
 }
 
 void PromptIOManager::RefreshRender(
     const std::vector<std::optional<std::string>> &lines) {
   std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  io_state_.refresh_occupied_lines_.store(static_cast<int>(lines.size()),
-                                          std::memory_order_relaxed);
 
-  const size_t old_size = refresh_lines_.size();
-  refresh_lines_.resize(lines.size(), "");
-  for (size_t i = 0; i < lines.size(); ++i) {
-    if (lines[i].has_value()) {
-      refresh_lines_[i] = lines[i].value();
-    } else if (i >= old_size) {
-      refresh_lines_[i].clear();
-    }
-  }
+  AssignRefreshRowsFromRenderInputLocked_(lines);
   RepaintRefreshLocked_();
   if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
       io_state_.secure_phase_.load(std::memory_order_relaxed)) {
@@ -627,17 +750,11 @@ void PromptIOManager::RefreshEnd() {
   if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
     (void)profile->Use();
   }
-  const bool detached_mode = io_state_.refresh_detached_mode_.exchange(
-      false, std::memory_order_relaxed);
-  const int cleared_rows = painted_refresh_rows_;
   ClearRefreshLocked_();
-  if (detached_mode && cleared_rows > 0) {
-    std::string frame;
-    AppendMoveUpRows_(&frame, cleared_rows);
-    PrintSyncLocked_(frame);
-  }
+  io_state_.refresh_detached_mode_.store(false, std::memory_order_relaxed);
   io_state_.refresh_occupied_lines_.store(0, std::memory_order_relaxed);
 }
+
 
 void PromptIOManager::ErrorFormat(const std::string &error_name,
                                   const std::string &error_msg, bool is_exit,
@@ -658,11 +775,7 @@ void PromptIOManager::ErrorFormat(const std::string &error_name,
 
 void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
   if (rcm.code == EC::ConfigCanceled) {
-    if (io_state_.cancel_abort_printed_.exchange(false)) {
-      return;
-    }
     PrintOperationAbort();
-    io_state_.cancel_abort_printed_.store(false, std::memory_order_relaxed);
     return;
   }
 
@@ -705,9 +818,6 @@ bool PromptIOManager::PromptYesNo(const std::string &prompt, bool *canceled) {
   }
   const bool is_yes =
       answer.has_value() && AMStr::lowercase(AMStr::Strip(*answer)) == "y";
-  if (!is_yes) {
-    PrintOperationAbort();
-  }
   return is_yes;
 }
 
@@ -848,7 +958,6 @@ std::optional<std::string> PromptIOManager::Prompt(
     line = ic_readline_ex(prompt.c_str(), initial);
   }
   if (!line) {
-    PrintOperationAbort();
     return std::nullopt;
   }
   // isocline_profile_manager_.RemoveLastHistoryEntry();
@@ -915,7 +1024,6 @@ PromptIOManager::SecurePrompt(const std::string &prompt) {
 
   char *line = ic_readline_secure(prompt.c_str(), nullptr);
   if (!line) {
-    PrintOperationAbort();
     return std::nullopt;
   }
   std::string out = line;
@@ -924,3 +1032,5 @@ PromptIOManager::SecurePrompt(const std::string &prompt) {
 }
 
 } // namespace AMInterface::prompt
+
+

@@ -110,7 +110,7 @@ public:
       const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info);
 
   void PrintRaw(const std::string &text);
-  void RefreshBegin(int lines);
+  void RefreshBegin();
   void RefreshRender(const std::vector<std::optional<std::string>> &lines);
   void RefreshEnd();
   void ClearScreen(bool clear_scrollback = false);
@@ -157,7 +157,6 @@ private:
     std::atomic<bool> secure_phase_{false};
     std::atomic<bool> refresh_diff_mode_{true};
     std::atomic<bool> refresh_detached_mode_{false};
-    std::atomic<bool> cancel_abort_printed_{false};
     std::string active_prompt_header_;
     std::atomic<bool> has_active_prompt_header_{false};
   };
@@ -168,6 +167,25 @@ private:
                                    const std::string &rhs);
   static void AppendMoveUpRows_(std::string *frame, int rows);
   static void AppendClearRows_(std::string *frame, int rows);
+  static std::string StripStyleForMeasure_(const std::string &text);
+  static std::string NormalizeMeasureLine_(const std::string &text);
+  static int TerminalCols_();
+  static size_t BuildRefreshHash_(const std::vector<std::string> &lines,
+                                  int cols);
+  int ComputeRefreshRowsLocked_(const std::vector<std::string> &lines,
+                                int cols) const;
+  void AppendRenderLinesToFrameLocked_(std::string *frame,
+                                       const std::vector<std::string> &lines) const;
+  std::string BuildRepaintFrameLocked_(
+      int old_rows, int new_rows,
+      const std::vector<std::string> &new_lines) const;
+  std::string BuildInsertAndRepaintFrameLocked_(
+      int old_rows, const std::string &msg, int new_rows,
+      const std::vector<std::string> &new_lines) const;
+  std::string BuildClearFrameLocked_(int old_rows) const;
+  void ResetRefreshStateLocked_();
+  void AssignRefreshRowsFromRenderInputLocked_(
+      const std::vector<std::optional<std::string>> &lines);
   void AppendRowDiffUpdate_(std::string *frame, const std::string &old_line,
                             const std::string &new_line) const;
   void SetActivePromptHeader_(const std::string &header);
@@ -183,11 +201,22 @@ private:
   void ClearRefreshLocked_();
   ECM EditProfile_(const std::string &nickname);
 
+  enum class RefreshCursorMode {
+    TailAnchored,
+  };
+
+  struct RefreshRuntimeState {
+    bool active = false;
+    int rows_painted = 0;
+    std::vector<std::string> logical_lines = {};
+    size_t last_emitted_frame_hash = 0;
+    int last_cols = 0;
+    RefreshCursorMode cursor_mode = RefreshCursorMode::TailAnchored;
+  };
+
   IsoclineProfileManager &isocline_profile_manager_;
   IOState io_state_{};
-  std::vector<std::string> refresh_lines_;
-  std::vector<std::string> painted_refresh_lines_;
-  int painted_refresh_rows_ = 0;
+  RefreshRuntimeState refresh_state_{};
 };
 
 class AMPromptIOManager final : public PromptIOManager {
