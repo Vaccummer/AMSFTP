@@ -5,11 +5,14 @@
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include <algorithm>
+#include <chrono>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace AMInterface::completion {
 namespace {
+constexpr auto kTerminalSnapshotTtl = std::chrono::milliseconds(300);
 
 std::string NormalizePath_(const std::string &path) {
   return AMDomain::filesystem::services::NormalizePath(AMStr::Strip(path));
@@ -87,16 +90,16 @@ std::vector<std::string> CompletionRuntimeAdapter::ListTerminalNames() const {
 std::vector<std::string> CompletionRuntimeAdapter::ListChannelNames(
     const std::string &terminal_nickname) const {
   std::vector<std::string> out = {};
-  auto terminal_result =
-      terminal_service_.GetTerminalByNickname(terminal_nickname, false);
-  if (!(terminal_result.rcm) || !terminal_result.data) {
+  const auto snapshot = ResolveTerminalSnapshot_(terminal_nickname);
+  if (!snapshot.found) {
     return out;
   }
-  auto list_result = terminal_result.data->ListChannels({}, {});
-  if (!(list_result.rcm)) {
-    return out;
+  out.reserve(snapshot.channel_ok.size());
+  for (const auto &entry : snapshot.channel_ok) {
+    out.push_back(entry.first);
   }
-  return list_result.data.channel_names;
+  std::sort(out.begin(), out.end());
+  return out;
 }
 
 bool CompletionRuntimeAdapter::HostExists(const std::string &nickname) const {
@@ -112,17 +115,15 @@ ICompletionRuntime::TerminalNameState
 CompletionRuntimeAdapter::QueryTerminalNameState(
     const std::string &nickname) const {
   const std::string key = NormalizeNicknameOrDefault_(nickname, CurrentNickname());
-  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
-  if (!(terminal_result.rcm) || !terminal_result.data) {
+  const auto snapshot = ResolveTerminalSnapshot_(key);
+  if (!snapshot.found) {
     if (host_service_.HostExists(key)) {
       return TerminalNameState::Unestablished;
     }
     return TerminalNameState::Nonexistent;
   }
 
-  auto check_result = terminal_result.data->CheckSession({}, {});
-  if ((check_result.rcm) &&
-      check_result.data.status == AMDomain::client::ClientStatus::OK) {
+  if (snapshot.status == AMDomain::client::ClientStatus::OK) {
     return TerminalNameState::OK;
   }
   return TerminalNameState::Disconnected;
@@ -140,8 +141,8 @@ CompletionRuntimeAdapter::QueryChannelNameState(
     return allow_new ? ChannelNameState::InvalidNew : ChannelNameState::Nonexistent;
   }
 
-  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
-  if (!(terminal_result.rcm) || !terminal_result.data) {
+  const auto snapshot = ResolveTerminalSnapshot_(key);
+  if (!snapshot.found) {
     if (!allow_new) {
       return ChannelNameState::Nonexistent;
     }
@@ -151,11 +152,10 @@ CompletionRuntimeAdapter::QueryChannelNameState(
     return ChannelNameState::ValidNew;
   }
 
-  auto check_result =
-      terminal_result.data->CheckChannel({std::optional<std::string>(channel)}, {});
-  if ((check_result.rcm) && check_result.data.exists) {
-    return check_result.data.is_open ? ChannelNameState::OK
-                                     : ChannelNameState::Disconnected;
+  auto channel_it = snapshot.channel_ok.find(channel);
+  if (channel_it != snapshot.channel_ok.end()) {
+    return channel_it->second ? ChannelNameState::OK
+                              : ChannelNameState::Disconnected;
   }
 
   if (!allow_new) {
@@ -163,6 +163,47 @@ CompletionRuntimeAdapter::QueryChannelNameState(
   }
   return valid_literal ? ChannelNameState::ValidNew
                        : ChannelNameState::InvalidNew;
+}
+
+CompletionRuntimeAdapter::TerminalSnapshot_
+CompletionRuntimeAdapter::ResolveTerminalSnapshot_(
+    const std::string &terminal_nickname) const {
+  const std::string key =
+      NormalizeNicknameOrDefault_(terminal_nickname, CurrentNickname());
+  if (key.empty()) {
+    return {};
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  {
+    std::lock_guard<std::mutex> lock(terminal_snapshot_mutex_);
+    auto it = terminal_snapshots_.find(key);
+    if (it != terminal_snapshots_.end() &&
+        (now - it->second.updated_at) <= kTerminalSnapshotTtl) {
+      return it->second;
+    }
+  }
+
+  TerminalSnapshot_ snapshot = {};
+  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
+  if ((terminal_result.rcm) && terminal_result.data) {
+    snapshot.found = true;
+    snapshot.status = terminal_result.data->GetSessionState().status;
+    const auto channels = terminal_result.data->GetCachedChannelNames();
+    for (const auto &channel : channels) {
+      auto state_opt = terminal_result.data->GetChannelState(channel);
+      const bool is_ok = !state_opt.has_value() ||
+                         state_opt->code == ErrorCode::Success;
+      snapshot.channel_ok[channel] = is_ok;
+    }
+  }
+  snapshot.updated_at = now;
+
+  {
+    std::lock_guard<std::mutex> lock(terminal_snapshot_mutex_);
+    terminal_snapshots_[key] = snapshot;
+  }
+  return snapshot;
 }
 
 std::vector<std::string> CompletionRuntimeAdapter::ListVarDomains() const {
@@ -288,3 +329,4 @@ CompletionRuntimeAdapter::FormatPath(const std::string &segment,
 }
 
 } // namespace AMInterface::completion
+
