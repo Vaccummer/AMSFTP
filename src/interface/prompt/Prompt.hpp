@@ -157,6 +157,7 @@ private:
     std::atomic<bool> secure_phase_{false};
     std::atomic<bool> refresh_diff_mode_{true};
     std::atomic<bool> refresh_detached_mode_{false};
+    std::atomic<bool> cancel_abort_printed_{false};
     std::string active_prompt_header_;
     std::atomic<bool> has_active_prompt_header_{false};
   };
