@@ -1,9 +1,13 @@
 #pragma once
 
 #include "domain/client/ClientPort.hpp"
+#include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
 #include "domain/terminal/TerminalModel.hpp"
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace AMDomain::terminal {
 using ClientHandle = AMDomain::client::ClientHandle;
@@ -56,7 +60,14 @@ public:
   CheckChannel(const ChannelCheckArgs &check_args,
                const ClientControlComponent &control = {}) = 0;
 
-  [[nodiscard]] virtual ClientStatus GetSessionState() const = 0;
+  [[nodiscard]] virtual AMDomain::filesystem::CheckResult
+  GetSessionState() const = 0;
+
+  [[nodiscard]] virtual std::optional<ECM>
+  GetChannelState(const std::string &channel_name) const = 0;
+
+  [[nodiscard]] virtual std::vector<std::string>
+  GetCachedChannelNames() const = 0;
 
   [[nodiscard]] virtual ECMData<std::intptr_t>
   GetRemoteSocketHandle() const = 0;
@@ -68,3 +79,4 @@ using TerminalHandle = std::shared_ptr<ITerminalPort>;
 CreateTerminalPort(const ClientHandle &client);
 
 } // namespace AMDomain::terminal
+

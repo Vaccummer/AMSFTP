@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 namespace AMInfra::client::SFTP::terminal {
@@ -89,7 +90,19 @@ private:
     TerminalWindowInfo window = {};
     bool eof = false;
     int exit_status = -1;
+    ECM state = OK;
   };
+
+  struct TerminalStateCache {
+    AMDomain::filesystem::CheckResult session_state =
+        AMDomain::filesystem::CheckResult(
+            AMDomain::client::ClientStatus::NotInitialized);
+    std::optional<std::string> current_channel = std::nullopt;
+    std::unordered_map<std::string, ECM> channel_states = {};
+  };
+
+  mutable AMAtomic<TerminalStateCache> attr_cache_ =
+      AMAtomic<TerminalStateCache>(TerminalStateCache{});
 
   ConRequest request_ = {};
   AMT::ClientHandle owner_client_ = nullptr;
@@ -99,6 +112,15 @@ private:
   std::map<std::string, ChannelCtx> channels_ = {};
   std::optional<std::string> current_channel_ = std::nullopt;
   static constexpr int kDefaultCloseTimeoutMs_ = 1500;
+
+  struct CacheSyncGuard_ {
+    SSHTerminalPort *self = nullptr;
+    ~CacheSyncGuard_() {
+      if (self) {
+        self->SyncCacheFromRuntimeUnlocked_();
+      }
+    }
+  };
 
   [[nodiscard]] std::recursive_mutex &CoreMutex_() const {
     if (sftp_core_) {
@@ -111,14 +133,46 @@ private:
     session_ = (sftp_core_ != nullptr) ? sftp_core_->session : nullptr;
   }
 
+  [[nodiscard]] AMDomain::filesystem::CheckResult
+  ReadSessionStateFromClient_() const {
+    if (!owner_client_) {
+      return AMDomain::filesystem::CheckResult(
+          AMDomain::client::ClientStatus::NotInitialized);
+    }
+    auto state = owner_client_->ConfigPort().GetState();
+    if (!state.rcm) {
+      return AMDomain::filesystem::CheckResult(
+          AMDomain::client::ClientStatus::NotInitialized);
+    }
+    return {state.data.status};
+  }
+
+  void SyncCacheFromRuntimeUnlocked_() {
+    auto guard = attr_cache_.lock();
+    (*guard).session_state = ReadSessionStateFromClient_();
+    (*guard).current_channel = current_channel_;
+    (*guard).channel_states.clear();
+    for (const auto &entry : channels_) {
+      const auto &ctx = entry.second;
+      ECM state = ctx.state;
+      if (ctx.eof || !ctx.channel || !ctx.channel->channel ||
+          ctx.channel->closed) {
+        state = Err(EC::NoConnection, "terminal.channel.state", entry.first,
+                    "Channel is closed");
+      }
+      (*guard).channel_states[entry.first] = state;
+    }
+  }
+
   [[nodiscard]] int CloseTimeoutMs_(
       const AMDomain::client::ClientControlComponent &control) const {
     const int timeout_ms = TimeoutMs_(control);
     return timeout_ms >= 0 ? timeout_ms : kDefaultCloseTimeoutMs_;
   }
 
-  void BindCloseControl_(detail::SafeChannel *channel,
-                         const AMDomain::client::ClientControlComponent &control) {
+  void
+  BindCloseControl_(detail::SafeChannel *channel,
+                    const AMDomain::client::ClientControlComponent &control) {
     if (!channel) {
       return;
     }
@@ -126,8 +180,8 @@ private:
     auto is_interrupted = [control_token]() -> bool {
       return control_token && control_token->IsInterrupted();
     };
-    channel->SetControlContext(std::move(is_interrupted), CloseTimeoutMs_(control),
-                               AMTime::miliseconds());
+    channel->SetControlContext(std::move(is_interrupted),
+                               CloseTimeoutMs_(control), AMTime::miliseconds());
   }
 
   [[nodiscard]] ErrorCode LastEC_() const {
@@ -160,9 +214,9 @@ private:
     return true;
   }
 
-  void CloseAllChannels_(
-      bool send_exit,
-      const AMDomain::client::ClientControlComponent &control) {
+  void
+  CloseAllChannels_(bool send_exit,
+                    const AMDomain::client::ClientControlComponent &control) {
     for (auto &entry : channels_) {
       auto &ctx = entry.second;
       if (!ctx.channel || !ctx.channel->channel) {
@@ -179,8 +233,7 @@ private:
     current_channel_ = std::nullopt;
   }
 
-  void CloseTerminal_(
-      const AMDomain::client::ClientControlComponent &control) {
+  void CloseTerminal_(const AMDomain::client::ClientControlComponent &control) {
     CloseAllChannels_(true, control);
     session_ = nullptr;
   }
@@ -305,9 +358,9 @@ private:
       return control_token && control_token->IsInterrupted();
     };
 
-    ECM init_ecm = ctx->channel->Init(
-        session_, std::move(is_interrupted),
-        TimeoutMs_(control), AMTime::miliseconds());
+    ECM init_ecm =
+        ctx->channel->Init(session_, std::move(is_interrupted),
+                           TimeoutMs_(control), AMTime::miliseconds());
     if (init_ecm.code != ErrorCode::Success) {
       ctx->channel.reset();
       return init_ecm;
@@ -387,6 +440,7 @@ public:
       : request_(request), owner_client_(std::move(owner_client)),
         sftp_core_(sftp_core) {
     SyncCoreHandles_();
+    SyncCacheFromRuntimeUnlocked_();
   }
 
   ~SSHTerminalPort() override {
@@ -394,6 +448,7 @@ public:
     AMDomain::client::ClientControlComponent close_control(
         nullptr, kDefaultCloseTimeoutMs_);
     CloseTerminal_(close_control);
+    SyncCacheFromRuntimeUnlocked_();
   }
 
   [[nodiscard]] ConRequest GetRequest() const override { return request_; }
@@ -403,6 +458,7 @@ public:
       const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelOpenResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     const std::string channel_name = AMStr::Strip(open_args.channel_name);
     if (channel_name.empty()) {
@@ -445,6 +501,7 @@ public:
     (void)control;
     ECMData<AMT::ChannelActiveResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     const std::string channel_name = AMStr::Strip(active_args.channel_name);
     if (channel_name.empty()) {
@@ -477,6 +534,7 @@ public:
       const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelReadResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     auto resolve_result =
         ResolveChannelForOp_(read_args.channel_name, "terminal.read");
@@ -568,6 +626,7 @@ public:
       const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelWriteResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     auto resolve_result =
         ResolveChannelForOp_(write_args.channel_name, "terminal.write");
@@ -631,6 +690,7 @@ public:
       const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelResizeResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     auto resolve_result =
         ResolveChannelForOp_(resize_args.channel_name, "terminal.resize");
@@ -672,6 +732,7 @@ public:
       const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelCloseResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     const std::string target_name =
         ResolveTargetChannelName_(close_args.channel_name);
@@ -720,6 +781,7 @@ public:
     (void)control;
     ECMData<AMT::ChannelRenameResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     const std::string src_name = AMStr::Strip(rename_args.src_channel_name);
     const std::string dst_name = AMStr::Strip(rename_args.dst_channel_name);
@@ -732,8 +794,9 @@ public:
     }
     if (!AMDomain::host::HostService::ValidateNickname(src_name) ||
         !AMDomain::host::HostService::ValidateNickname(dst_name)) {
-      out.rcm = Err(EC::InvalidArg, "terminal.rename", src_name + "->" + dst_name,
-                    "Channel names must be valid nicknames");
+      out.rcm =
+          Err(EC::InvalidArg, "terminal.rename", src_name + "->" + dst_name,
+              "Channel names must be valid nicknames");
       return out;
     }
     if (src_name == dst_name) {
@@ -771,6 +834,7 @@ public:
     (void)control;
     ECMData<AMT::ChannelListResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     for (const auto &entry : channels_) {
       out.data.channel_names.push_back(entry.first);
@@ -782,12 +846,13 @@ public:
     return out;
   }
 
-  ECMData<AMT::CheckSessionResult>
-  CheckSession(const AMT::CheckSessionArgs &check_args,
-               const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::CheckSessionResult> CheckSession(
+      const AMT::CheckSessionArgs &check_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     (void)check_args;
     ECMData<AMT::CheckSessionResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     out.data.is_supported = true;
     out.data.can_resize = true;
@@ -818,12 +883,13 @@ public:
     return out;
   }
 
-  ECMData<AMT::ChannelCheckResult>
-  CheckChannel(const AMT::ChannelCheckArgs &check_args,
-               const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMT::ChannelCheckResult> CheckChannel(
+      const AMT::ChannelCheckArgs &check_args,
+      const AMDomain::client::ClientControlComponent &control) override {
     (void)control;
     ECMData<AMT::ChannelCheckResult> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    CacheSyncGuard_ cache_sync{this};
 
     const std::string target_name =
         ResolveTargetChannelName_(check_args.channel_name);
@@ -849,12 +915,38 @@ public:
     return out;
   }
 
-  [[nodiscard]] AMDomain::client::ClientStatus GetSessionState() const override {
-    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
-    if (!owner_client_) {
-      return AMDomain::client::ClientStatus::NotInitialized;
+  [[nodiscard]] AMDomain::filesystem::CheckResult
+  GetSessionState() const override {
+    auto guard = const_cast<AMAtomic<TerminalStateCache> &>(attr_cache_).lock();
+    return (*guard).session_state;
+  }
+
+  [[nodiscard]] std::optional<ECM>
+  GetChannelState(const std::string &channel_name) const override {
+    auto guard = const_cast<AMAtomic<TerminalStateCache> &>(attr_cache_).lock();
+    std::string target_name = AMStr::Strip(channel_name);
+    if (target_name.empty() && (*guard).current_channel.has_value()) {
+      target_name = *(*guard).current_channel;
     }
-    return owner_client_->ConfigPort().GetState().data.status;
+    if (target_name.empty()) {
+      return std::nullopt;
+    }
+    auto it = (*guard).channel_states.find(target_name);
+    if (it == (*guard).channel_states.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
+
+  [[nodiscard]] std::vector<std::string>
+  GetCachedChannelNames() const override {
+    auto guard = const_cast<AMAtomic<TerminalStateCache> &>(attr_cache_).lock();
+    std::vector<std::string> names = {};
+    names.reserve((*guard).channel_states.size());
+    for (const auto &entry : (*guard).channel_states) {
+      names.push_back(entry.first);
+    }
+    return names;
   }
 
   [[nodiscard]] ECMData<std::intptr_t> GetRemoteSocketHandle() const override {
@@ -866,9 +958,8 @@ public:
     }
     const std::intptr_t handle = sftp_core_->RemoteSocketHandle();
     if (handle < 0) {
-      return {handle,
-              Err(EC::NoConnection, "terminal.remote_socket", request_.hostname,
-                  "Client socket is unavailable")};
+      return {handle, Err(EC::NoConnection, "terminal.remote_socket",
+                          request_.hostname, "Client socket is unavailable")};
     }
     return {handle, OK};
   }

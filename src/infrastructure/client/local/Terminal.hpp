@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -59,6 +60,7 @@ private:
     bool eof = false;
     bool process_exited = false;
     int exit_status = -1;
+    ECM state = OK;
 #ifdef _WIN32
     void *pseudo_console = nullptr;
     HANDLE input_write = INVALID_HANDLE_VALUE;
@@ -69,6 +71,17 @@ private:
     pid_t child_pid = -1;
 #endif
   };
+
+  struct TerminalStateCache_ {
+    AMDomain::filesystem::CheckResult session_state =
+        AMDomain::filesystem::CheckResult(
+            AMDomain::client::ClientStatus::NotInitialized);
+    std::optional<std::string> current_channel = std::nullopt;
+    std::unordered_map<std::string, ECM> channel_states = {};
+  };
+
+  mutable AMAtomic<TerminalStateCache_> attr_cache_ =
+      AMAtomic<TerminalStateCache_>(TerminalStateCache_{});
 
   ConRequest request_ = {};
   AMT::ClientHandle owner_client_ = nullptr;
@@ -135,11 +148,26 @@ private:
                         const char *action) const;
   void CloseChannelRuntime_(ChannelCtx_ *ctx, bool force);
 
+  [[nodiscard]] AMDomain::filesystem::CheckResult
+  ReadSessionStateFromClient_() const;
+  void SyncCacheFromRuntimeUnlocked_();
+
+  struct CacheSyncGuard_ {
+    LocalTerminalPort *self = nullptr;
+    ~CacheSyncGuard_() {
+      if (self) {
+        self->SyncCacheFromRuntimeUnlocked_();
+      }
+    }
+  };
+
 public:
   LocalTerminalPort(AMT::ClientHandle owner_client, const ConRequest &request,
                     AMLocalIOCore *local_core)
       : request_(request), owner_client_(std::move(owner_client)),
-        local_core_(local_core) {}
+        local_core_(local_core) {
+    SyncCacheFromRuntimeUnlocked_();
+  }
 
   ~LocalTerminalPort() override;
 
@@ -185,7 +213,14 @@ public:
   CheckChannel(const AMT::ChannelCheckArgs &check_args,
                const AMDomain::client::ClientControlComponent &control) override;
 
-  [[nodiscard]] AMDomain::client::ClientStatus GetSessionState() const override;
+  [[nodiscard]] AMDomain::filesystem::CheckResult
+  GetSessionState() const override;
+
+  [[nodiscard]] std::optional<ECM>
+  GetChannelState(const std::string &channel_name) const override;
+
+  [[nodiscard]] std::vector<std::string>
+  GetCachedChannelNames() const override;
 
   [[nodiscard]] ECMData<std::intptr_t> GetRemoteSocketHandle() const override;
 };
@@ -197,9 +232,40 @@ inline LocalTerminalPort::~LocalTerminalPort() {
   }
   channels_.clear();
   current_channel_ = std::nullopt;
+  SyncCacheFromRuntimeUnlocked_();
 }
 
 inline ConRequest LocalTerminalPort::GetRequest() const { return request_; }
+
+inline AMDomain::filesystem::CheckResult
+LocalTerminalPort::ReadSessionStateFromClient_() const {
+  if (!owner_client_) {
+    return AMDomain::filesystem::CheckResult(
+        AMDomain::client::ClientStatus::NotInitialized);
+  }
+  auto state = owner_client_->ConfigPort().GetState();
+  if (!state.rcm) {
+    return AMDomain::filesystem::CheckResult(
+        AMDomain::client::ClientStatus::NotInitialized);
+  }
+  return AMDomain::filesystem::CheckResult(state.data.status);
+}
+
+inline void LocalTerminalPort::SyncCacheFromRuntimeUnlocked_() {
+  auto guard = attr_cache_.lock();
+  (*guard).session_state = ReadSessionStateFromClient_();
+  (*guard).current_channel = current_channel_;
+  (*guard).channel_states.clear();
+  for (const auto &entry : channels_) {
+    const auto &ctx = entry.second;
+    ECM state = ctx.state;
+    if (ctx.eof || ctx.process_exited) {
+      state = Err(EC::NoConnection, "terminal.channel.state", entry.first,
+                  "Channel is closed");
+    }
+    (*guard).channel_states[entry.first] = state;
+  }
+}
 
 inline LocalTerminalPort::TerminalWindowInfo_
 LocalTerminalPort::OpenWindow_(const AMT::ChannelOpenArgs &open_args,
@@ -307,6 +373,7 @@ inline ECMData<AMT::ChannelOpenResult> LocalTerminalPort::OpenChannel(
     const AMDomain::client::ClientControlComponent &control) {
   ECMData<AMT::ChannelOpenResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   const std::string channel_name = AMStr::Strip(open_args.channel_name);
   if (channel_name.empty()) {
@@ -353,6 +420,7 @@ inline ECMData<AMT::ChannelActiveResult> LocalTerminalPort::ActiveChannel(
   (void)control;
   ECMData<AMT::ChannelActiveResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   const std::string channel_name = AMStr::Strip(active_args.channel_name);
   if (channel_name.empty()) {
@@ -378,6 +446,7 @@ inline ECMData<AMT::ChannelReadResult> LocalTerminalPort::ReadChannel(
     const AMDomain::client::ClientControlComponent &control) {
   ECMData<AMT::ChannelReadResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   auto resolve_result = ResolveChannelForOp_(read_args.channel_name, "terminal.read");
   if (!resolve_result.rcm || resolve_result.data == nullptr) {
@@ -470,6 +539,7 @@ inline ECMData<AMT::ChannelWriteResult> LocalTerminalPort::WriteChannel(
     const AMDomain::client::ClientControlComponent &control) {
   ECMData<AMT::ChannelWriteResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   auto resolve_result = ResolveChannelForOp_(write_args.channel_name, "terminal.write");
   if (!resolve_result.rcm || resolve_result.data == nullptr) {
@@ -599,6 +669,7 @@ inline ECMData<AMT::ChannelResizeResult> LocalTerminalPort::ResizeChannel(
   (void)control;
   ECMData<AMT::ChannelResizeResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   auto resolve_result = ResolveChannelForOp_(resize_args.channel_name, "terminal.resize");
   if (!resolve_result.rcm || resolve_result.data == nullptr) {
@@ -661,6 +732,7 @@ inline ECMData<AMT::ChannelCloseResult> LocalTerminalPort::CloseChannel(
   (void)control;
   ECMData<AMT::ChannelCloseResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   const std::string target_name = ResolveTargetChannelName_(close_args.channel_name);
   if (target_name.empty()) {
@@ -694,6 +766,7 @@ inline ECMData<AMT::ChannelRenameResult> LocalTerminalPort::RenameChannel(
   (void)control;
   ECMData<AMT::ChannelRenameResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   const std::string src_name = AMStr::Strip(rename_args.src_channel_name);
   const std::string dst_name = AMStr::Strip(rename_args.dst_channel_name);
@@ -745,6 +818,7 @@ inline ECMData<AMT::ChannelListResult> LocalTerminalPort::ListChannels(
   (void)control;
   ECMData<AMT::ChannelListResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
   for (const auto &entry : channels_) {
     out.data.channel_names.push_back(entry.first);
   }
@@ -762,6 +836,7 @@ inline ECMData<AMT::CheckSessionResult> LocalTerminalPort::CheckSession(
   (void)control;
   ECMData<AMT::CheckSessionResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   out.data.is_supported = true;
   out.data.can_resize = true;
@@ -798,6 +873,7 @@ inline ECMData<AMT::ChannelCheckResult> LocalTerminalPort::CheckChannel(
   (void)control;
   ECMData<AMT::ChannelCheckResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CacheSyncGuard_ cache_sync{this};
 
   const std::string target_name = ResolveTargetChannelName_(check_args.channel_name);
   if (target_name.empty()) {
@@ -826,12 +902,37 @@ inline ECMData<AMT::ChannelCheckResult> LocalTerminalPort::CheckChannel(
   return out;
 }
 
-inline AMDomain::client::ClientStatus LocalTerminalPort::GetSessionState() const {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (!owner_client_) {
-    return AMDomain::client::ClientStatus::NotInitialized;
+inline AMDomain::filesystem::CheckResult
+LocalTerminalPort::GetSessionState() const {
+  auto guard = const_cast<AMAtomic<TerminalStateCache_> &>(attr_cache_).lock();
+  return (*guard).session_state;
+}
+
+inline std::optional<ECM>
+LocalTerminalPort::GetChannelState(const std::string &channel_name) const {
+  auto guard = const_cast<AMAtomic<TerminalStateCache_> &>(attr_cache_).lock();
+  std::string target_name = AMStr::Strip(channel_name);
+  if (target_name.empty() && (*guard).current_channel.has_value()) {
+    target_name = *(*guard).current_channel;
   }
-  return owner_client_->ConfigPort().GetState().data.status;
+  if (target_name.empty()) {
+    return std::nullopt;
+  }
+  auto it = (*guard).channel_states.find(target_name);
+  if (it == (*guard).channel_states.end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+inline std::vector<std::string> LocalTerminalPort::GetCachedChannelNames() const {
+  auto guard = const_cast<AMAtomic<TerminalStateCache_> &>(attr_cache_).lock();
+  std::vector<std::string> names = {};
+  names.reserve((*guard).channel_states.size());
+  for (const auto &entry : (*guard).channel_states) {
+    names.push_back(entry.first);
+  }
+  return names;
 }
 
 inline ECMData<std::intptr_t> LocalTerminalPort::GetRemoteSocketHandle() const {
@@ -1349,3 +1450,4 @@ inline void LocalTerminalPort::CloseChannelRuntime_(ChannelCtx_ *ctx, bool force
 }
 
 } // namespace AMInfra::client::LOCAL::terminal
+

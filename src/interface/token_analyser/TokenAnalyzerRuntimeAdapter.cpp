@@ -5,10 +5,12 @@
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
+#include <chrono>
 #include <optional>
 
 namespace AMInterface::parser {
 namespace {
+constexpr auto kTerminalSnapshotTtl = std::chrono::milliseconds(300);
 
 std::string NormalizePath_(const std::string &path) {
   return AMDomain::filesystem::services::NormalizePath(AMStr::Strip(path));
@@ -33,10 +35,11 @@ std::string ResolveWorkdir_(const AMDomain::host::ClientMetaData &metadata,
 
 std::string NormalizeNicknameOrDefault_(const std::string &nickname,
                                         const std::string &fallback) {
-  std::string key = AMDomain::host::HostService::NormalizeNickname(
-      AMStr::Strip(nickname));
+  std::string key =
+      AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(nickname));
   if (key.empty()) {
-    key = AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(fallback));
+    key =
+        AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(fallback));
   }
   if (key.empty()) {
     key = "local";
@@ -51,7 +54,8 @@ TokenAnalyzerRuntimeAdapter::CurrentClient() const {
   return client_service_.GetCurrentClient();
 }
 
-AMDomain::client::ClientHandle TokenAnalyzerRuntimeAdapter::LocalClient() const {
+AMDomain::client::ClientHandle
+TokenAnalyzerRuntimeAdapter::LocalClient() const {
   return client_service_.GetLocalClient();
 }
 
@@ -72,64 +76,66 @@ std::string TokenAnalyzerRuntimeAdapter::CurrentNickname() const {
   return AMDomain::host::HostService::NormalizeNickname(nickname);
 }
 
-bool TokenAnalyzerRuntimeAdapter::HostExists(const std::string &nickname) const {
+bool TokenAnalyzerRuntimeAdapter::HostExists(
+    const std::string &nickname) const {
   return host_service_.HostExists(nickname);
 }
 
 bool TokenAnalyzerRuntimeAdapter::TerminalExists(
     const std::string &nickname) const {
-  auto terminal =
-      terminal_service_.GetTerminalByNickname(nickname, false);
+  auto terminal = terminal_service_.GetTerminalByNickname(nickname, false);
   return (terminal.rcm) && terminal.data;
 }
 
 ITokenAnalyzerRuntime::TerminalNameState
 TokenAnalyzerRuntimeAdapter::QueryTerminalNameState(
     const std::string &nickname) const {
-  const std::string key = NormalizeNicknameOrDefault_(nickname, CurrentNickname());
-  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
-  if (!(terminal_result.rcm) || !terminal_result.data) {
+  const std::string key =
+      NormalizeNicknameOrDefault_(nickname, CurrentNickname());
+  const auto snapshot = ResolveTerminalSnapshot_(key);
+  if (!snapshot.found) {
     if (host_service_.HostExists(key)) {
       return TerminalNameState::Unestablished;
     }
     return TerminalNameState::Nonexistent;
   }
 
-  auto check_result = terminal_result.data->CheckSession({}, {});
-  if ((check_result.rcm) &&
-      check_result.data.status == AMDomain::client::ClientStatus::OK) {
+  if (snapshot.status == AMDomain::client::ClientStatus::OK) {
     return TerminalNameState::OK;
   }
   return TerminalNameState::Disconnected;
 }
 
 ITokenAnalyzerRuntime::ChannelNameState
-TokenAnalyzerRuntimeAdapter::QueryChannelNameState(const std::string &nickname,
-                                                   const std::string &channel_name,
-                                                   bool allow_new) const {
-  const std::string key = NormalizeNicknameOrDefault_(nickname, CurrentNickname());
+TokenAnalyzerRuntimeAdapter::QueryChannelNameState(
+    const std::string &nickname, const std::string &channel_name,
+    bool allow_new) const {
+  const std::string key =
+      NormalizeNicknameOrDefault_(nickname, CurrentNickname());
   const std::string channel = AMStr::Strip(channel_name);
-  const bool valid_literal = AMDomain::host::HostService::ValidateNickname(channel);
+  const bool valid_literal =
+      AMDomain::host::HostService::ValidateNickname(channel);
   if (channel.empty()) {
-    return allow_new ? ChannelNameState::InvalidNew : ChannelNameState::Nonexistent;
+    return allow_new ? ChannelNameState::InvalidNew
+                     : ChannelNameState::Nonexistent;
   }
 
-  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
-  if (!(terminal_result.rcm) || !terminal_result.data) {
+  const auto snapshot = ResolveTerminalSnapshot_(key);
+  if (!snapshot.found) {
     if (!allow_new) {
       return ChannelNameState::Nonexistent;
     }
-    if (!valid_literal || QueryTerminalNameState(key) == TerminalNameState::Nonexistent) {
+    if (!valid_literal ||
+        QueryTerminalNameState(key) == TerminalNameState::Nonexistent) {
       return ChannelNameState::InvalidNew;
     }
     return ChannelNameState::ValidNew;
   }
 
-  auto check_result =
-      terminal_result.data->CheckChannel({std::optional<std::string>(channel)}, {});
-  if ((check_result.rcm) && check_result.data.exists) {
-    return check_result.data.is_open ? ChannelNameState::OK
-                                     : ChannelNameState::Disconnected;
+  auto channel_it = snapshot.channel_ok.find(channel);
+  if (channel_it != snapshot.channel_ok.end()) {
+    return channel_it->second ? ChannelNameState::OK
+                              : ChannelNameState::Disconnected;
   }
 
   if (!allow_new) {
@@ -137,6 +143,47 @@ TokenAnalyzerRuntimeAdapter::QueryChannelNameState(const std::string &nickname,
   }
   return valid_literal ? ChannelNameState::ValidNew
                        : ChannelNameState::InvalidNew;
+}
+
+TokenAnalyzerRuntimeAdapter::TerminalSnapshot_
+TokenAnalyzerRuntimeAdapter::ResolveTerminalSnapshot_(
+    const std::string &terminal_nickname) const {
+  const std::string key =
+      NormalizeNicknameOrDefault_(terminal_nickname, CurrentNickname());
+  if (key.empty()) {
+    return {};
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  {
+    std::lock_guard<std::mutex> lock(terminal_snapshot_mutex_);
+    auto it = terminal_snapshots_.find(key);
+    if (it != terminal_snapshots_.end() &&
+        (now - it->second.updated_at) <= kTerminalSnapshotTtl) {
+      return it->second;
+    }
+  }
+
+  TerminalSnapshot_ snapshot = {};
+  auto terminal_result = terminal_service_.GetTerminalByNickname(key, false);
+  if ((terminal_result.rcm) && terminal_result.data) {
+    snapshot.found = true;
+    snapshot.status = terminal_result.data->GetSessionState().status;
+    const auto channels = terminal_result.data->GetCachedChannelNames();
+    for (const auto &channel : channels) {
+      auto state_opt = terminal_result.data->GetChannelState(channel);
+      const bool is_ok =
+          !state_opt.has_value() || state_opt->code == ErrorCode::Success;
+      snapshot.channel_ok[channel] = is_ok;
+    }
+  }
+  snapshot.updated_at = now;
+
+  {
+    std::lock_guard<std::mutex> lock(terminal_snapshot_mutex_);
+    terminal_snapshots_[key] = snapshot;
+  }
+  return snapshot;
 }
 
 bool TokenAnalyzerRuntimeAdapter::HasVarDomain(const std::string &zone) const {
@@ -176,8 +223,9 @@ TokenAnalyzerRuntimeAdapter::SubstitutePathLike(const std::string &raw) const {
   return var_interface_service_.SubstitutePathLike(raw);
 }
 
-std::string TokenAnalyzerRuntimeAdapter::BuildPath(
-    AMDomain::client::ClientHandle client, const std::string &raw_path) const {
+std::string
+TokenAnalyzerRuntimeAdapter::BuildPath(AMDomain::client::ClientHandle client,
+                                       const std::string &raw_path) const {
   if (!client) {
     return NormalizePath_(raw_path);
   }
@@ -194,22 +242,23 @@ std::string TokenAnalyzerRuntimeAdapter::BuildPath(
   return AMPath::abspath(input, true, home_dir, cwd);
 }
 
-ECMData<PathInfo> TokenAnalyzerRuntimeAdapter::StatPath(
-    AMDomain::client::ClientHandle client, const std::string &abs_path,
-    int timeout_ms) const {
+ECMData<PathInfo>
+TokenAnalyzerRuntimeAdapter::StatPath(AMDomain::client::ClientHandle client,
+                                      const std::string &abs_path,
+                                      int timeout_ms) const {
   if (!client) {
     return {PathInfo{}, Err(EC::InvalidHandle, __func__, "", "client is null")};
   }
-  auto control =
-      AMDomain::client::ClientControlComponent(nullptr, timeout_ms);
+  auto control = AMDomain::client::ClientControlComponent(nullptr, timeout_ms);
   auto stat_result = client->IOPort().stat({abs_path, false}, control);
   return {stat_result.data.info, stat_result.rcm};
 }
 
-std::string TokenAnalyzerRuntimeAdapter::FormatPath(
-    const std::string &segment, const PathInfo *path_info) const {
-  return style_service_.Format(segment, AMInterface::style::StyleIndex::PathLike,
-                               path_info);
+std::string
+TokenAnalyzerRuntimeAdapter::FormatPath(const std::string &segment,
+                                        const PathInfo *path_info) const {
+  return style_service_.Format(
+      segment, AMInterface::style::StyleIndex::PathLike, path_info);
 }
 
 std::string TokenAnalyzerRuntimeAdapter::ResolveInputHighlightStyle(
@@ -283,7 +332,7 @@ std::string TokenAnalyzerRuntimeAdapter::ResolveInputHighlightStyle(
   case AMTokenType::ShellCmd:
     return style_cfg.common.shell_cmd;
   case AMTokenType::IllegalCommand:
-    return style_cfg.common.illegal_command;
+    return style_cfg.common.unexpected;
   case AMTokenType::Common:
     return style_cfg.common.common;
   default:
@@ -311,4 +360,3 @@ std::string TokenAnalyzerRuntimeAdapter::ResolvePathHighlightStyle(
 }
 
 } // namespace AMInterface::parser
-
