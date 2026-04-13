@@ -272,9 +272,10 @@ std::vector<TASKID> CompletionRuntimeAdapter::ListTaskIds() const {
     }
   };
 
-  add_ids(transfer_pool_.GetPendingTasks());
-  add_ids(transfer_pool_.GetConductingTasks());
-  add_ids(transfer_pool_.GetAllHistoryTasks());
+  add_ids(transfer_service_.GetPendingTasks());
+  add_ids(transfer_service_.GetConductingTasks());
+  add_ids(transfer_service_.GetPausedTasks());
+  add_ids(transfer_service_.GetFinishedTasks());
   std::sort(out.begin(), out.end());
   return out;
 }

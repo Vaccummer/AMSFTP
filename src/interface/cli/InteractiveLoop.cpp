@@ -322,7 +322,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
           managers.interfaces.var_interface_service.Get(),
           managers.interfaces.style_service.Get(),
           managers.application.prompt_profile_manager.Get(),
-          managers.domain.transfer_pool.Get());
+          managers.application.transfer_service.Get());
   token_type_analyzer.SetRuntime(analyzer_runtime);
   AMInterface::parser::AMInputPreprocess input_preprocess(
       managers.interfaces.var_interface_service.Get(), token_type_analyzer);

@@ -95,11 +95,31 @@ struct TaskThreadArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    (void)num;
-    return task_arg_detail::UnsupportedCommand(
-        managers.interfaces.prompt_io_manager,
-        "task thread is deprecated; configure transfer "
-        "pool via runtime settings");
+    if (!managers.domain.transfer_pool.IsReady()) {
+      return Err(EC::InvalidHandle, __func__, "transfer_pool",
+                 "Transfer pool is not initialized");
+    }
+
+    if (num < 0) {
+      const size_t current_num = managers.domain.transfer_pool->ThreadCount();
+      const size_t max_num = managers.domain.transfer_pool->MaxThreadCount();
+      managers.interfaces.prompt_io_manager->FmtPrint(
+          "Current Thread Num : {}    Max Thread Num : {}", current_num,
+          max_num);
+      return OK;
+    }
+
+    if (num <= 0) {
+      return Err(EC::InvalidArg, __func__, std::to_string(num),
+                 "Thread num must be > 0");
+    }
+
+    const size_t old_max = managers.domain.transfer_pool->MaxThreadCount();
+    const size_t new_max =
+        managers.domain.transfer_pool->MaxThreadCount(static_cast<size_t>(num));
+    managers.interfaces.prompt_io_manager->FmtPrint("Max Thread Num {} -> {}",
+                                                    old_max, new_max);
+    return OK;
   }
   void reset() override { num = -1; }
 };
@@ -174,6 +194,3 @@ struct TaskRetryArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
-
-
-

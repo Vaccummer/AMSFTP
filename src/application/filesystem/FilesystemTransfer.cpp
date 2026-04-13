@@ -734,5 +734,84 @@ ECMData<HttpDownloadPlan> FilesystemAppService::BuildHttpDownloadPlan(
   }
   return {std::move(out), final_stat.rcm};
 }
+
+ECMData<TransferClientContainer> FilesystemAppService::RecollectTransferClients(
+    const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info) {
+  TransferClientContainer out = {};
+  if (!task_info) {
+    return {std::move(out),
+            Err(EC::InvalidArg, __func__, "", "Task info is null")};
+  }
+
+  std::unordered_set<std::string> src_hosts = {};
+  std::unordered_set<std::string> dst_hosts = {};
+  {
+    auto dir_tasks = task_info->Core.dir_tasks.lock();
+    for (const auto &task : *dir_tasks) {
+      if (!AMStr::Strip(task.src_host).empty()) {
+        src_hosts.insert(task.src_host);
+      }
+      if (!AMStr::Strip(task.dst_host).empty()) {
+        dst_hosts.insert(task.dst_host);
+      }
+    }
+  }
+  {
+    auto file_tasks = task_info->Core.file_tasks.lock();
+    for (const auto &task : *file_tasks) {
+      if (!AMStr::Strip(task.src_host).empty()) {
+        src_hosts.insert(task.src_host);
+      }
+      if (!AMStr::Strip(task.dst_host).empty()) {
+        dst_hosts.insert(task.dst_host);
+      }
+    }
+  }
+
+  for (const auto &nickname : src_hosts) {
+    auto first = GetTransferClient(nickname);
+    if (!(first.rcm) || !first.data) {
+      out.ReleaseAll();
+      return {std::move(out), first.rcm};
+    }
+    ECM add_rcm = out.AddSrcClient(nickname, first.data);
+    if (!(add_rcm) && add_rcm.code == EC::InvalidArg) {
+      auto second = GetTransferClient(nickname);
+      if (!(second.rcm) || !second.data) {
+        out.ReleaseAll();
+        return {std::move(out), second.rcm};
+      }
+      add_rcm = out.AddSrcClient(nickname, second.data);
+    }
+    if (!(add_rcm)) {
+      out.ReleaseAll();
+      return {std::move(out), add_rcm};
+    }
+  }
+
+  for (const auto &nickname : dst_hosts) {
+    auto first = GetTransferClient(nickname);
+    if (!(first.rcm) || !first.data) {
+      out.ReleaseAll();
+      return {std::move(out), first.rcm};
+    }
+    ECM add_rcm = out.AddDstClient(nickname, first.data);
+    if (!(add_rcm) && add_rcm.code == EC::InvalidArg) {
+      auto second = GetTransferClient(nickname);
+      if (!(second.rcm) || !second.data) {
+        out.ReleaseAll();
+        return {std::move(out), second.rcm};
+      }
+      add_rcm = out.AddDstClient(nickname, second.data);
+    }
+    if (!(add_rcm)) {
+      out.ReleaseAll();
+      return {std::move(out), add_rcm};
+    }
+  }
+
+  return {std::move(out), OK};
+}
+
 } // namespace AMApplication::filesystem
 

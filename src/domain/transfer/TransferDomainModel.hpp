@@ -157,8 +157,10 @@ enum class ControlIntent { Running, Pause, Terminate };
  * @brief Settings payload for `Options.TransferManager`.
  */
 struct TransferManagerArg {
-  int init_thread_num = 1;
-  int max_thread_num = 16;
+  int max_threads = 16;
+  int bar_refresh_interval_ms = 200;
+  int heartbeat_interval_s = 10;
+  int heartbeat_timeout_ms = 5000;
   size_t buffer_size =
       AMDomain::client::ClientService::AMDefaultRemoteBufferSize;
   size_t min_buffer = AMDomain::client::ClientService::AMMinBufferSize;
@@ -276,7 +278,7 @@ struct TransferTask {
   PathType path_type = PathType::FILE;
   bool overwrite = false;
   bool IsFinished = false;
-  ECM rcm = ECM{};
+  std::optional<ECM> rcm = std::nullopt;
   size_t transferred = 0; // Current file transferred size
   TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
   TransferTask(std::string src, std::string dst, std::string src_host,
@@ -560,4 +562,5 @@ using TaskHistory = std::unordered_map<TaskInfo::ID, sptr<TaskInfo>>;
 using ProgressCallback =
     std::function<void(std::shared_ptr<TaskInfo>, bool force)>;
 } // namespace AMDomain::transfer
+
 

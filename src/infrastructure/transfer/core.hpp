@@ -236,6 +236,7 @@ public:
 
   ECM Shutdown(int timeout_ms = 5000) override;
   size_t ThreadCount(size_t new_count = 0) override;
+  size_t MaxThreadCount(size_t new_max = 0) override;
 
   std::unordered_map<size_t, bool> GetThreadIDs() const override;
 
@@ -243,8 +244,6 @@ public:
 
   [[nodiscard]] std::optional<TaskStatus>
   GetStatus(const TaskId &id) const override;
-
-  TaskHandle GetResultTask(const TaskId &id, bool remove = true) override;
 
   [[nodiscard]] TaskHandle GetActiveTask(const TaskId &id) const override;
 
@@ -257,14 +256,9 @@ public:
   [[nodiscard]] std::unordered_map<TaskId, TaskHandle>
   GetConductingTasks() const override;
 
-  [[nodiscard]] std::unordered_map<TaskId, TaskHandle>
-  GetAllHistoryTasks() const override;
-
-  void ClearResults() override;
-  bool RemoveResult(const TaskId &id) override;
-
-  ECM Pause(const TaskId &id, int timeout_ms = 5000) override;
-  ECM Resume(const TaskId &id, int timeout_ms = 5000) override;
+  std::pair<TaskHandle, ECM> StopActive(
+      const TaskId &id, AMDomain::transfer::ActiveStopReason reason,
+      int timeout_ms = 5000) override;
 
   std::pair<TaskHandle, ECM> Terminate(const TaskId &id,
                                        int timeout_ms = 5000) override;
@@ -287,12 +281,31 @@ private:
 
   void WorkerLoop(size_t thread_index);
 
+  size_t ClampMaxThreads_(size_t value) const;
+  size_t ComputeDesiredThreadCount_() const;
+  void EnsureWorkerCapacity_(size_t worker_count);
+  void RecomputeDesiredThreadCount_();
+  bool HasPendingTasksUnsafe_() const;
+
+  void StartHeartbeat_();
+  void StopHeartbeat_();
+  void HeartbeatLoop_();
+  void HeartbeatTick_();
+
   std::unordered_map<TaskId, TaskHandle> GetRegistryCopy() const;
 
   std::atomic<bool> running_{true};
-  std::atomic<size_t> desired_thread_count_{1};
+  std::atomic<size_t> desired_thread_count_{0};
+  std::atomic<size_t> max_thread_count_{1};
 
   std::vector<std::thread> worker_threads_;
+  mutable std::mutex worker_mtx_ = {};
+  std::thread heartbeat_thread_ = {};
+  std::atomic<bool> heartbeat_running_{false};
+  std::atomic<int> heartbeat_interval_s_{0};
+  std::atomic<int> heartbeat_timeout_ms_{100};
+  mutable std::mutex heartbeat_wait_mtx_ = {};
+  std::condition_variable heartbeat_cv_ = {};
 
   mutable std::mutex queue_mtx_;
   std::condition_variable queue_cv_;
@@ -300,8 +313,6 @@ private:
   std::list<TaskId> public_queue_;
 
   mutable AMAtomic<std::unordered_map<TaskId, TaskHandle>> task_registry_;
-
-  mutable AMAtomic<std::unordered_map<TaskId, TaskHandle>> results_;
 
   mutable std::mutex conducting_mtx_;
   std::condition_variable conducting_cv_;
@@ -313,3 +324,5 @@ private:
   std::atomic<bool> is_deconstruct{false};
 };
 } // namespace AMInfra::transfer
+
+

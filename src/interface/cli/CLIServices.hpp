@@ -7,6 +7,7 @@
 #include "application/host/HostAppService.hpp"
 #include "application/log/LoggerAppService.hpp"
 #include "application/terminal/TermAppService.hpp"
+#include "application/transfer/TransferAppService.hpp"
 #include "application/var/VarAppService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
@@ -81,6 +82,8 @@ struct CLIServices : public NonCopyableNonMovable {
         terminal_service = {};
     mutable ServiceHolder<AMApplication::filesystem::FilesystemAppService>
         filesystem_service = {};
+    mutable ServiceHolder<AMApplication::transfer::TransferAppService>
+        transfer_service = {};
     mutable ServiceHolder<AMApplication::prompt::PromptProfileManager>
         prompt_profile_manager = {};
     mutable ServiceHolder<AMApplication::prompt::PromptHistoryManager>

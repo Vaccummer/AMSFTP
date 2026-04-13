@@ -5,6 +5,7 @@
 #include "foundation/core/Enum.hpp"
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 
 namespace AMApplication::filesystem {
@@ -174,5 +175,8 @@ public:
       const std::optional<PathTarget> &dst_target,
       const std::string &suggested_filename,
       const ClientControlComponent &control);
+
+  [[nodiscard]] ECMData<TransferClientContainer> RecollectTransferClients(
+      const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info);
 };
 } // namespace AMApplication::filesystem

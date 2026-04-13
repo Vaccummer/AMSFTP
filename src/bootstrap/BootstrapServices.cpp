@@ -8,10 +8,13 @@
 #include "application/log/LoggerAppService.hpp"
 #include "application/prompt/PromptHistoryManager.hpp"
 #include "application/prompt/PromptProfileManager.hpp"
+#include "application/transfer/TransferAppService.hpp"
 #include "application/terminal/TermAppService.hpp"
 #include "application/var/VarAppService.hpp"
 #include "domain/config/ConfigSchema.hpp"
 #include "domain/transfer/TransferPort.hpp"
+#include "domain/log/LoggerModel.hpp"
+#include "domain/log/LoggerPorts.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/client/ClientInterfaceService.hpp"
 #include "interface/adapters/config/ConfigInterfaceService.hpp"
@@ -54,6 +57,7 @@ struct ConfigSnapshots final {
   AMDomain::prompt::PromptHistoryArg prompt_history_arg = {};
   AMDomain::style::StyleConfigArg style_arg = {};
   AMDomain::transfer::TransferManagerArg transfer_manager_arg = {};
+  AMDomain::log::LogManagerArg log_manager_arg = {};
 };
 
 struct AppServiceBuildState final {
@@ -80,7 +84,10 @@ struct AppServiceBuildState final {
       prompt_profile_history_manager = nullptr;
   std::unique_ptr<AMInterface::prompt::AMPromptIOManager> prompt_io_manager =
       nullptr;
+  std::unique_ptr<AMApplication::log::LoggerAppService> log_manager =
+      nullptr;
   AMDomain::transfer::TransferManagerArg transfer_manager_arg = {};
+  AMDomain::log::LogManagerArg log_manager_arg = {};
 };
 
 struct InterfaceServiceBuildState final {
@@ -94,6 +101,8 @@ struct InterfaceServiceBuildState final {
       nullptr;
   std::unique_ptr<AMDomain::transfer::ITransferPoolPort> transfer_pool =
       nullptr;
+  std::unique_ptr<AMApplication::transfer::TransferAppService>
+      transfer_app_service = nullptr;
   std::unique_ptr<AMInterface::transfer::TransferInterfaceService>
       transfer_service = nullptr;
   std::unique_ptr<AMDomain::signal::SignalMonitor> signal_monitor = nullptr;
@@ -283,6 +292,7 @@ ReadConfigSnapshots_(AMApplication::config::ConfigAppService *service) {
   (void)service->Read(&snapshots.prompt_history_arg);
   (void)service->Read(&snapshots.style_arg);
   (void)service->Read(&snapshots.transfer_manager_arg);
+  (void)service->Read(&snapshots.log_manager_arg);
   return snapshots;
 }
 
@@ -293,6 +303,13 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
                "state is null");
   }
   state->transfer_manager_arg = snapshots.transfer_manager_arg;
+  state->transfer_manager_arg.heartbeat_interval_s =
+      snapshots.client_service_arg.heartbeat_interval_s;
+  state->transfer_manager_arg.heartbeat_timeout_ms =
+      snapshots.client_service_arg.heartbeat_timeout_ms;
+  state->log_manager_arg = snapshots.log_manager_arg;
+  state->log_manager =
+      std::make_unique<AMApplication::log::LoggerAppService>();
   state->host_service = std::make_unique<AMApplication::host::HostAppService>();
   {
     const ECM rcm = state->host_service->Init(snapshots.host_config_arg);
@@ -339,6 +356,90 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
                                    : rcm.error);
     }
   }
+  return OK;
+}
+
+std::filesystem::path ResolveLogPath_(const fs::path &project_root,
+                                  const std::string &configured_path,
+                                  const fs::path &default_relative_path) {
+  std::string raw_path = configured_path;
+  AMStr::VStrip(raw_path);
+  const fs::path resolved =
+      raw_path.empty() ? default_relative_path : fs::path(raw_path);
+  if (resolved.is_absolute()) {
+    return resolved.lexically_normal();
+  }
+  return (project_root / resolved).lexically_normal();
+}
+
+ECM BuildLogManager_(const fs::path &project_root, AppServiceBuildState *state) {
+  if (state == nullptr || state->client_service == nullptr ||
+      state->log_manager == nullptr) {
+    return Err(EC::InvalidHandle, "bootstrap build log manager",
+               "<dependencies>", "required service dependency is null");
+  }
+
+  auto client_writer_owned = AMDomain::log::BuildLoggerWritePort();
+  auto program_writer_owned = AMDomain::log::BuildLoggerWritePort();
+  if (!client_writer_owned || !program_writer_owned) {
+    return Err(EC::InvalidHandle, "bootstrap build log manager", "<writer>",
+               "failed to build logger writer");
+  }
+
+  auto client_writer =
+      std::shared_ptr<AMDomain::log::ILoggerWritePort>(std::move(client_writer_owned));
+  auto program_writer =
+      std::shared_ptr<AMDomain::log::ILoggerWritePort>(std::move(program_writer_owned));
+
+  const fs::path client_path = ResolveLogPath_(
+      project_root, state->log_manager_arg.client_log_path,
+      fs::path("config/log/Client.log"));
+  const fs::path program_path = ResolveLogPath_(
+      project_root, state->log_manager_arg.program_log_path,
+      fs::path("config/log/Program.log"));
+
+  const ECM client_path_rcm = client_writer->SetPath(client_path);
+  if (!client_path_rcm) {
+    return Err(client_path_rcm.code, "bootstrap build log manager",
+               client_path.string(),
+               client_path_rcm.error.empty()
+                   ? std::string(AMStr::ToString(client_path_rcm.code))
+                   : client_path_rcm.error);
+  }
+
+  const ECM program_path_rcm = program_writer->SetPath(program_path);
+  if (!program_path_rcm) {
+    return Err(program_path_rcm.code, "bootstrap build log manager",
+               program_path.string(),
+               program_path_rcm.error.empty()
+                   ? std::string(AMStr::ToString(program_path_rcm.code))
+                   : program_path_rcm.error);
+  }
+
+  if (!state->log_manager->SetLogger(AMDomain::log::LoggerType::Client,
+                                     client_writer)) {
+    return Err(EC::CommonFailure, "bootstrap build log manager",
+               client_path.string(), "failed to register client logger writer");
+  }
+  if (!state->log_manager->SetLogger(AMDomain::log::LoggerType::Program,
+                                     program_writer)) {
+    return Err(EC::CommonFailure, "bootstrap build log manager",
+               program_path.string(), "failed to register program logger writer");
+  }
+
+  (void)state->log_manager->SetTraceLevel(
+      AMDomain::log::LoggerType::Client,
+      state->log_manager_arg.client_trace_level);
+  (void)state->log_manager->SetTraceLevel(
+      AMDomain::log::LoggerType::Program,
+      state->log_manager_arg.program_trace_level);
+
+  const AMDomain::client::TraceCallback trace_callback =
+      state->log_manager->TraceCallbackFunc(AMDomain::log::LoggerType::Client);
+  state->client_service->RegisterMaintainerCallbacks(
+      std::nullopt, trace_callback, std::nullopt, std::nullopt, std::nullopt);
+  state->client_service->RegisterPublicCallbacks(
+      std::nullopt, trace_callback, std::nullopt, std::nullopt, std::nullopt);
   return OK;
 }
 
@@ -575,14 +676,19 @@ ECM BuildTransferInterfaceService_(
     return Err(EC::InvalidHandle, __func__, "", "failed to create transfer pool");
   }
 
+  state->transfer_app_service =
+      std::make_unique<AMApplication::transfer::TransferAppService>(
+          *state->transfer_pool, *app_state.filesystem_service);
+
   state->transfer_service =
       std::make_unique<AMInterface::transfer::TransferInterfaceService>(
-          *app_state.filesystem_service, *app_state.prompt_io_manager,
-          *state->transfer_pool,
+          *app_state.filesystem_service, *state->transfer_app_service,
+          *app_state.prompt_io_manager,
           [](AMDomain::client::amf token) {
             return AMDomain::client::ClientControlComponent(token, -1);
           },
-          app_state.style_service.get());
+          app_state.style_service.get(),
+          app_state.transfer_manager_arg.bar_refresh_interval_ms);
   state->transfer_service->SetDefaultControlToken(task_control_token);
   return OK;
 }
@@ -692,6 +798,8 @@ void BindServicesToCliManagers_(BootstrapServices *runtime,
       std::move(app_state->terminal_service));
   runtime->managers.application.filesystem_service.SetInstance(
       std::move(app_state->filesystem_service));
+  runtime->managers.application.transfer_service.SetInstance(
+      std::move(interface_state->transfer_app_service));
   runtime->managers.application.var_service.SetInstance(
       std::move(app_state->var_service));
   runtime->managers.application.completer_config_manager.SetInstance(
@@ -721,7 +829,7 @@ void BindServicesToCliManagers_(BootstrapServices *runtime,
   runtime->managers.interfaces.prompt_io_manager.SetInstance(
       std::move(app_state->prompt_io_manager));
   runtime->managers.application.log_manager.SetInstance(
-      std::make_unique<AMApplication::log::LoggerAppService>());
+      std::move(app_state->log_manager));
 }
 
 } // namespace
@@ -813,6 +921,12 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
   }
   AppServiceBuildState app_state = std::move(app_state_result.data);
 
+  {
+    const ECM rcm = BuildLogManager_(runtime->root_dir, &app_state);
+    if (!(rcm)) {
+      return {nullptr, rcm};
+    }
+  }
   InterfaceServiceBuildState interface_state = {};
   {
     const ECM rcm = BuildClientInterfaceServices_(
@@ -859,3 +973,4 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 }
 
 } // namespace AMBootstrap
+

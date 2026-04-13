@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/filesystem/FilesystemAppService.hpp"
+#include "application/transfer/TransferAppService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/transfer/TransferPort.hpp"
 #include "interface/prompt/Prompt.hpp"
@@ -75,12 +76,13 @@ class TransferInterfaceService final : public NonCopyableNonMovable {
 public:
   TransferInterfaceService(
       AMApplication::filesystem::FilesystemAppService &filesystem_service,
+      AMApplication::transfer::TransferAppService &transfer_service,
       AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
-      AMDomain::transfer::ITransferPoolPort &transfer_pool,
       std::function<
           AMDomain::client::ClientControlComponent(AMDomain::client::amf)>
           control_component_factory = {},
-      AMInterface::style::AMStyleService *style_service = nullptr);
+      AMInterface::style::AMStyleService *style_service = nullptr,
+      int transfer_bar_refresh_interval_ms = 0);
   ~TransferInterfaceService() override = default;
 
   void SetDefaultControlToken(const AMDomain::client::amf &token);
@@ -141,8 +143,11 @@ private:
 private:
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   AMInterface::prompt::AMPromptIOManager &prompt_io_manager_;
-  AMDomain::transfer::ITransferPoolPort &transfer_pool_;
+  AMApplication::transfer::TransferAppService &transfer_app_service_;
   AMInterface::style::AMStyleService *style_service_ = nullptr;
+  int transfer_bar_refresh_interval_ms_ = 0;
   AMDomain::client::amf default_control_token_ = nullptr;
 };
 } // namespace AMInterface::transfer
+
+
