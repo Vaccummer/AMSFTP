@@ -33,6 +33,12 @@ struct ClientHanleCache {
 
 class ClientAppService : public ClientAppServiceBase {
 public:
+  struct PublicClientInstance {
+    std::string nickname = {};
+    ClientID id = {};
+    ClientHandle client = nullptr;
+  };
+
   struct ConnectHooks {
     BeforeConnectCallback before_connect = {};
     AfterConnectCallback after_connect = {};
@@ -92,10 +98,22 @@ public:
               const std::optional<ClientControlComponent> &control_component =
                   std::nullopt,
               int timeout_ms = 0);
+  [[nodiscard]] ECMData<CheckResult>
+  CheckClientHandle(const ClientHandle &client, bool reconnect, bool update,
+                    const std::optional<ClientControlComponent>
+                        &control_component = std::nullopt,
+                    int timeout_ms = 0) const;
 
   [[nodiscard]] std::map<std::string, ClientHandle> GetClients() const;
+  [[nodiscard]] std::vector<PublicClientInstance>
+  ListPublicClients(const std::vector<std::string> &nicknames = {},
+                    bool case_sensitive = false) const;
+  [[nodiscard]] std::vector<std::string> GetPublicClientNames() const;
 
   ECM RemoveClient(const std::string &nickname);
+  ECM RemovePublicClient(const std::string &nickname, const ClientID &id);
+  ECM RemovePublicClients(
+      const std::vector<std::pair<std::string, ClientID>> &targets);
 
   ECMData<ClientHandle> GetPublicClient(const std::string &nickname);
 
@@ -117,6 +135,8 @@ public:
   [[nodiscard]] static ECMData<std::string>
   GetClientCwd(const ClientHandle &client);
   static ECM SetClientCwd(const ClientHandle &client, const std::string &cwd);
+  [[nodiscard]] static ECMData<bool>
+  IsTransferLeased(const ClientHandle &client);
   [[nodiscard]] static ECM TryLeaseClient(const ClientHandle &client);
   [[nodiscard]] static ECM TryReturnClient(const ClientHandle &client);
   [[nodiscard]] static ECM TryActivateTerminal(const ClientHandle &client);

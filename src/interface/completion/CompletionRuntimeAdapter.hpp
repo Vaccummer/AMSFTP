@@ -42,6 +42,7 @@ public:
 
   [[nodiscard]] std::vector<std::string> ListClientNames() const override;
   [[nodiscard]] std::vector<std::string> ListHostNames() const override;
+  [[nodiscard]] std::vector<std::string> ListPoolNames() const override;
   [[nodiscard]] std::vector<std::string> ListTerminalNames() const override;
   [[nodiscard]] std::vector<std::string>
   ListChannelNames(const std::string &terminal_nickname) const override;

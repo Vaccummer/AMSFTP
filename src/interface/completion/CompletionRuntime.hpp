@@ -51,6 +51,7 @@ public:
 
   [[nodiscard]] virtual std::vector<std::string> ListClientNames() const = 0;
   [[nodiscard]] virtual std::vector<std::string> ListHostNames() const = 0;
+  [[nodiscard]] virtual std::vector<std::string> ListPoolNames() const = 0;
   [[nodiscard]] virtual std::vector<std::string> ListTerminalNames() const = 0;
   [[nodiscard]] virtual std::vector<std::string>
   ListChannelNames(const std::string &terminal_nickname) const = 0;

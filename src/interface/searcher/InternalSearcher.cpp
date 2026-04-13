@@ -446,6 +446,25 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
+  if (HasTarget(ctx, AMCompletionTarget::PoolName)) {
+    std::vector<std::string> names = runtime->ListPoolNames();
+    std::sort(names.begin(), names.end());
+    for (const auto &match : BuildGeneralMatch(names, prefix)) {
+      const std::string &name = names[match.index];
+      AMCompletionCandidate candidate;
+      candidate.insert_text = name;
+      candidate.display =
+          runtime->Format(name, AMInterface::style::StyleIndex::Nickname);
+      candidate.kind = AMCompletionKind::ClientName;
+      candidate.score = match.score_bias;
+      result.items.push_back(std::move(candidate));
+    }
+    if (!result.items.empty()) {
+      SortCandidates(ctx, result.items);
+    }
+    return result;
+  }
+
   if (HasTarget(ctx, AMCompletionTarget::HostNickname)) {
     const bool path_nickname_context = IsPathNicknameContext_(ctx);
     std::string host_prefix = prefix;

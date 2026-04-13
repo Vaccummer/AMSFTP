@@ -29,6 +29,7 @@ enum class AMCommandArgSemantic {
   HostAttr,
   HostAttrValue,
   ClientName,
+  PoolName,
   TaskId,
   VariableName,
   VarZone,

@@ -301,6 +301,66 @@ void BindClientCommands(CommandNode *root, CliArgsPool &args,
 }
 
 /**
+ * @brief Bind pool-related CLI commands.
+ */
+void BindPoolCommands(CommandNode *root, CliArgsPool &args,
+                      CliCommands &commands) {
+  using Sem = AMCommandArgSemantic;
+  if (!root) {
+    return;
+  }
+
+  CommandNode *pool_node = root->AddFunction("pool", "Public pool manager");
+  if (!pool_node) {
+    return;
+  }
+  commands.pool.root = pool_node->app;
+
+  CommandNode *pool_ls_node = pool_node->AddFunction(
+      "ls", "List public-pool clients", args, &CliArgsPool::pool,
+      &CliPoolArgs::ls);
+  commands.pool.ls = pool_ls_node ? pool_ls_node->app : nullptr;
+  if (pool_ls_node) {
+    pool_ls_node->app
+        ->add_option("nicknames", args.pool.ls.request.nicknames,
+                     "Pool nicknames")
+        ->expected(0, -1);
+    pool_ls_node->AddFlag("-d", "--detail", args.pool.ls.request.detail,
+                          "Show full status details");
+    pool_ls_node->AddFlag("-c", "--check", args.pool.ls.request.check,
+                          "Check client status");
+    pool_ls_node->AddPositionalRule(0, Sem::PoolName, true);
+  }
+
+  CommandNode *pool_check_node = pool_node->AddFunction(
+      "check", "Check public-pool client status", args, &CliArgsPool::pool,
+      &CliPoolArgs::check);
+  commands.pool.check = pool_check_node ? pool_check_node->app : nullptr;
+  if (pool_check_node) {
+    pool_check_node->app
+        ->add_option("nicknames", args.pool.check.request.nicknames,
+                     "Pool nicknames")
+        ->expected(0, -1);
+    pool_check_node->AddFlag("-d", "--detail", args.pool.check.request.detail,
+                             "Show client details");
+    pool_check_node->AddPositionalRule(0, Sem::PoolName, true);
+  }
+
+  CommandNode *pool_rm_node = pool_node->AddFunction(
+      "rm", "Remove public-pool clients", args, &CliArgsPool::pool,
+      &CliPoolArgs::rm);
+  commands.pool.remove = pool_rm_node ? pool_rm_node->app : nullptr;
+  if (pool_rm_node) {
+    pool_rm_node->app
+        ->add_option("nickname", args.pool.rm.request.nickname,
+                     "Pool nickname to remove")
+        ->required()
+        ->expected(1, 1);
+    pool_rm_node->AddPositionalRule(0, Sem::PoolName, false);
+  }
+}
+
+/**
  * @brief Bind variable-related CLI commands.
  */
 void BindVarCommands(CommandNode *root, CliArgsPool &args,
@@ -1038,6 +1098,7 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args,
   BindHostCommands(&tree, args, commands);
   BindProfileCommands(&tree, args, commands);
   BindClientCommands(&tree, args, commands);
+  BindPoolCommands(&tree, args, commands);
   BindVarCommands(&tree, args, commands);
   BindFilesystemCommands(&tree, args, commands);
   BindTaskCommands(&tree, args, commands);
@@ -1108,6 +1169,8 @@ void DispatchCliCommands(const CliCommands &cli_commands,
       msg = "Invalid host command";
     } else if (cli_commands.client.root && cli_commands.client.root->parsed()) {
       msg = "Invalid client command";
+    } else if (cli_commands.pool.root && cli_commands.pool.root->parsed()) {
+      msg = "Invalid pool command";
     }
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::InvalidArg, __func__, "", msg};

@@ -60,6 +60,21 @@ struct CheckClientsRequest {
   bool detail = false;
 };
 
+struct ListPoolClientsRequest {
+  std::vector<std::string> nicknames = {};
+  bool check = false;
+  bool detail = false;
+};
+
+struct CheckPoolClientsRequest {
+  std::vector<std::string> nicknames = {};
+  bool detail = false;
+};
+
+struct RemovePoolClientsRequest {
+  std::string nickname = "";
+};
+
 struct SetHostValueRequest {
   std::string nickname = {};
   std::string attrname = {};
@@ -106,6 +121,15 @@ public:
       const std::optional<ClientControlComponent> &component = std::nullopt);
   ECM CheckClients(
       const CheckClientsRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM PoolLs(
+      const ListPoolClientsRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM PoolCheck(
+      const CheckPoolClientsRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM PoolRm(
+      const RemovePoolClientsRequest &request,
       const std::optional<ClientControlComponent> &component = std::nullopt);
   ECM ListPrivateKeys();
   ECM AddHost(const std::string &nickname);

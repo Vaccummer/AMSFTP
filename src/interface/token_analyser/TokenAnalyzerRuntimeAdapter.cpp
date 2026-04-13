@@ -81,6 +81,15 @@ bool TokenAnalyzerRuntimeAdapter::HostExists(
   return host_service_.HostExists(nickname);
 }
 
+bool TokenAnalyzerRuntimeAdapter::PoolExists(
+    const std::string &nickname) const {
+  const std::string key = AMStr::Strip(nickname);
+  if (key.empty()) {
+    return false;
+  }
+  return !client_service_.ListPublicClients({key}, false).empty();
+}
+
 bool TokenAnalyzerRuntimeAdapter::TerminalExists(
     const std::string &nickname) const {
   auto terminal = terminal_service_.GetTerminalByNickname(nickname, false);

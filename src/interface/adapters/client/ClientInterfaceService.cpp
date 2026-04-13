@@ -10,11 +10,13 @@
 #include <atomic>
 #include <chrono>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -163,6 +165,49 @@ std::string BuildConnectSuccessLine_(const AMStyleService &style_service,
       style_service.Format(nickname, AMInterface::style::StyleIndex::Nickname);
   return AMStr::fmt("✅ Connect to {} server : {}", styled_protocol,
                     styled_nickname);
+}
+
+std::string BuildEndpointRaw_(const std::string &username,
+                              const std::string &hostname,
+                              const std::string &port) {
+  if (hostname.empty()) {
+    return "<unknown>";
+  }
+  if (username.empty()) {
+    return AMStr::fmt("{}:{}", hostname, port);
+  }
+  return AMStr::fmt("{}@{}:{}", username, hostname, port);
+}
+
+std::string BuildEndpointStyled_(const AMStyleService &style_service,
+                                 const std::string &username,
+                                 const std::string &hostname,
+                                 const std::string &port) {
+  const std::string host = AMStr::Strip(hostname);
+  if (host.empty()) {
+    return "<unknown>";
+  }
+  const std::string styled_host =
+      style_service.Format(host, AMInterface::style::StyleIndex::Nickname);
+  const std::string styled_port =
+      style_service.Format(port, AMInterface::style::StyleIndex::Number);
+  if (AMStr::Strip(username).empty()) {
+    return AMStr::fmt("{}:{}", styled_host, styled_port);
+  }
+  const std::string styled_user =
+      style_service.Format(username, AMInterface::style::StyleIndex::Username);
+  const std::string styled_at =
+      style_service.Format("@", AMInterface::style::StyleIndex::AtSign);
+  return AMStr::fmt("{}{}{}:{}", styled_user, styled_at, styled_host,
+                    styled_port);
+}
+
+std::string PadStyledCellRight_(const std::string &styled_text,
+                                size_t raw_display_width, size_t target_width) {
+  if (target_width <= raw_display_width) {
+    return styled_text;
+  }
+  return styled_text + std::string(target_width - raw_display_width, ' ');
 }
 
 void FlushPromptOutputIfSafe_(AMPromptIOManager &prompt_io_manager) {
@@ -395,6 +440,32 @@ ClientStatusFormat BuildClientStatusFormat_(
   return format;
 }
 
+std::vector<size_t> ParseOrderNumbers_(const std::string &raw, bool *ok) {
+  if (ok) {
+    *ok = false;
+  }
+  std::string normalized = raw;
+  std::replace(normalized.begin(), normalized.end(), ',', ' ');
+  std::istringstream iss(normalized);
+  std::vector<size_t> out = {};
+  std::unordered_set<size_t> seen = {};
+  std::string token = {};
+  while (iss >> token) {
+    int64_t value = -1;
+    if (!AMStr::GetNumber(token, &value) || value < 0) {
+      return {};
+    }
+    const size_t order = static_cast<size_t>(value);
+    if (seen.insert(order).second) {
+      out.push_back(order);
+    }
+  }
+  if (ok) {
+    *ok = !out.empty();
+  }
+  return out;
+}
+
 namespace render {
 void PrintClientStatusLine(AMPromptIOManager &prompt,
                            const std::string &nickname,
@@ -517,6 +588,70 @@ void PrintClientDetail(
     const ECM rcm = check_result.has_value() ? check_result->rcm
                                              : Err(EC::ClientNotFound, __func__,
                                                    "", "Client not found");
+    print_field("status", (rcm) ? "✅" : "❌");
+  }
+  for (const auto &field : fields) {
+    print_field(field.first, field.second);
+  }
+  prompt.Print("");
+}
+
+void PrintPoolClientDetail(
+    AMPromptIOManager &prompt, const std::string &nickname,
+    const std::string &id, bool is_leased, const ClientHandle &client,
+    const std::optional<ECMData<AMDomain::filesystem::CheckResult>>
+        &check_result,
+    bool include_status) {
+  if (!client) {
+    prompt.Print(AMStr::fmt("\\[{}]", nickname));
+    if (include_status) {
+      prompt.Print("status    :  ❌");
+    }
+    prompt.Print(AMStr::fmt("id        :  {}", id));
+    prompt.Print(AMStr::fmt("is_leased :  {}", is_leased ? "true" : "false"));
+    prompt.Print("");
+    return;
+  }
+
+  const auto request = client->ConfigPort().GetRequest();
+  const auto metadata_opt = ClientAppService::GetClientMetadata(client);
+  const ClientMetaData metadata =
+      metadata_opt.has_value() ? *metadata_opt : ClientMetaData{};
+
+  const auto request_fields = request.GetStrDict();
+  const auto metadata_fields = metadata.GetStrDict();
+
+  std::vector<std::pair<std::string, std::string>> fields = {};
+  fields.reserve(request_fields.size() + metadata_fields.size() + 2);
+  fields.push_back({"id", id});
+  fields.push_back({"is_leased", is_leased ? "true" : "false"});
+  for (const auto &item : request_fields) {
+    if (item.first == "nickname") {
+      continue;
+    }
+    fields.push_back(item);
+  }
+  fields.insert(fields.end(), metadata_fields.begin(), metadata_fields.end());
+
+  size_t width = include_status ? std::string("status").size() : 0;
+  for (const auto &field : fields) {
+    width = std::max(width, field.first.size());
+  }
+
+  auto print_field = [&prompt, width](const std::string &name,
+                                      const std::string &value) {
+    std::ostringstream line;
+    line << std::left << std::setw(static_cast<int>(width)) << name
+         << " :  " << value;
+    prompt.Print(line.str());
+  };
+
+  prompt.Print(AMStr::fmt("\\[{}]", nickname));
+  if (include_status) {
+    const ECM rcm = check_result.has_value()
+                        ? check_result->rcm
+                        : Err(EC::ClientNotFound, __func__, nickname,
+                              "Client not found");
     print_field("status", (rcm) ? "✅" : "❌");
   }
   for (const auto &field : fields) {
@@ -792,8 +927,8 @@ struct HostListRow {
 HostListRow BuildHostListRow_(const std::string &nickname,
                               const HostConfig &entry) {
   HostListRow row = {};
-  row.protocol =
-      AMStr::fmt("[{}]", AMStr::uppercase(AMStr::ToString(entry.request.protocol)));
+  row.protocol = AMStr::fmt(
+      "[{}]", AMStr::uppercase(AMStr::ToString(entry.request.protocol)));
   row.nickname = nickname;
   row.username = entry.request.username;
   row.port = std::to_string(entry.request.port);
@@ -801,7 +936,8 @@ HostListRow BuildHostListRow_(const std::string &nickname,
   return row;
 }
 
-void PrintHostListTable_(AMPromptIOManager &prompt, AMStyleService &style_service,
+void PrintHostListTable_(AMPromptIOManager &prompt,
+                         AMStyleService &style_service,
                          const std::vector<HostListRow> &rows) {
   if (rows.empty()) {
     prompt.Print("");
@@ -834,18 +970,22 @@ void PrintHostListTable_(AMPromptIOManager &prompt, AMStyleService &style_servic
         AMStr::PadRightUtf8(row.hostname, hostname_width);
 
     if (is_header) {
-      prompt.Print(AMStr::fmt("{}  {}  {}  {}  {}", protocol, nickname, username,
-                              port, hostname));
+      prompt.Print(AMStr::fmt("{}  {}  {}  {}  {}", protocol, nickname,
+                              username, port, hostname));
       return;
     }
 
     prompt.Print(AMStr::fmt(
         "{}  {}  {}  {}  {}",
-        style_service.Format(protocol, AMInterface::style::StyleIndex::Protocol),
-        style_service.Format(nickname, AMInterface::style::StyleIndex::Nickname),
-        style_service.Format(username, AMInterface::style::StyleIndex::Username),
+        style_service.Format(protocol,
+                             AMInterface::style::StyleIndex::Protocol),
+        style_service.Format(nickname,
+                             AMInterface::style::StyleIndex::Nickname),
+        style_service.Format(username,
+                             AMInterface::style::StyleIndex::Username),
         style_service.Format(port, AMInterface::style::StyleIndex::Number),
-        style_service.Format(hostname, AMInterface::style::StyleIndex::Nickname)));
+        style_service.Format(hostname,
+                             AMInterface::style::StyleIndex::Nickname)));
   };
 
   print_row({"Protocol", "Nickname", "Username", "Port", "Hostname"}, true);
@@ -1721,6 +1861,8 @@ ECM ClientInterfaceService::RemoveClients(
     std::string protocol = {};
     std::string nickname = {};
     std::string endpoint = {};
+    std::string styled_endpoint = {};
+    size_t endpoint_width = 0;
     bool healthy = false;
     std::string error = {};
   };
@@ -1754,7 +1896,8 @@ ECM ClientInterfaceService::RemoveClients(
     auto client_result = client_service_.GetClient(resolved, true);
     if (!(client_result.rcm) || !client_result.data) {
       preview_entries.push_back(RemovePreviewEntry{
-          "[UNKNOWN]", resolved, "<unknown>", false, "Connection lost"});
+          "[UNKNOWN]", resolved, "<unknown>", "<unknown>",
+          std::string("<unknown>").size(), false, "Connection lost"});
       continue;
     }
     const ClientHandle &client = client_result.data;
@@ -1762,10 +1905,10 @@ ECM ClientInterfaceService::RemoveClients(
     const auto state = client->ConfigPort().GetState();
     const std::string username = AMStr::Strip(request_info.username);
     const std::string host = AMStr::Strip(request_info.hostname);
-    const std::string endpoint =
-        username.empty()
-            ? AMStr::fmt("{}:{}", host, request_info.port)
-            : AMStr::fmt("{}@{}:{}", username, host, request_info.port);
+    const std::string port = std::to_string(request_info.port);
+    const std::string endpoint = BuildEndpointRaw_(username, host, port);
+    const std::string styled_endpoint =
+        BuildEndpointStyled_(style_service_, username, host, port);
     const std::string protocol = AMStr::fmt(
         "[{}]", AMStr::uppercase(AMStr::ToString(request_info.protocol)));
     const bool healthy =
@@ -1775,8 +1918,9 @@ ECM ClientInterfaceService::RemoveClients(
     if (!healthy && error_text.empty()) {
       error_text = "Connection lost";
     }
-    preview_entries.push_back(
-        RemovePreviewEntry{protocol, resolved, endpoint, healthy, error_text});
+    preview_entries.push_back(RemovePreviewEntry{
+        protocol, resolved, endpoint, styled_endpoint,
+        AMStr::DisplayWidthUtf8(endpoint), healthy, error_text});
   }
 
   if (preview_entries.empty()) {
@@ -1791,7 +1935,7 @@ ECM ClientInterfaceService::RemoveClients(
   for (const auto &entry : preview_entries) {
     protocol_width = std::max(protocol_width, entry.protocol.size());
     nickname_width = std::max(nickname_width, entry.nickname.size());
-    endpoint_width = std::max(endpoint_width, entry.endpoint.size());
+    endpoint_width = std::max(endpoint_width, entry.endpoint_width);
   }
 
   for (const auto &entry : preview_entries) {
@@ -1803,14 +1947,14 @@ ECM ClientInterfaceService::RemoveClients(
                       : AMInterface::style::StyleIndex::DisconnectedNickname;
     const std::string styled_nickname = style_service_.Format(
         AMStr::PadRightUtf8(entry.nickname, nickname_width), nickname_style);
-    const std::string padded_endpoint =
-        AMStr::PadRightUtf8(entry.endpoint, endpoint_width);
+    const std::string styled_endpoint = PadStyledCellRight_(
+        entry.styled_endpoint, entry.endpoint_width, endpoint_width);
     if (entry.healthy) {
       prompt_io_manager_.Print(AMStr::fmt("{} {} {} ✅", styled_protocol,
-                                          styled_nickname, padded_endpoint));
+                                          styled_nickname, styled_endpoint));
     } else {
       prompt_io_manager_.Print(AMStr::fmt("{} {} {} ❌ {}", styled_protocol,
-                                          styled_nickname, padded_endpoint,
+                                          styled_nickname, styled_endpoint,
                                           entry.error));
     }
   }
@@ -2047,6 +2191,320 @@ ECM ClientInterfaceService::CheckClients(
   return status;
 }
 
+ECM ClientInterfaceService::PoolLs(
+    const ListPoolClientsRequest &request,
+    const std::optional<ClientControlComponent> &component) {
+  constexpr const char *kOp = "pool_ls";
+  const ClientControlComponent control = ResolveControl_(component);
+  if (control.IsInterrupted()) {
+    return Err(EC::Terminate, kOp, "<control>", "Interrupted by user");
+  }
+
+  ECM status = OK;
+  const std::vector<std::string> public_names =
+      client_service_.GetPublicClientNames();
+  std::vector<std::string> resolved_names = {};
+
+  if (!request.nicknames.empty()) {
+    const std::vector<std::string> targets =
+        AMStr::UniqueTargetsKeepOrder(request.nicknames);
+    for (const auto &target : targets) {
+      const std::string stripped = AMStr::Strip(target);
+      if (stripped.empty()) {
+        continue;
+      }
+      const std::string resolved =
+          FindClientNicknameCaseInsensitive_(public_names, stripped);
+      if (resolved.empty()) {
+        const ECM rcm =
+            Err(EC::ClientNotFound, kOp, stripped, "Public pool client not found");
+        prompt_io_manager_.ErrorFormat(rcm);
+        status = MergeStatus_(status, rcm);
+        continue;
+      }
+      if (std::find(resolved_names.begin(), resolved_names.end(), resolved) ==
+          resolved_names.end()) {
+        resolved_names.push_back(resolved);
+      }
+    }
+    if (resolved_names.empty()) {
+      return (status)
+                 ? Err(EC::ClientNotFound, kOp, "<targets>",
+                       "No public pool client matched")
+                 : status;
+    }
+  }
+
+  const std::vector<ClientAppService::PublicClientInstance> instances =
+      client_service_.ListPublicClients(resolved_names, false);
+  if (instances.empty()) {
+    if (!(status)) {
+      return status;
+    }
+    return Err(EC::ClientNotFound, kOp, "<targets>",
+               "No public pool client to list");
+  }
+
+  struct PoolRow {
+    std::string id = {};
+    std::string protocol = {};
+    std::string nickname = {};
+    bool is_leased = false;
+    ClientHandle client = nullptr;
+    std::optional<ECMData<AMDomain::filesystem::CheckResult>> checked =
+        std::nullopt;
+    ECM status_rcm = OK;
+  };
+
+  std::vector<PoolRow> rows = {};
+  rows.reserve(instances.size());
+  for (const auto &instance : instances) {
+    if (control.IsInterrupted()) {
+      return Err(EC::Terminate, kOp, "<control>", "Interrupted by user");
+    }
+    PoolRow row = {};
+    row.id = instance.id;
+    row.nickname = instance.nickname;
+    row.client = instance.client;
+    row.protocol = instance.client
+                       ? AMStr::uppercase(AMStr::ToString(
+                             instance.client->ConfigPort().GetProtocol()))
+                       : std::string("UNKNOWN");
+
+    const auto leased_result = ClientAppService::IsTransferLeased(instance.client);
+    if ((leased_result.rcm)) {
+      row.is_leased = leased_result.data;
+    } else {
+      status = MergeStatus_(status, leased_result.rcm);
+      row.is_leased = false;
+    }
+
+    if (request.check) {
+      row.checked =
+          client_service_.CheckClientHandle(instance.client, false, true, control);
+      row.status_rcm = row.checked->rcm;
+      status = MergeStatus_(status, row.status_rcm);
+    }
+
+    rows.push_back(std::move(row));
+  }
+
+  std::sort(rows.begin(), rows.end(), [](const PoolRow &lhs, const PoolRow &rhs) {
+    if (lhs.nickname != rhs.nickname) {
+      return lhs.nickname < rhs.nickname;
+    }
+    return lhs.id < rhs.id;
+  });
+
+  if (request.detail) {
+    for (const auto &row : rows) {
+      render::PrintPoolClientDetail(prompt_io_manager_, row.nickname, row.id,
+                                    row.is_leased, row.client, row.checked,
+                                    request.check);
+    }
+    return status;
+  }
+
+  size_t id_width = std::string("ID").size();
+  size_t protocol_width = std::string("Protocol").size();
+  size_t nickname_width = std::string("Nickname").size();
+  size_t leased_width = std::string("IsLeased").size();
+  for (const auto &row : rows) {
+    id_width = std::max(id_width, row.id.size());
+    protocol_width = std::max(protocol_width, row.protocol.size());
+    nickname_width = std::max(nickname_width, row.nickname.size());
+    leased_width = std::max(leased_width, std::string(row.is_leased ? "true" : "false").size());
+  }
+
+  std::ostringstream header;
+  header << AMStr::PadRightUtf8("ID", id_width) << "  "
+         << AMStr::PadRightUtf8("Protocol", protocol_width) << "  "
+         << AMStr::PadRightUtf8("Nickname", nickname_width) << "  "
+         << AMStr::PadRightUtf8("IsLeased", leased_width);
+  if (request.check) {
+    header << "  Status";
+  }
+  prompt_io_manager_.Print(header.str());
+
+  for (const auto &row : rows) {
+    const std::string styled_protocol =
+        style_service_.Format(AMStr::PadRightUtf8(row.protocol, protocol_width),
+                              AMInterface::style::StyleIndex::Protocol);
+    const std::string styled_nickname =
+        style_service_.Format(AMStr::PadRightUtf8(row.nickname, nickname_width),
+                              ResolveClientNicknameStyleByState_(row.client));
+    std::ostringstream line;
+    line << AMStr::PadRightUtf8(row.id, id_width) << "  " << styled_protocol
+         << "  " << styled_nickname << "  "
+         << AMStr::PadRightUtf8(row.is_leased ? "true" : "false", leased_width);
+    if (request.check) {
+      line << "  " << ((row.status_rcm) ? "✅" : "❌");
+    }
+    prompt_io_manager_.Print(line.str());
+  }
+  return status;
+}
+
+ECM ClientInterfaceService::PoolCheck(
+    const CheckPoolClientsRequest &request,
+    const std::optional<ClientControlComponent> &component) {
+  ListPoolClientsRequest ls_request = {};
+  ls_request.nicknames = request.nicknames;
+  ls_request.check = true;
+  ls_request.detail = request.detail;
+  return PoolLs(ls_request, component);
+}
+
+ECM ClientInterfaceService::PoolRm(
+    const RemovePoolClientsRequest &request,
+    const std::optional<ClientControlComponent> &component) {
+  constexpr const char *kOp = "pool_rm";
+  const std::string nickname = AMStr::Strip(request.nickname);
+  if (nickname.empty()) {
+    return Err(EC::InvalidArg, kOp, "<nickname>", "Pool nickname is empty");
+  }
+  const ClientControlComponent control = ResolveControl_(component);
+  if (control.IsInterrupted()) {
+    return Err(EC::Terminate, kOp, "<control>", "Interrupted by user");
+  }
+
+  const std::vector<std::string> public_names =
+      client_service_.GetPublicClientNames();
+  const std::string resolved =
+      FindClientNicknameCaseInsensitive_(public_names, nickname);
+  if (resolved.empty()) {
+    return Err(EC::ClientNotFound, kOp, nickname, "Public pool client not found");
+  }
+
+  std::vector<ClientAppService::PublicClientInstance> instances =
+      client_service_.ListPublicClients({resolved}, true);
+  if (instances.empty()) {
+    return Err(EC::ClientNotFound, kOp, resolved, "Public pool client not found");
+  }
+
+  struct RemoveRow {
+    std::string id = {};
+    std::string protocol = {};
+    std::string nickname = {};
+    bool is_leased = false;
+    size_t order = std::numeric_limits<size_t>::max();
+    ECM status_rcm = OK;
+    ClientHandle client = nullptr;
+  };
+
+  std::vector<RemoveRow> rows = {};
+  rows.reserve(instances.size());
+  for (const auto &instance : instances) {
+    RemoveRow row = {};
+    row.id = instance.id;
+    row.nickname = instance.nickname;
+    row.client = instance.client;
+    row.protocol = instance.client
+                       ? AMStr::uppercase(AMStr::ToString(
+                             instance.client->ConfigPort().GetProtocol()))
+                       : std::string("UNKNOWN");
+
+    const auto leased_result = ClientAppService::IsTransferLeased(instance.client);
+    row.is_leased = (leased_result.rcm) ? leased_result.data : false;
+    row.status_rcm =
+        client_service_.CheckClientHandle(instance.client, false, true, control).rcm;
+    rows.push_back(std::move(row));
+  }
+
+  std::sort(rows.begin(), rows.end(), [](const RemoveRow &lhs, const RemoveRow &rhs) {
+    if (lhs.nickname != rhs.nickname) {
+      return lhs.nickname < rhs.nickname;
+    }
+    return lhs.id < rhs.id;
+  });
+
+  size_t order_counter = 0;
+  std::unordered_map<size_t, size_t> order_to_index = {};
+  for (size_t idx = 0; idx < rows.size(); ++idx) {
+    if (rows[idx].is_leased) {
+      continue;
+    }
+    rows[idx].order = order_counter;
+    order_to_index[order_counter] = idx;
+    ++order_counter;
+  }
+  if (order_to_index.empty()) {
+    return Err(EC::PathUsingByOthers, kOp, resolved,
+               "All public pool clients are leased");
+  }
+
+  size_t order_width = std::string("Order").size();
+  size_t id_width = std::string("ID").size();
+  size_t protocol_width = std::string("Protocol").size();
+  size_t nickname_width = std::string("Nickname").size();
+  size_t leased_width = std::string("IsLeased").size();
+  for (const auto &row : rows) {
+    if (row.order != std::numeric_limits<size_t>::max()) {
+      order_width = std::max(order_width, AMStr::ToString(row.order).size());
+    }
+    id_width = std::max(id_width, row.id.size());
+    protocol_width = std::max(protocol_width, row.protocol.size());
+    nickname_width = std::max(nickname_width, row.nickname.size());
+    leased_width = std::max(leased_width, std::string(row.is_leased ? "true" : "false").size());
+  }
+
+  std::ostringstream header;
+  header << AMStr::PadRightUtf8("Order", order_width) << "  "
+         << AMStr::PadRightUtf8("ID", id_width) << "  "
+         << AMStr::PadRightUtf8("Protocol", protocol_width) << "  "
+         << AMStr::PadRightUtf8("Nickname", nickname_width) << "  "
+         << AMStr::PadRightUtf8("IsLeased", leased_width) << "  Status";
+  prompt_io_manager_.Print(header.str());
+
+  for (const auto &row : rows) {
+    const std::string order_text =
+        row.order == std::numeric_limits<size_t>::max() ? "" : AMStr::ToString(row.order);
+    const std::string styled_protocol =
+        style_service_.Format(AMStr::PadRightUtf8(row.protocol, protocol_width),
+                              AMInterface::style::StyleIndex::Protocol);
+    const std::string styled_nickname =
+        style_service_.Format(AMStr::PadRightUtf8(row.nickname, nickname_width),
+                              ResolveClientNicknameStyleByState_(row.client));
+    std::ostringstream line;
+    line << AMStr::PadRightUtf8(order_text, order_width) << "  "
+         << AMStr::PadRightUtf8(row.id, id_width) << "  " << styled_protocol
+         << "  " << styled_nickname << "  "
+         << AMStr::PadRightUtf8(row.is_leased ? "true" : "false", leased_width)
+         << "  " << ((row.status_rcm) ? "✅" : "❌");
+    prompt_io_manager_.Print(line.str());
+  }
+
+  auto input = prompt_io_manager_.Prompt(
+      "Type in order num of clients you want to remove: ");
+  if (!input.has_value()) {
+    prompt_io_manager_.PrintOperationAbort();
+    return OK;
+  }
+
+  bool parsed_ok = false;
+  const std::vector<size_t> selected_orders = ParseOrderNumbers_(*input, &parsed_ok);
+  if (!parsed_ok) {
+    return Err(EC::InvalidArg, kOp, resolved, "Invalid order numbers");
+  }
+
+  std::vector<std::pair<std::string, AMDomain::client::ClientID>> remove_targets = {};
+  remove_targets.reserve(selected_orders.size());
+  for (const size_t order : selected_orders) {
+    auto order_it = order_to_index.find(order);
+    if (order_it == order_to_index.end()) {
+      return Err(EC::InvalidArg, kOp, AMStr::ToString(order), "Order not removable");
+    }
+    const auto &row = rows[order_it->second];
+    remove_targets.push_back({row.nickname, row.id});
+  }
+
+  const ECM remove_rcm = client_service_.RemovePublicClients(remove_targets);
+  if (!(remove_rcm)) {
+    prompt_io_manager_.ErrorFormat(remove_rcm);
+  }
+  return remove_rcm;
+}
+
 ECM ClientInterfaceService::ListPrivateKeys() {
   const std::vector<std::string> keys = host_config_manager_.PrivateKeys();
   prompt_io_manager_.Print("\\[Private Keys]");
@@ -2166,6 +2624,7 @@ ECM ClientInterfaceService::RenameHost(const std::string &old_nickname,
 
 ECM ClientInterfaceService::RemoveHosts(
     const std::vector<std::string> &nicknames) {
+  constexpr const char *kOp = "remove_hosts";
   const std::vector<std::string> uniq_targets =
       hostui::DedupTargets_(nicknames);
   if (uniq_targets.empty()) {
@@ -2208,19 +2667,75 @@ ECM ClientInterfaceService::RemoveHosts(
     return rcm;
   }
 
-  std::string listing = "";
-  for (size_t i = 0; i < valid_targets.size(); ++i) {
-    if (i > 0) {
-      listing += ", ";
+  struct HostRemovePreviewEntry {
+    std::string protocol = {};
+    std::string nickname = {};
+    std::string endpoint = {};
+    std::string styled_endpoint = {};
+    size_t endpoint_width = 0;
+    AMInterface::style::StyleIndex nickname_style =
+        AMInterface::style::StyleIndex::Nickname;
+  };
+  std::vector<HostRemovePreviewEntry> preview_entries = {};
+  preview_entries.reserve(valid_targets.size());
+
+  for (const auto &name : valid_targets) {
+    HostConfig host_cfg = {};
+    const ECM cfg_rcm = hostui::ResolveHostConfig_(
+        host_config_manager_, NormalizeNickname(name), &host_cfg);
+    if (!(cfg_rcm)) {
+      prompt_io_manager_.ErrorFormat(cfg_rcm);
+      rcm = cfg_rcm;
+      continue;
     }
-    listing += valid_targets[i];
+    const std::string username = AMStr::Strip(host_cfg.request.username);
+    const std::string hostname = AMStr::Strip(host_cfg.request.hostname);
+    const std::string port = std::to_string(host_cfg.request.port);
+    const std::string endpoint = BuildEndpointRaw_(username, hostname, port);
+    const std::string styled_endpoint =
+        BuildEndpointStyled_(style_service_, username, hostname, port);
+    AMInterface::style::StyleIndex nickname_style =
+        AMInterface::style::StyleIndex::UnestablishedNickname;
+    auto client_result = client_service_.GetClient(name, true);
+    if ((client_result.rcm) && client_result.data) {
+      nickname_style = ResolveClientNicknameStyleByState_(client_result.data);
+    }
+    preview_entries.push_back(HostRemovePreviewEntry{
+        AMStr::fmt("[{}]", AMStr::uppercase(
+                               AMStr::ToString(host_cfg.request.protocol))),
+        name, endpoint, styled_endpoint, AMStr::DisplayWidthUtf8(endpoint),
+        nickname_style});
+  }
+
+  if (preview_entries.empty()) {
+    return rcm;
+  }
+
+  size_t protocol_width = 0;
+  size_t nickname_width = 0;
+  size_t endpoint_width = 0;
+  for (const auto &entry : preview_entries) {
+    protocol_width = std::max(protocol_width, entry.protocol.size());
+    nickname_width = std::max(nickname_width, entry.nickname.size());
+    endpoint_width = std::max(endpoint_width, entry.endpoint_width);
+  }
+
+  for (const auto &entry : preview_entries) {
+    const std::string styled_protocol = style_service_.Format(
+        AMStr::PadRightUtf8(entry.protocol, protocol_width),
+        AMInterface::style::StyleIndex::Protocol);
+    const std::string styled_nickname = style_service_.Format(
+        AMStr::PadRightUtf8(entry.nickname, nickname_width),
+        entry.nickname_style);
+    const std::string styled_endpoint = PadStyledCellRight_(
+        entry.styled_endpoint, entry.endpoint_width, endpoint_width);
+    prompt_io_manager_.Print(AMStr::fmt("{} {} {}", styled_protocol,
+                                        styled_nickname, styled_endpoint));
   }
 
   bool canceled = false;
   const bool confirmed = prompt_io_manager_.PromptYesNo(
-      AMStr::fmt("Delete {} host(s): {} ? (y/N): ", valid_targets.size(),
-                 listing),
-      &canceled);
+      "Are you sure to remove these hosts? (y/n) :", &canceled);
   if (canceled || !confirmed) {
     prompt_io_manager_.PrintOperationAbort();
     return OK;
@@ -2260,12 +2775,13 @@ ECM ClientInterfaceService::RemoveHosts(
     rcm = host_config_manager_.DelHost(normalized);
     if (!(rcm)) {
       prompt_io_manager_.ErrorFormat(rcm);
-      return rcm;
+      return Err(rcm.code, kOp, normalized, rcm.error, rcm.raw_error);
     }
     const ECM remove_client_rcm = client_service_.RemoveClient(normalized);
     if (!(remove_client_rcm) && remove_client_rcm.code != EC::ClientNotFound) {
       prompt_io_manager_.ErrorFormat(remove_client_rcm);
-      return remove_client_rcm;
+      return Err(remove_client_rcm.code, kOp, normalized,
+                 remove_client_rcm.error, remove_client_rcm.raw_error);
     }
   }
   return OK;
@@ -2502,3 +3018,6 @@ ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
   return OK;
 }
 } // namespace AMInterface::client
+
+
+

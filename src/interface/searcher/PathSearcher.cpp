@@ -477,6 +477,7 @@ std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
       std::make_shared<AMInterface::searcher::AMInternalSearchEngine>(runtime);
   out.push_back(
       {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
+        AMCompletionTarget::PoolName,
         AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
         AMCompletionTarget::TaskId, AMCompletionTarget::VarZone,
         AMCompletionTarget::TerminalName,

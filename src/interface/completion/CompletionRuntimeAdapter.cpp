@@ -83,6 +83,10 @@ std::vector<std::string> CompletionRuntimeAdapter::ListHostNames() const {
   return host_service_.ListNames();
 }
 
+std::vector<std::string> CompletionRuntimeAdapter::ListPoolNames() const {
+  return client_service_.GetPublicClientNames();
+}
+
 std::vector<std::string> CompletionRuntimeAdapter::ListTerminalNames() const {
   return terminal_service_.ListTerminalNames();
 }
