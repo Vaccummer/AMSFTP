@@ -154,6 +154,8 @@ private:
   [[nodiscard]] std::pair<ClientCallbacks, std::vector<std::string>>
   SnapshotCreateContext_(bool for_public_pool) const;
   [[nodiscard]] ConnectHooks SnapshotConnectHooks_() const;
+  [[nodiscard]] ClientControlComponent BuildCheckControl_(
+      int timeout_ms = -1) const;
 
 private:
   mutable AMAtomic<ClientHanleCache> runtime_clients_ = {};

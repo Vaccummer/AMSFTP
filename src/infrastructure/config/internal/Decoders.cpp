@@ -729,6 +729,8 @@ public:
                            &typed->heartbeat_interval_s);
     (void)AMJson::QueryKey(options, {"ClientManager", "heartbeat_timeout_ms"},
                            &typed->heartbeat_timeout_ms);
+    (void)AMJson::QueryKey(options, {"ClientManager", "check_timeout_ms"},
+                           &typed->check_timeout_ms);
     return true;
   }
 
@@ -746,6 +748,8 @@ public:
         typed->heartbeat_interval_s;
     (*root)["Options"]["ClientManager"]["heartbeat_timeout_ms"] =
         typed->heartbeat_timeout_ms;
+    (*root)["Options"]["ClientManager"]["check_timeout_ms"] =
+        typed->check_timeout_ms;
     return true;
   }
 

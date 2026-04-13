@@ -111,5 +111,6 @@ struct TraceInfo {
 struct ClientServiceArg {
   int heartbeat_interval_s = 60;
   int heartbeat_timeout_ms = 100;
+  int check_timeout_ms = 2000;
 };
 } // namespace AMDomain::client

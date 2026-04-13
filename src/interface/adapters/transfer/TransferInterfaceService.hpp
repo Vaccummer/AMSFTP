@@ -133,7 +133,9 @@ private:
   BuildTaskInfo_(const TransferRunArg &arg,
                  const AMDomain::client::ClientControlComponent &control,
                  std::shared_ptr<AMDomain::transfer::TaskInfo> *out_task_info,
-                 std::vector<ECM> *warnings) const;
+                 std::vector<ECM> *warnings,
+                 const std::function<void(const std::string &)> &stage_reporter =
+                     {}) const;
   [[nodiscard]] ECM
   WaitTask_(const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info,
             const AMDomain::client::ClientControlComponent &control) const;
