@@ -83,6 +83,24 @@ TaskInfo::ID BuildTaskId_() {
   return seq.fetch_add(1, std::memory_order_relaxed);
 }
 
+void PrintTransferStage_(AMInterface::prompt::AMPromptIOManager &prompt,
+                         bool quiet, int index, int total,
+                         const std::string &name) {
+  if (quiet) {
+    return;
+  }
+  prompt.FmtPrint("[Transfer Stage {}/{}] {}", index, total, name);
+}
+
+void ReportTransferSubStage_(
+    const std::function<void(const std::string &)> &stage_reporter,
+    const std::string &name) {
+  if (!stage_reporter) {
+    return;
+  }
+  stage_reporter(name);
+}
+
 int ResolveTransferProgressRefreshMs_(
     const AMInterface::style::AMStyleService *style_service,
     int transfer_bar_refresh_interval_ms) {
@@ -1027,8 +1045,8 @@ ECM TransferInterfaceService::ConfirmWildcard_(
 
 ECM TransferInterfaceService::BuildTaskInfo_(
     const TransferRunArg &arg, const ClientControlComponent &control,
-    std::shared_ptr<TaskInfo> *out_task_info,
-    std::vector<ECM> *warnings) const {
+    std::shared_ptr<TaskInfo> *out_task_info, std::vector<ECM> *warnings,
+    const std::function<void(const std::string &)> &stage_reporter) const {
   if (!out_task_info) {
     return Err(EC::InvalidArg, __func__, "", "null output task info");
   }
@@ -1052,7 +1070,13 @@ ECM TransferInterfaceService::BuildTaskInfo_(
 
   std::unordered_set<std::string> nicknames = {};
 
+  const size_t total_sets = arg.transfer_sets.size();
+  size_t set_index = 0;
   for (const auto &set : arg.transfer_sets) {
+    ++set_index;
+    ReportTransferSubStage_(
+        stage_reporter,
+        AMStr::fmt("set {}/{}: resolve destination", set_index, total_sets));
     if (control.IsInterrupted()) {
       return Err(EC::Terminate, __func__, "", "Interrupted before task generation");
     }
@@ -1067,6 +1091,9 @@ ECM TransferInterfaceService::BuildTaskInfo_(
       return resolved_dst.rcm;
     }
 
+    ReportTransferSubStage_(
+        stage_reporter,
+        AMStr::fmt("set {}/{}: resolve source", set_index, total_sets));
     auto resolved_src = filesystem_service_.ResolveTransferSrc(
         set.srcs, &clients, control, true);
     if (!(resolved_src.rcm)) {
@@ -1091,6 +1118,9 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     options.ignore_special_file = set.ignore_special_file;
     options.resume = set.resume;
 
+    ReportTransferSubStage_(
+        stage_reporter,
+        AMStr::fmt("set {}/{}: build tasks", set_index, total_sets));
     auto build_result = filesystem_service_.BuildTransferTasks(
         resolved_src.data, resolved_dst.data, control, options);
     if (!(build_result.rcm)) {
@@ -1098,6 +1128,9 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     }
 
     if (!set.overwrite) {
+      ReportTransferSubStage_(
+          stage_reporter,
+          AMStr::fmt("set {}/{}: check overwrite", set_index, total_sets));
       const std::vector<std::string> overwrite_targets =
           CollectOverwriteTargets_(build_result.data.file_tasks);
       if (!overwrite_targets.empty()) {
@@ -1149,6 +1182,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     }
   }
 
+  ReportTransferSubStage_(stage_reporter, "deduplicate task entries");
   DedupTasks_(&all_dir_tasks);
   DedupTasks_(&all_file_tasks);
   if (all_dir_tasks.empty() && all_file_tasks.empty()) {
@@ -1164,6 +1198,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     nicknames.insert(DisplayHost_(task.dst_host));
   }
 
+  ReportTransferSubStage_(stage_reporter, "finalize task payload");
   auto task_info = std::make_shared<TaskInfo>();
   task_info->id = BuildTaskId_();
   task_info->Set.quiet = arg.quiet;
@@ -1366,6 +1401,9 @@ ECM TransferInterfaceService::Transfer(
   if (const auto &token = control.ControlToken(); token) {
     token->ClearInterrupt();
   }
+  constexpr int kTransferStageCount = 5;
+  PrintTransferStage_(prompt_io_manager_, arg.quiet, 1, kTransferStageCount,
+                      "Search wildcard sources");
   std::vector<WildcardConfirmRequest> confirm_requests = {};
   for (const auto &set : arg.transfer_sets) {
     for (const auto &src : set.srcs) {
@@ -1384,14 +1422,25 @@ ECM TransferInterfaceService::Transfer(
     }
   }
 
+  PrintTransferStage_(prompt_io_manager_, arg.quiet, 2, kTransferStageCount,
+                      "Confirm wildcard matches");
   ECM confirm_rcm = ConfirmWildcard_(confirm_requests, arg.confirm_policy);
   if (!(confirm_rcm)) {
     return fail(confirm_rcm);
   }
 
+  PrintTransferStage_(prompt_io_manager_, arg.quiet, 3, kTransferStageCount,
+                      "Collect clients and resolve paths");
   std::vector<ECM> warnings = {};
   std::shared_ptr<TaskInfo> task_info = nullptr;
-  ECM build_rcm = BuildTaskInfo_(arg, control, &task_info, &warnings);
+  ECM build_rcm = BuildTaskInfo_(
+      arg, control, &task_info, &warnings,
+      [this, &arg](const std::string &name) {
+        if (arg.quiet) {
+          return;
+        }
+        prompt_io_manager_.FmtPrint("  - {}", name);
+      });
   for (const auto &warning : warnings) {
     prompt_io_manager_.ErrorFormat(warning);
   }
@@ -1402,6 +1451,8 @@ ECM TransferInterfaceService::Transfer(
     return fail({EC::InvalidHandle, __func__, "", "BuildTaskInfo returned null task"});
   }
 
+  PrintTransferStage_(prompt_io_manager_, arg.quiet, 4, kTransferStageCount,
+                      "Submit transfer task");
   const ECM submit_rcm = transfer_app_service_.Submit(task_info);
   if (!(submit_rcm)) {
     task_info->Core.clients.ReleaseAll();
@@ -1411,6 +1462,8 @@ ECM TransferInterfaceService::Transfer(
     prompt_io_manager_.FmtPrint("Submitted task {}", task_info->id);
     return OK;
   }
+  PrintTransferStage_(prompt_io_manager_, arg.quiet, 5, kTransferStageCount,
+                      "Run and wait task");
   return WaitTask_(task_info, control);
 }
 

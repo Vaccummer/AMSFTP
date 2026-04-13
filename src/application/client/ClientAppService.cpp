@@ -310,7 +310,7 @@ ECM ClientAppService::Init(ClientHandle local_client) {
   const ClientServiceArg init_arg = GetInitArg();
   const ClientCallbacks public_callbacks = GetPublicCallbacks();
   this->maintainer_ = CreateClientMaintainer(init_arg.heartbeat_interval_s,
-                                             init_arg.heartbeat_timeout_ms,
+                                             init_arg.check_timeout_ms,
                                              public_callbacks.disconnect, {});
   if (!maintainer_) {
     return {EC::InvalidHandle, "ClientAppService::Init", "maintainer",
@@ -609,8 +609,7 @@ std::optional<ECMData<CheckResult>> ClientAppService::CheckClient(
     return std::nullopt;
   }
   const ClientControlComponent resolved_control =
-      control_component ? *control_component
-                        : GetControlComponent(std::nullopt, timeout_ms);
+      control_component ? *control_component : BuildCheckControl_(timeout_ms);
   return CheckClientInternal_(client_result.data, reconnect, update,
                               resolved_control);
 }
@@ -620,8 +619,7 @@ ECMData<CheckResult> ClientAppService::CheckClientHandle(
     const std::optional<ClientControlComponent> &control_component,
     int timeout_ms) const {
   const ClientControlComponent resolved_control =
-      control_component ? *control_component
-                        : GetControlComponent(std::nullopt, timeout_ms);
+      control_component ? *control_component : BuildCheckControl_(timeout_ms);
   return CheckClientInternal_(client, reconnect, update, resolved_control);
 }
 
@@ -797,8 +795,7 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
 
     candidate->TaskControlPort().ClearInterrupt();
     auto check_result =
-        CheckClientInternal_(candidate, true, true,
-                             ClientControlComponent(nullptr, 2000));
+        CheckClientInternal_(candidate, true, true, BuildCheckControl_());
     if (!(check_result.rcm)) {
       stale_ids.push_back(candidate_id);
       status = check_result.rcm;
@@ -1094,6 +1091,15 @@ ClientAppService::SnapshotCreateContext_(bool for_public_pool) const {
 ClientAppService::ConnectHooks ClientAppService::SnapshotConnectHooks_() const {
   std::lock_guard<std::mutex> lock(connect_hooks_mutex_);
   return connect_hooks_;
+}
+
+ClientControlComponent
+ClientAppService::BuildCheckControl_(int timeout_ms) const {
+  const ClientServiceArg init_arg = GetInitArg();
+  const int configured_timeout_ms = init_arg.check_timeout_ms;
+  const int resolved_timeout_ms =
+      timeout_ms > 0 ? timeout_ms : configured_timeout_ms;
+  return GetControlComponent(std::nullopt, resolved_timeout_ms);
 }
 
 ECMData<CheckResult> ClientAppService::CheckClientInternal_(
