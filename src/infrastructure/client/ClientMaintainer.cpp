@@ -19,6 +19,27 @@ using AMDomain::client::MaintainerService::ClampHeartbeatIntervalS;
 using AMDomain::client::MaintainerService::ClampHeartbeatTimeoutMs;
 using AMDomain::host::HostService::NormalizeNickname;
 
+constexpr const char *kTransferLeaseKey = "transfer.lease";
+constexpr const char *kTerminalLeaseKey = "terminal.lease";
+
+[[nodiscard]] bool IsClientLeased_(const ClientHandle &client) {
+  if (!client) {
+    return false;
+  }
+  const auto transfer = client->MetaDataPort().QueryNamedValue<bool>(kTransferLeaseKey);
+  if (transfer.name_found && transfer.type_match && transfer.value.has_value() &&
+      transfer.value.value()) {
+    return true;
+  }
+
+  const auto terminal = client->MetaDataPort().QueryNamedValue<bool>(kTerminalLeaseKey);
+  if (terminal.name_found && terminal.type_match && terminal.value.has_value() &&
+      terminal.value.value()) {
+    return true;
+  }
+  return false;
+}
+
 [[nodiscard]] ECMData<CheckResult> CheckClientNow(const ClientHandle &client,
                                                   int timeout_ms) {
   if (!client) {
@@ -86,6 +107,9 @@ void ClientMaintainer::RemoveDisconnectedClients() {
 
   for (const auto &entry : clients_snapshot) {
     if (!entry.second) {
+      continue;
+    }
+    if (IsClientLeased_(entry.second)) {
       continue;
     }
     const auto cached = entry.second->ConfigPort().GetState();
@@ -231,6 +255,9 @@ void ClientMaintainer::HeartbeatLoop_() {
         break;
       }
       if (!entry.second) {
+        continue;
+      }
+      if (IsClientLeased_(entry.second)) {
         continue;
       }
       const auto cached = entry.second->ConfigPort().GetState();

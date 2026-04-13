@@ -5,7 +5,7 @@
 #include "application/prompt/PromptProfileManager.hpp"
 #include "application/terminal/TermAppService.hpp"
 #include "application/var/VarAppService.hpp"
-#include "domain/transfer/TransferPort.hpp"
+#include "application/transfer/TransferAppService.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/completion/CompletionRuntime.hpp"
 #include "interface/style/StyleManager.hpp"
@@ -25,13 +25,13 @@ public:
       AMInterface::var::VarInterfaceService &var_interface_service,
       AMInterface::style::AMStyleService &style_service,
       AMApplication::prompt::PromptProfileManager &prompt_profile_manager,
-      AMDomain::transfer::ITransferPoolPort &transfer_pool)
+      AMApplication::transfer::TransferAppService &transfer_service)
       : client_service_(client_service), host_service_(host_service),
         terminal_service_(terminal_service), var_service_(var_service),
         var_interface_service_(var_interface_service),
         style_service_(style_service),
         prompt_profile_manager_(prompt_profile_manager),
-        transfer_pool_(transfer_pool) {}
+        transfer_service_(transfer_service) {}
   ~CompletionRuntimeAdapter() override = default;
 
   [[nodiscard]] AMDomain::client::ClientHandle CurrentClient() const override;
@@ -97,7 +97,7 @@ private:
   AMInterface::var::VarInterfaceService &var_interface_service_;
   AMInterface::style::AMStyleService &style_service_;
   AMApplication::prompt::PromptProfileManager &prompt_profile_manager_;
-  AMDomain::transfer::ITransferPoolPort &transfer_pool_;
+  AMApplication::transfer::TransferAppService &transfer_service_;
   mutable std::mutex terminal_snapshot_mutex_ = {};
   mutable std::unordered_map<std::string, TerminalSnapshot_>
       terminal_snapshots_ = {};

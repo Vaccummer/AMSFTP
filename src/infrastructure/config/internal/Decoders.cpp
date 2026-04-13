@@ -524,10 +524,15 @@ public:
     *typed = {};
 
     const Json options = OptionsRoot_(root);
-    (void)AMJson::QueryKey(options, {"TransferManager", "init_thread_num"},
-                           &typed->init_thread_num);
-    (void)AMJson::QueryKey(options, {"TransferManager", "max_thread_num"},
-                           &typed->max_thread_num);
+    (void)AMJson::QueryKey(options, {"TransferManager", "max_threads"},
+                           &typed->max_threads);
+    if (typed->max_threads <= 0) {
+      (void)AMJson::QueryKey(options, {"TransferManager", "max_thread_num"},
+                             &typed->max_threads);
+    }
+    (void)AMJson::QueryKey(options,
+                           {"TransferManager", "bar_refresh_interval_ms"},
+                           &typed->bar_refresh_interval_ms);
     (void)AMJson::QueryKey(options, {"TransferManager", "buffer_size"},
                            &typed->buffer_size);
     (void)AMJson::QueryKey(options, {"TransferManager", "min_buffer"},
@@ -548,10 +553,10 @@ public:
       *root = Json::object();
     }
 
-    (*root)["Options"]["TransferManager"]["init_thread_num"] =
-        typed->init_thread_num;
-    (*root)["Options"]["TransferManager"]["max_thread_num"] =
-        typed->max_thread_num;
+    (*root)["Options"]["TransferManager"]["max_threads"] =
+        typed->max_threads;
+    (*root)["Options"]["TransferManager"]["bar_refresh_interval_ms"] =
+        typed->bar_refresh_interval_ms;
     (*root)["Options"]["TransferManager"]["buffer_size"] = typed->buffer_size;
     (*root)["Options"]["TransferManager"]["min_buffer"] = typed->min_buffer;
     (*root)["Options"]["TransferManager"]["max_buffer"] = typed->max_buffer;
@@ -592,6 +597,14 @@ public:
                            &typed->client_trace_level);
     (void)AMJson::QueryKey(options, {"LogManager", "program_trace_level"},
                            &typed->program_trace_level);
+    (void)AMJson::QueryKey(options, {"LogManager", "ClientLogPath"},
+                           &typed->client_log_path);
+    (void)AMJson::QueryKey(options, {"LogManager", "ProgramLogPath"},
+                           &typed->program_log_path);
+    (void)AMJson::QueryKey(options, {"LogManager", "client_log_path"},
+                           &typed->client_log_path);
+    (void)AMJson::QueryKey(options, {"LogManager", "program_log_path"},
+                           &typed->program_log_path);
     return true;
   }
 
@@ -610,6 +623,10 @@ public:
         typed->client_trace_level;
     (*root)["Options"]["LogManager"]["program_trace_level"] =
         typed->program_trace_level;
+    (*root)["Options"]["LogManager"]["client_log_path"] =
+        typed->client_log_path;
+    (*root)["Options"]["LogManager"]["program_log_path"] =
+        typed->program_log_path;
     return true;
   }
 

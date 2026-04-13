@@ -779,39 +779,54 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
       continue;
     }
 
-    const ECM lease_rcm = AcquireTransferLease_(candidate);
-    if ((lease_rcm)) {
-      candidate->TaskControlPort().ClearInterrupt();
-      auto check_result =
-          candidate->IOPort().Check({}, ClientControlComponent(nullptr, 2000));
-      if (!(check_result.rcm)) {
-        (void)TryReturnClient(candidate);
-        stale_ids.push_back(candidate_id);
-        status = check_result.rcm;
-        continue;
-      }
-      auto managed_result = GetClient(nickname, true);
-      if ((managed_result.rcm) && managed_result.data &&
-          managed_result.data != candidate) {
-        auto metadata_opt = GetClientMetadata(managed_result.data);
-        if (metadata_opt.has_value()) {
-          const ECM sync_rcm = SetClientMetadata(candidate, *metadata_opt);
-          if (!(sync_rcm)) {
-            (void)TryReturnClient(candidate);
-            return {nullptr, sync_rcm};
-          }
-        }
-      }
-      return {candidate, OK};
+    bool transfer_leased = false;
+    const ECM leased_query_rcm =
+        QueryLeaseFlag_(candidate, kTransferLeaseKey, &transfer_leased);
+    if (!(leased_query_rcm)) {
+      status = leased_query_rcm;
+      continue;
     }
-    if (lease_rcm.code == EC::PathUsingByOthers) {
+    if (transfer_leased) {
       has_leased_client = true;
       if ((status)) {
-        status = lease_rcm;
+        status = Err(EC::PathUsingByOthers, "get_public_client", nickname,
+                     "Client is already leased");
       }
       continue;
     }
-    status = lease_rcm;
+
+    candidate->TaskControlPort().ClearInterrupt();
+    auto check_result =
+        CheckClientInternal_(candidate, true, true,
+                             ClientControlComponent(nullptr, 2000));
+    if (!(check_result.rcm)) {
+      stale_ids.push_back(candidate_id);
+      status = check_result.rcm;
+      continue;
+    }
+
+    const ECM lease_rcm = AcquireTransferLease_(candidate);
+    if (!(lease_rcm)) {
+      if (lease_rcm.code == EC::PathUsingByOthers) {
+        has_leased_client = true;
+      }
+      status = lease_rcm;
+      continue;
+    }
+
+    auto managed_result = GetClient(nickname, true);
+    if ((managed_result.rcm) && managed_result.data &&
+        managed_result.data != candidate) {
+      auto metadata_opt = GetClientMetadata(managed_result.data);
+      if (metadata_opt.has_value()) {
+        const ECM sync_rcm = SetClientMetadata(candidate, *metadata_opt);
+        if (!(sync_rcm)) {
+          (void)TryReturnClient(candidate);
+          return {nullptr, sync_rcm};
+        }
+      }
+    }
+    return {candidate, OK};
   }
 
   if (!stale_ids.empty()) {

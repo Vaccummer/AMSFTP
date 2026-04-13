@@ -84,9 +84,12 @@ TaskInfo::ID BuildTaskId_() {
 }
 
 int ResolveTransferProgressRefreshMs_(
-    const AMInterface::style::AMStyleService *style_service) {
+    const AMInterface::style::AMStyleService *style_service,
+    int transfer_bar_refresh_interval_ms) {
   int refresh_ms = kTaskPollIntervalMs;
-  if (style_service != nullptr) {
+  if (transfer_bar_refresh_interval_ms > 0) {
+    refresh_ms = transfer_bar_refresh_interval_ms;
+  } else if (style_service != nullptr) {
     refresh_ms = static_cast<int>(
         style_service->GetInitArg().style.progress_bar.refresh_interval_ms);
   }
@@ -151,6 +154,24 @@ std::string ResolveStopLabel_(EC code) {
     return "Timeout";
   }
   return "Terminated";
+}
+
+std::string EntryResultCodeText_(const std::optional<ECM> &rcm) {
+  if (!rcm.has_value()) {
+    return "Pending";
+  }
+  return AMStr::ToString(rcm->code);
+}
+
+std::string EntryResultMessageText_(const std::optional<ECM> &rcm) {
+  if (!rcm.has_value()) {
+    return "Pending";
+  }
+  return rcm->error.empty() ? rcm->msg() : rcm->error;
+}
+
+bool EntryResultIsSuccess_(const std::optional<ECM> &rcm) {
+  return rcm.has_value() && rcm->code == EC::Success;
 }
 
 int64_t ResolveElapsedMs_(const std::shared_ptr<TaskInfo> &task_info) {
@@ -230,7 +251,7 @@ struct TaskInspectEntrySnapshot_ {
   size_t transferred = 0;
   bool overwrite = false;
   bool finished = false;
-  ECM result = OK;
+  std::optional<ECM> result = std::nullopt;
 };
 
 struct TaskInspectSnapshot_ {
@@ -642,12 +663,12 @@ void PrintTaskInspectEntries_(
   std::vector<const TaskInspectEntrySnapshot_ *> ordered = {};
   ordered.reserve(snapshot.entries.size());
   for (const auto &entry : snapshot.entries) {
-    if (entry.result.code != EC::Success) {
+    if (entry.result.has_value() && entry.result->code != EC::Success) {
       ordered.push_back(&entry);
     }
   }
   for (const auto &entry : snapshot.entries) {
-    if (entry.result.code == EC::Success) {
+    if (!entry.result.has_value() || entry.result->code == EC::Success) {
       ordered.push_back(&entry);
     }
   }
@@ -678,8 +699,8 @@ void PrintTaskInspectEntries_(
                          NormalizePath_(entry->dst));
     row.size = AMStr::FormatSize(entry->size);
     row.xfer = AMStr::FormatSize(entry->transferred);
-    row.result = AMStr::ToString(entry->result.code);
-    row.error = entry->result.msg();
+    row.result = EntryResultCodeText_(entry->result);
+    row.error = EntryResultMessageText_(entry->result);
     rows.push_back(std::move(row));
   }
 
@@ -724,7 +745,8 @@ void PrintTaskInspectEntries_(
         AMStr::PadRightAscii(row.size, widths[4]), std::string(gap, ' '),
         AMStr::PadRightAscii(row.xfer, widths[5]), std::string(gap, ' '),
         AMStr::PadRightAscii(row.result, widths[6]));
-    if (row.result != "Success" && !row.error.empty()) {
+    if (row.result != "Success" && row.result != "Pending" &&
+        !row.error.empty()) {
       prompt_io_manager.FmtPrint("    error: {}", row.error);
     }
   }
@@ -752,17 +774,16 @@ bool PrintWaitTaskResultSummary_(
 
   if (file_tasks.size() == 1) {
     const auto &entry = file_tasks.front();
-    if (entry.rcm.code == EC::Success) {
+    if (EntryResultIsSuccess_(entry.rcm)) {
       prompt_io_manager.FmtPrint("✅ {}/{}",
                                  AMStr::FormatSize(entry.transferred),
                                  AMStr::FormatSize(entry.size));
       return true;
     }
-    const ECM line_rcm = (entry.rcm.code == EC::Success) ? result : entry.rcm;
-    const std::string err_msg =
-        line_rcm.error.empty() ? line_rcm.msg() : line_rcm.error;
+    const std::string line_code = EntryResultCodeText_(entry.rcm);
+    const std::string err_msg = EntryResultMessageText_(entry.rcm);
     prompt_io_manager.FmtPrint("❌ {} {}/{}  {}",
-                               AMStr::ToString(line_rcm.code),
+                               line_code,
                                AMStr::FormatSize(entry.transferred),
                                AMStr::FormatSize(entry.size), err_msg);
     return true;
@@ -775,7 +796,7 @@ bool PrintWaitTaskResultSummary_(
       const std::string src_host = DisplayHost_(entry.src_host);
       const std::string src_path = NormalizePath_(entry.src);
       const bool has_size = entry.size > 0;
-      if (entry.rcm.code == EC::Success) {
+      if (EntryResultIsSuccess_(entry.rcm)) {
         ++success;
         continue;
       }
@@ -787,10 +808,9 @@ bool PrintWaitTaskResultSummary_(
       } else {
         prompt_io_manager.FmtPrint("❌ \\[{}] {}", src_host, src_path);
       }
-      const std::string err_msg =
-          entry.rcm.error.empty() ? entry.rcm.msg() : entry.rcm.error;
-      prompt_io_manager.FmtPrint("    {}: {}", AMStr::ToString(entry.rcm.code),
-                                 err_msg);
+      const std::string err_code = EntryResultCodeText_(entry.rcm);
+      const std::string err_msg = EntryResultMessageText_(entry.rcm);
+      prompt_io_manager.FmtPrint("    {}: {}", err_code, err_msg);
     }
 
     const std::string size_summary =
@@ -810,14 +830,16 @@ bool PrintWaitTaskResultSummary_(
 
 TransferInterfaceService::TransferInterfaceService(
     AMApplication::filesystem::FilesystemAppService &filesystem_service,
+    AMApplication::transfer::TransferAppService &transfer_service,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
-    AMDomain::transfer::ITransferPoolPort &transfer_pool,
     std::function<ClientControlComponent(AMDomain::client::amf)>
         control_component_factory,
-    AMInterface::style::AMStyleService *style_service)
+    AMInterface::style::AMStyleService *style_service,
+    int transfer_bar_refresh_interval_ms)
     : filesystem_service_(filesystem_service),
-      prompt_io_manager_(prompt_io_manager), transfer_pool_(transfer_pool),
-      style_service_(style_service) {
+      prompt_io_manager_(prompt_io_manager),
+      transfer_app_service_(transfer_service), style_service_(style_service),
+      transfer_bar_refresh_interval_ms_(transfer_bar_refresh_interval_ms) {
   (void)control_component_factory;
 }
 
@@ -921,8 +943,8 @@ void TransferInterfaceService::PrintTaskEntries_(
         DisplayHost_(entry.src_host), NormalizePath_(entry.src),
         DisplayHost_(entry.dst_host), NormalizePath_(entry.dst),
         AMStr::FormatSize(entry.size), AMStr::FormatSize(entry.transferred),
-        entry.overwrite ? "true" : "false", AMStr::ToString(entry.rcm.code),
-        entry.rcm.msg());
+        entry.overwrite ? "true" : "false", EntryResultCodeText_(entry.rcm),
+        EntryResultMessageText_(entry.rcm));
   }
   if (!file_tasks.empty()) {
     prompt_io_manager_.FmtPrint("  [Files]");
@@ -935,8 +957,8 @@ void TransferInterfaceService::PrintTaskEntries_(
         DisplayHost_(entry.src_host), NormalizePath_(entry.src),
         DisplayHost_(entry.dst_host), NormalizePath_(entry.dst),
         AMStr::FormatSize(entry.size), AMStr::FormatSize(entry.transferred),
-        entry.overwrite ? "true" : "false", AMStr::ToString(entry.rcm.code),
-        entry.rcm.msg());
+        entry.overwrite ? "true" : "false", EntryResultCodeText_(entry.rcm),
+        EntryResultMessageText_(entry.rcm));
   }
 }
 
@@ -1178,7 +1200,7 @@ ECM TransferInterfaceService::WaitTask_(
   }
 
   const bool show_progress = !task_info->Set.quiet;
-  const int refresh_ms = ResolveTransferProgressRefreshMs_(style_service_);
+  const int refresh_ms = ResolveTransferProgressRefreshMs_(style_service_, transfer_bar_refresh_interval_ms_);
 
   struct ScopedRefresh_ {
     AMInterface::prompt::AMPromptIOManager *prompt = nullptr;
@@ -1302,12 +1324,12 @@ ECM TransferInterfaceService::WaitTask_(
     }
 
     if (control.IsInterrupted()) {
-      (void)transfer_pool_.Terminate(task_info->id, 1000);
+      (void)transfer_app_service_.Terminate(task_info->id, 1000);
       return finalize_and_return(
           Err(EC::Terminate, __func__, "", "Task is terminated by user"));
     }
     if (control.IsTimeout()) {
-      (void)transfer_pool_.Terminate(task_info->id, 1000);
+      (void)transfer_app_service_.Terminate(task_info->id, 1000);
       return finalize_and_return(
           Err(EC::OperationTimeout, __func__, "", "Task timeout"));
     }
@@ -1326,11 +1348,7 @@ TransferInterfaceService::FindTask_(TaskInfo::ID task_id) const {
   if (task_id == 0) {
     return nullptr;
   }
-  auto active = transfer_pool_.GetActiveTask(task_id);
-  if (active) {
-    return active;
-  }
-  return transfer_pool_.GetResultTask(task_id, false);
+  return transfer_app_service_.FindTask(task_id);
 }
 
 ECM TransferInterfaceService::Transfer(
@@ -1384,7 +1402,7 @@ ECM TransferInterfaceService::Transfer(
     return fail({EC::InvalidHandle, __func__, "", "BuildTaskInfo returned null task"});
   }
 
-  const ECM submit_rcm = transfer_pool_.Submit(task_info);
+  const ECM submit_rcm = transfer_app_service_.Submit(task_info);
   if (!(submit_rcm)) {
     task_info->Core.clients.ReleaseAll();
     return fail(submit_rcm);
@@ -1603,7 +1621,7 @@ ECM TransferInterfaceService::HttpGet(
   task_info->CalTotalSize(true);
   task_info->CalFileNum(true);
 
-  const ECM submit_rcm = transfer_pool_.Submit(task_info);
+  const ECM submit_rcm = transfer_app_service_.Submit(task_info);
   if (!(submit_rcm)) {
     task_info->Core.clients.ReleaseAll();
     return fail(submit_rcm);
@@ -1628,8 +1646,9 @@ ECM TransferInterfaceService::TaskList(const TransferTaskListArg &arg) const {
       }
     }
   };
-  add_ids(transfer_pool_.GetAllActiveTasks());
-  add_ids(transfer_pool_.GetAllHistoryTasks());
+  add_ids(transfer_app_service_.GetAllActiveTasks());
+  add_ids(transfer_app_service_.GetPausedTasks());
+  add_ids(transfer_app_service_.GetFinishedTasks());
   std::sort(ids.begin(), ids.end());
 
   const bool has_filter =
@@ -1717,7 +1736,7 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
   }
 
   if (!conducting_tasks.empty()) {
-    const int refresh_ms = ResolveTransferProgressRefreshMs_(style_service_);
+    const int refresh_ms = ResolveTransferProgressRefreshMs_(style_service_, transfer_bar_refresh_interval_ms_);
     struct TaskWatchItem_ {
       std::shared_ptr<TaskInfo> task_info = nullptr;
       std::unique_ptr<BaseProgressBar> bar = nullptr;
@@ -1878,7 +1897,7 @@ ECM TransferInterfaceService::TaskPause(
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }
-    ECM rcm = transfer_pool_.Pause(id, arg.timeout_ms);
+    ECM rcm = transfer_app_service_.Pause(id, arg.timeout_ms);
     if (!(rcm)) {
       status = rcm;
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1899,7 +1918,7 @@ ECM TransferInterfaceService::TaskResume(
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }
-    ECM rcm = transfer_pool_.Resume(id, arg.timeout_ms);
+    ECM rcm = transfer_app_service_.Resume(id, arg.timeout_ms);
     if (!(rcm)) {
       status = rcm;
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1920,7 +1939,7 @@ ECM TransferInterfaceService::TaskTerminate(
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }
-    auto [task_info, rcm] = transfer_pool_.Terminate(id, arg.timeout_ms);
+    auto [task_info, rcm] = transfer_app_service_.Terminate(id, arg.timeout_ms);
     (void)task_info;
     if (!(rcm)) {
       status = rcm;
@@ -1968,7 +1987,7 @@ ECM TransferInterfaceService::TaskResult(
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }
-    auto task_info = transfer_pool_.GetResultTask(id, arg.remove);
+    auto task_info = transfer_app_service_.GetResultTask(id, arg.remove);
     if (!task_info) {
       status = Err(EC::TaskNotFound, __func__, "",
                    AMStr::fmt("Task result not found: {}", id));
@@ -1983,11 +2002,14 @@ ECM TransferInterfaceService::TaskResult(
 void TransferInterfaceService::GetTaskCounts(size_t *pending_count,
                                              size_t *conducting_count) const {
   if (pending_count) {
-    *pending_count = transfer_pool_.GetPendingTasks().size();
+    *pending_count = transfer_app_service_.GetPendingTasks().size();
   }
   if (conducting_count) {
-    *conducting_count = transfer_pool_.GetConductingTasks().size();
+    *conducting_count = transfer_app_service_.GetConductingTasks().size();
   }
 }
 } // namespace AMInterface::transfer
+
+
+
 
