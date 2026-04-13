@@ -167,6 +167,17 @@ ClassifyNicknameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
 }
 
 AMTokenType
+ClassifyPoolNameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
+                           const std::string &nickname_raw) {
+  const std::string nickname = AMStr::Strip(nickname_raw);
+  if (nickname.empty() || !runtime) {
+    return AMTokenType::NonexistentNickname;
+  }
+  return runtime->PoolExists(nickname) ? AMTokenType::Nickname
+                                       : AMTokenType::NonexistentNickname;
+}
+
+AMTokenType
 ClassifyNewHostNicknameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
                                   const std::string &nickname_raw) {
   const std::string nickname = AMStr::Strip(nickname_raw);
@@ -622,6 +633,14 @@ SemanticAnalyzer::Classify(
       if (*semantic_hint == AMCommandArgSemantic::HostNickname ||
           *semantic_hint == AMCommandArgSemantic::ClientName) {
         token.type = ClassifyNicknameTokenType_(runtime_, unescaped_text);
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+
+      if (*semantic_hint == AMCommandArgSemantic::PoolName) {
+        token.type = ClassifyPoolNameTokenType_(runtime_, unescaped_text);
         if (positional_consumed) {
           ++arg_index;
         }

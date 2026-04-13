@@ -41,6 +41,7 @@ public:
   GetClient(const std::string &nickname) const = 0;
   [[nodiscard]] virtual std::string CurrentNickname() const = 0;
   [[nodiscard]] virtual bool HostExists(const std::string &nickname) const = 0;
+  [[nodiscard]] virtual bool PoolExists(const std::string &nickname) const = 0;
   [[nodiscard]] virtual bool TerminalExists(const std::string &nickname) const = 0;
   [[nodiscard]] virtual TerminalNameState
   QueryTerminalNameState(const std::string &nickname) const = 0;

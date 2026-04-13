@@ -530,6 +530,8 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
     return AMCompletionTarget::Disabled;
   case AMCommandArgSemantic::ClientName:
     return AMCompletionTarget::ClientName;
+  case AMCommandArgSemantic::PoolName:
+    return AMCompletionTarget::PoolName;
   case AMCommandArgSemantic::TaskId:
     return AMCompletionTarget::TaskId;
   case AMCommandArgSemantic::VariableName:

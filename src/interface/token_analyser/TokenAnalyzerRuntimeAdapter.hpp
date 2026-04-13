@@ -36,6 +36,7 @@ public:
   GetClient(const std::string &nickname) const override;
   [[nodiscard]] std::string CurrentNickname() const override;
   [[nodiscard]] bool HostExists(const std::string &nickname) const override;
+  [[nodiscard]] bool PoolExists(const std::string &nickname) const override;
   [[nodiscard]] bool TerminalExists(const std::string &nickname) const override;
   [[nodiscard]] TerminalNameState
   QueryTerminalNameState(const std::string &nickname) const override;

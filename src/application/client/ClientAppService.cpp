@@ -100,6 +100,37 @@ ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
                             "Host config not found")};
 }
 
+[[nodiscard]] bool MatchNickname_(const std::string &lhs,
+                                  const std::string &rhs,
+                                  bool case_sensitive) {
+  if (case_sensitive) {
+    return lhs == rhs;
+  }
+  return AMStr::lowercase(lhs) == AMStr::lowercase(rhs);
+}
+
+[[nodiscard]] std::optional<std::string>
+ResolvePublicBucketKey_(const ClientContainer &clients,
+                        const std::string &nickname, bool case_sensitive) {
+  const std::string target = AMStr::Strip(nickname);
+  if (target.empty()) {
+    return std::nullopt;
+  }
+  auto direct_it = clients.find(target);
+  if (direct_it != clients.end()) {
+    return direct_it->first;
+  }
+  if (case_sensitive) {
+    return std::nullopt;
+  }
+  for (const auto &entry : clients) {
+    if (MatchNickname_(entry.first, target, false)) {
+      return entry.first;
+    }
+  }
+  return std::nullopt;
+}
+
 ECM AcquireTransferLease_(const ClientHandle &client) {
   if (!client) {
     return Err(EC::InvalidHandle, "acquire_transfer_lease", "<client>",
@@ -584,6 +615,16 @@ std::optional<ECMData<CheckResult>> ClientAppService::CheckClient(
                               resolved_control);
 }
 
+ECMData<CheckResult> ClientAppService::CheckClientHandle(
+    const ClientHandle &client, bool reconnect, bool update,
+    const std::optional<ClientControlComponent> &control_component,
+    int timeout_ms) const {
+  const ClientControlComponent resolved_control =
+      control_component ? *control_component
+                        : GetControlComponent(std::nullopt, timeout_ms);
+  return CheckClientInternal_(client, reconnect, update, resolved_control);
+}
+
 std::map<std::string, ClientHandle> ClientAppService::GetClients() const {
   std::map<std::string, ClientHandle> clients = {};
   if (maintainer_) {
@@ -595,6 +636,49 @@ std::map<std::string, ClientHandle> ClientAppService::GetClients() const {
     clients["local"] = local;
   }
   return clients;
+}
+
+std::vector<ClientAppService::PublicClientInstance>
+ClientAppService::ListPublicClients(const std::vector<std::string> &nicknames,
+                                    bool case_sensitive) const {
+  std::vector<PublicClientInstance> out = {};
+  std::vector<std::string> filters = {};
+  filters.reserve(nicknames.size());
+  for (const auto &nickname : nicknames) {
+    const std::string stripped = AMStr::Strip(nickname);
+    if (!stripped.empty()) {
+      filters.push_back(stripped);
+    }
+  }
+
+  auto public_clients = public_clients_.lock();
+  for (const auto &bucket : *public_clients) {
+    bool selected = filters.empty();
+    for (const auto &target : filters) {
+      if (MatchNickname_(bucket.first, target, case_sensitive)) {
+        selected = true;
+        break;
+      }
+    }
+    if (!selected) {
+      continue;
+    }
+    for (const auto &entry : bucket.second) {
+      out.push_back(PublicClientInstance{bucket.first, entry.first,
+                                         entry.second});
+    }
+  }
+  return out;
+}
+
+std::vector<std::string> ClientAppService::GetPublicClientNames() const {
+  std::vector<std::string> out = {};
+  auto public_clients = public_clients_.lock();
+  out.reserve(public_clients->size());
+  for (const auto &entry : *public_clients) {
+    out.push_back(entry.first);
+  }
+  return out;
 }
 
 ECM ClientAppService::RemoveClient(const std::string &nickname) {
@@ -621,6 +705,52 @@ ECM ClientAppService::RemoveClient(const std::string &nickname) {
     }
   }
   return OK;
+}
+
+ECM ClientAppService::RemovePublicClient(const std::string &nickname,
+                                         const ClientID &id) {
+  const std::string target = AMStr::Strip(nickname);
+  if (target.empty()) {
+    return Err(EC::InvalidArg, "remove_public_client", "<nickname>",
+               "Public nickname is empty");
+  }
+  if (id.empty()) {
+    return Err(EC::InvalidArg, "remove_public_client", target,
+               "Public client id is empty");
+  }
+
+  auto public_clients = public_clients_.lock();
+  auto resolved_key = ResolvePublicBucketKey_(*public_clients, target, false);
+  if (!resolved_key.has_value()) {
+    return Err(EC::ClientNotFound, "remove_public_client", target,
+               "Public client nickname not found");
+  }
+  auto bucket_it = public_clients->find(*resolved_key);
+  if (bucket_it == public_clients->end()) {
+    return Err(EC::ClientNotFound, "remove_public_client", target,
+               "Public client nickname not found");
+  }
+  if (bucket_it->second.erase(id) == 0) {
+    return Err(EC::ClientNotFound, "remove_public_client",
+               AMStr::fmt("{}:{}", *resolved_key, id),
+               "Public client id not found");
+  }
+  if (bucket_it->second.empty()) {
+    public_clients->erase(bucket_it);
+  }
+  return OK;
+}
+
+ECM ClientAppService::RemovePublicClients(
+    const std::vector<std::pair<std::string, ClientID>> &targets) {
+  ECM status = OK;
+  for (const auto &target : targets) {
+    const ECM rcm = RemovePublicClient(target.first, target.second);
+    if (!(rcm) && (status)) {
+      status = rcm;
+    }
+  }
+  return status;
 }
 
 ECMData<ClientHandle>
@@ -824,6 +954,12 @@ ECM ClientAppService::SetClientCwd(const ClientHandle &client,
   ClientMetaData meta = {};
   meta.cwd = cwd;
   return SetClientMetadata(client, meta);
+}
+
+ECMData<bool> ClientAppService::IsTransferLeased(const ClientHandle &client) {
+  bool leased = false;
+  const ECM rcm = QueryLeaseFlag_(client, kTransferLeaseKey, &leased);
+  return {leased, rcm};
 }
 
 ECM ClientAppService::TryLeaseClient(const ClientHandle &client) {

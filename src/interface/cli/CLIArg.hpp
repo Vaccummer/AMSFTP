@@ -6,6 +6,7 @@
 #include "interface/cli/ArgStruct/FilesystemArgStruct.hpp"
 #include "interface/cli/ArgStruct/HostArgStruct.hpp"
 #include "interface/cli/ArgStruct/ProfileArgStruct.hpp"
+#include "interface/cli/ArgStruct/PoolArgStruct.hpp"
 #include "interface/cli/ArgStruct/TaskArgStruct.hpp"
 #include "interface/cli/ArgStruct/VarArgStruct.hpp"
 
@@ -82,6 +83,12 @@ struct CliClientArgs {
   DisconnectArgs disconnect = {};
 };
 
+struct CliPoolArgs {
+  PoolLsArgs ls = {};
+  PoolCheckArgs check = {};
+  PoolRemoveArgs rm = {};
+};
+
 struct CliVarArgs {
   VarGetArgs get = {};
   VarDefArgs def = {};
@@ -112,6 +119,7 @@ struct CliArgsPool {
   CliTermArgs term = {};
   CliChannelArgs channel = {};
   CliClientArgs client = {};
+  CliPoolArgs pool = {};
   CliVarArgs var = {};
   CliTaskArgs task = {};
 
@@ -160,6 +168,13 @@ struct ClientCommands {
   CLI::App *ls = nullptr;
   CLI::App *check = nullptr;
   CLI::App *change = nullptr;
+  CLI::App *remove = nullptr;
+};
+
+struct PoolCommands {
+  CLI::App *root = nullptr;
+  CLI::App *ls = nullptr;
+  CLI::App *check = nullptr;
   CLI::App *remove = nullptr;
 };
 
@@ -235,6 +250,7 @@ struct CliCommands {
   HostCommands host = {};
   ProfileCommands profile = {};
   ClientCommands client = {};
+  PoolCommands pool = {};
   FilesystemCommands fs = {};
   TermCommands term = {};
   ChannelCommands channel = {};
