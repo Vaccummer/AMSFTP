@@ -1,3 +1,4 @@
+#include "domain/client/ClientModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
@@ -119,6 +120,7 @@ using TaskHandle = AMInfra::transfer::TaskHandle;
 using ClientProtocol = AMDomain::client::ClientProtocol;
 using AMSFTPIOCore = AMInfra::client::SFTP::AMSFTPIOCore;
 using SocketWaitType = AMInfra::client::SFTP::detail::SocketWaitType;
+using DeathClockProtocol = AMInfra::client::SFTP::detail::DeathClockProtocol;
 using AMFTPIOCore = AMInfra::client::FTP::AMFTPIOCore;
 using AMHTTPIOCore = AMInfra::client::HTTP::AMHTTPIOCore;
 using TransferTask = AMDomain::transfer::TransferTask;
@@ -268,7 +270,14 @@ public:
   void Close() {
     if (is_sftp) {
       if (sftp_handle) {
-        libssh2_sftp_close_handle(sftp_handle);
+        if (client) {
+          std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
+          DeathClockProtocol close_death_clock(
+              control, AMDomain::client::kHandleCloseGraceWaitMs);
+          (void)client->nb_call(close_death_clock, [&]() {
+            return libssh2_sftp_close_handle(sftp_handle);
+          });
+        }
         sftp_handle = nullptr;
       }
     } else {
@@ -307,18 +316,20 @@ public:
       std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
       libssh2_session_set_blocking(client->session, 0);
       NBResult<LIBSSH2_SFTP_HANDLE *> nb_res{nullptr, WaitResult::Ready};
+      DeathClockProtocol death_clock(
+          control, AMDomain::client::kTransferInterruptGraceWaitMs);
 
       if (is_write) {
         int flags = LIBSSH2_FXF_WRITE;
         if (truncate) {
           flags |= LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_CREAT;
         }
-        nb_res = client->nb_call(control, [&]() {
+        nb_res = client->nb_call(death_clock, [&]() {
           return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
         });
         sftp_handle = nb_res.value;
       } else {
-        nb_res = client->nb_call(control, [&]() {
+        nb_res = client->nb_call(death_clock, [&]() {
           return libssh2_sftp_open(client->sftp, path.c_str(), LIBSSH2_FXF_READ,
                                    0400);
         });
@@ -462,8 +473,9 @@ public:
             return {0, {EC::EndOfFile, __func__, "", "End of file"}};
           }
           if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr =
-                client->wait_for_socket(SocketWaitType::Read, control);
+            WaitResult wr = client->wait_for_socket(
+                SocketWaitType::Read, control,
+                AMDomain::client::kTransferInterruptGraceWaitMs);
             if (wr == WaitResult::Error) {
               return {
                   -1,
@@ -557,8 +569,9 @@ public:
             return {0, {EC::EndOfFile, __func__, "", "End of file"}};
           }
           if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr =
-                client->wait_for_socket(SocketWaitType::Write, control);
+            WaitResult wr = client->wait_for_socket(
+                SocketWaitType::Write, control,
+                AMDomain::client::kTransferInterruptGraceWaitMs);
             if (wr == WaitResult::Error) {
               return {
                   LIBSSH2_ERROR_EAGAIN,
