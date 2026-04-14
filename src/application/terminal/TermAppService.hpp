@@ -23,6 +23,7 @@ public:
 
   struct ChannelStreamAttachResult {
     size_t replayed_bytes = 0;
+    size_t fallback_bytes = 0;
     bool overflowed = false;
     bool closed = false;
     ECM last_error = OK;
@@ -69,6 +70,10 @@ public:
 
   ECM StopChannelStream(const std::string &terminal_nickname,
                         const std::string &channel_name);
+
+  ECM QueueChannelInput(const std::string &terminal_nickname,
+                        const std::string &channel_name,
+                        std::string input_bytes);
 
   [[nodiscard]] ChannelStreamState
   GetChannelStreamState(const std::string &terminal_nickname,

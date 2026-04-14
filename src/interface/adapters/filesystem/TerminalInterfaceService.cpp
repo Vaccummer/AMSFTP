@@ -46,38 +46,6 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
                                        default_interrupt_flag, -1);
 }
 
-int ResolveTerminalOpTimeoutMs_(
-    const AMDomain::client::ClientControlComponent &control,
-    int configured_timeout_ms) {
-  int effective_timeout_ms = configured_timeout_ms;
-  if (effective_timeout_ms == 0) {
-    effective_timeout_ms = -1;
-  }
-  if (effective_timeout_ms < -1) {
-    effective_timeout_ms = -1;
-  }
-
-  const auto remain_opt = control.RemainingTimeMs();
-  if (!remain_opt.has_value()) {
-    return effective_timeout_ms;
-  }
-  const int remain_ms = static_cast<int>(std::min<unsigned int>(
-      remain_opt.value(),
-      static_cast<unsigned int>(std::numeric_limits<int>::max())));
-  if (effective_timeout_ms < 0) {
-    return remain_ms;
-  }
-  return std::min(effective_timeout_ms, remain_ms);
-}
-
-AMDomain::client::ClientControlComponent
-BuildTerminalOpControl_(const AMDomain::client::ClientControlComponent &control,
-                        int configured_timeout_ms) {
-  return AMDomain::client::ClientControlComponent(
-      control.ControlToken(),
-      ResolveTerminalOpTimeoutMs_(control, configured_timeout_ms));
-}
-
 struct TerminalLoopOutcome_ {
   ECM rcm = OK;
   bool force_close = true;
@@ -876,6 +844,7 @@ ECM ExecuteTerminalSession_(
     const AMDomain::client::ClientControlComponent &control,
     int send_timeout_ms,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager) {
+  (void)send_timeout_ms;
   enum class BreakReason_ {
     None = 0,
     LocalEscape,
@@ -984,7 +953,6 @@ ECM ExecuteTerminalSession_(
     prompt_io_manager.Print("");
     return initial_resize_result.rcm;
   }
-  bool pending_prompt_refresh = refresh_prompt_on_enter;
   bool in_local_control_state = false;
   BreakReason_ break_reason = BreakReason_::None;
   bool stream_attached = false;
@@ -1031,6 +999,12 @@ ECM ExecuteTerminalSession_(
     prompt_io_manager.Print(
         "⚠ Terminal output cache overflowed; oldest output was dropped");
   }
+  if (refresh_prompt_on_enter &&
+      (attach_result.data.replayed_bytes + attach_result.data.fallback_bytes) ==
+          0U &&
+      !attach_result.data.closed) {
+    WriteTerminalBytes_("\r\n[terminal resumed]\r\n");
+  }
   if (attach_result.data.closed) {
     loop_outcome = {
         (attach_result.data.last_error) ? OK : attach_result.data.last_error,
@@ -1065,22 +1039,6 @@ ECM ExecuteTerminalSession_(
       break;
     }
 
-    if (pending_prompt_refresh) {
-      const auto write_control =
-          BuildTerminalOpControl_(control, send_timeout_ms);
-      auto write_result = terminal.WriteChannel(
-          AMDomain::terminal::ChannelWriteArgs{
-              std::optional<std::string>(channel_name), "\n"},
-          write_control);
-      if (!write_result.rcm) {
-        loop_outcome = {write_result.rcm, true};
-        break_reason = BreakReason_::Error;
-        break;
-      }
-      pending_prompt_refresh = false;
-      had_activity = true;
-    }
-
     std::string input = {};
     std::string input_error = {};
     const auto input_status = PollLocalTerminalInput_(&input, &input_error);
@@ -1102,15 +1060,10 @@ ECM ExecuteTerminalSession_(
         ProcessLocalControlInput_(input, &in_local_control_state);
     if (!control_process_result.forward_bytes.empty()) {
       had_activity = true;
-      const auto write_control =
-          BuildTerminalOpControl_(control, send_timeout_ms);
-      auto write_result = terminal.WriteChannel(
-          AMDomain::terminal::ChannelWriteArgs{
-              std::optional<std::string>(channel_name),
-              control_process_result.forward_bytes},
-          write_control);
-      if (!write_result.rcm) {
-        loop_outcome = {write_result.rcm, true};
+      const ECM queue_rcm = terminal_service.QueueChannelInput(
+          target.nickname, channel_name, control_process_result.forward_bytes);
+      if (!(queue_rcm)) {
+        loop_outcome = {queue_rcm, true};
         break_reason = BreakReason_::Error;
         break;
       }
