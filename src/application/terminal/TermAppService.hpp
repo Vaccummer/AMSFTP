@@ -3,7 +3,6 @@
 #include "domain/client/ClientPort.hpp"
 #include "domain/terminal/TerminalPort.hpp"
 #include "foundation/core/DataClass.hpp"
-#include <deque>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -25,6 +24,9 @@ public:
     size_t replayed_bytes = 0;
     size_t fallback_bytes = 0;
     bool overflowed = false;
+    bool in_alternate_screen = false;
+    bool soft_limit_hit = false;
+    bool hard_limit_hit = false;
     bool closed = false;
     ECM last_error = OK;
   };
@@ -34,6 +36,9 @@ public:
     bool attached = false;
     bool closed = false;
     bool overflowed = false;
+    bool in_alternate_screen = false;
+    bool soft_limit_hit = false;
+    bool hard_limit_hit = false;
     size_t cached_bytes = 0;
     ECM last_error = OK;
   };

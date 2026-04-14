@@ -9,6 +9,7 @@
 #include <cstring>
 #include <memory>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -32,6 +33,148 @@ constexpr size_t kStreamReadChunkBytes = 32U * 1024U;
 constexpr size_t kStreamWriteChunkBytes = 32U * 1024U;
 constexpr int kStreamWaitTimeoutMs = 50;
 constexpr int kStreamBurstLimit = 8;
+constexpr size_t kTerminalCacheSoftLimitBytes = 32U * 1024U * 1024U;
+constexpr size_t kTerminalCacheHardLimitBytes = 128U * 1024U * 1024U;
+constexpr size_t kMaxEscapeTailBytes = 16U;
+
+enum class ScreenKind { Main, Alternate };
+
+struct OutputBlock {
+  ScreenKind screen = ScreenKind::Main;
+  std::string data = {};
+};
+
+struct TerminalCache {
+  std::vector<OutputBlock> blocks = {};
+  bool in_alternate_screen = false;
+};
+
+struct ScreenToggleMatch_ {
+  bool matched = false;
+  bool partial = false;
+  bool to_alternate = false;
+  size_t length = 0;
+};
+
+struct ParsedScreenChunk_ {
+  std::vector<OutputBlock> blocks = {};
+  bool in_alternate_screen = false;
+  std::string pending_escape_tail = {};
+  size_t appended_bytes = 0;
+};
+
+struct CacheAppendOutcome_ {
+  size_t appended_bytes = 0;
+  bool soft_limit_hit_now = false;
+  bool hard_limit_hit = false;
+};
+
+[[nodiscard]] bool StartsWith_(std::string_view full, std::string_view prefix) {
+  return full.size() >= prefix.size() &&
+         full.compare(0, prefix.size(), prefix.data(), prefix.size()) == 0;
+}
+
+[[nodiscard]] ScreenToggleMatch_ TryMatchScreenToggle_(std::string_view data,
+                                                       size_t pos) {
+  static constexpr std::array<std::pair<std::string_view, bool>, 6>
+      kScreenToggles = {{{"\x1b[?1049h", true},
+                         {"\x1b[?1049l", false},
+                         {"\x1b[?1047h", true},
+                         {"\x1b[?1047l", false},
+                         {"\x1b[?47h", true},
+                         {"\x1b[?47l", false}}};
+
+  if (pos >= data.size() || data[pos] != '\x1b') {
+    return {};
+  }
+  const std::string_view remain = data.substr(pos);
+  ScreenToggleMatch_ out = {};
+  for (const auto &entry : kScreenToggles) {
+    const std::string_view seq = entry.first;
+    if (remain.size() >= seq.size()) {
+      if (remain.compare(0, seq.size(), seq.data(), seq.size()) == 0) {
+        out.matched = true;
+        out.to_alternate = entry.second;
+        out.length = seq.size();
+        return out;
+      }
+      continue;
+    }
+    if (StartsWith_(seq, remain)) {
+      out.partial = true;
+      return out;
+    }
+  }
+  return out;
+}
+
+[[nodiscard]] ParsedScreenChunk_
+ParseScreenChunk_(bool in_alternate_screen, std::string_view pending_tail,
+                  std::string_view chunk) {
+  ParsedScreenChunk_ out = {};
+  out.in_alternate_screen = in_alternate_screen;
+
+  std::string combined = {};
+  combined.reserve(pending_tail.size() + chunk.size());
+  combined.append(pending_tail.data(), pending_tail.size());
+  combined.append(chunk.data(), chunk.size());
+  const std::string_view data(combined);
+
+  auto append_block = [&](ScreenKind screen, const std::string &payload) {
+    if (payload.empty()) {
+      return;
+    }
+    if (!out.blocks.empty() && out.blocks.back().screen == screen) {
+      out.blocks.back().data.append(payload);
+    } else {
+      out.blocks.push_back(OutputBlock{screen, payload});
+    }
+    out.appended_bytes += payload.size();
+  };
+
+  ScreenKind current_screen =
+      out.in_alternate_screen ? ScreenKind::Alternate : ScreenKind::Main;
+  std::string payload = {};
+  payload.reserve(data.size());
+
+  size_t i = 0;
+  bool ended_with_partial = false;
+  while (i < data.size()) {
+    const char ch = data[i];
+    if (ch != '\x1b') {
+      payload.push_back(ch);
+      ++i;
+      continue;
+    }
+
+    const ScreenToggleMatch_ match = TryMatchScreenToggle_(data, i);
+    if (match.partial) {
+      ended_with_partial = true;
+      break;
+    }
+    if (!match.matched) {
+      payload.push_back(ch);
+      ++i;
+      continue;
+    }
+
+    append_block(current_screen, payload);
+    payload.clear();
+    out.in_alternate_screen = match.to_alternate;
+    current_screen =
+        out.in_alternate_screen ? ScreenKind::Alternate : ScreenKind::Main;
+    i += match.length;
+  }
+
+  append_block(current_screen, payload);
+  if (ended_with_partial) {
+    const size_t tail_size = std::min(kMaxEscapeTailBytes, data.size() - i);
+    out.pending_escape_tail.assign(data.substr(data.size() - tail_size));
+  } else {
+    out.pending_escape_tail.clear();
+  }
+  return out;
+}
 
 enum class StreamWaitStatus_ { Ready, Interrupted, Timeout, Error };
 
@@ -454,12 +597,15 @@ struct TermAppService::ChannelStreamRuntime {
   std::thread read_thread = {};
   std::atomic<unsigned long long> wake_seq = 0;
   mutable std::mutex mutex = {};
-  std::deque<std::string> cache_chunks = {};
+  TerminalCache cache = {};
+  std::string pending_escape_tail = {};
   std::string send_buffer = {};
   std::string latest_output = {};
   size_t cached_bytes = 0;
   size_t max_cache_bytes = kDefaultStreamCacheBytes;
   bool overflowed = false;
+  bool soft_limit_hit = false;
+  bool hard_limit_hit = false;
   bool attached = false;
   bool stop_requested = false;
   bool closed = false;
@@ -691,27 +837,47 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
     return;
   }
 
-  auto append_cache_locked = [&](const std::string &chunk) {
+  auto parse_chunk_locked = [&](std::string_view chunk) -> ParsedScreenChunk_ {
     if (chunk.empty()) {
-      return;
+      return {};
     }
-    const size_t max_cache_bytes = std::max<size_t>(1, runtime->max_cache_bytes);
-    if (chunk.size() >= max_cache_bytes) {
-      runtime->cache_chunks.clear();
-      runtime->cached_bytes = max_cache_bytes;
-      runtime->overflowed = true;
-      runtime->cache_chunks.emplace_back(
-          chunk.substr(chunk.size() - max_cache_bytes));
-      return;
+    auto parsed = ParseScreenChunk_(runtime->cache.in_alternate_screen,
+                                    runtime->pending_escape_tail, chunk);
+    runtime->cache.in_alternate_screen = parsed.in_alternate_screen;
+    runtime->pending_escape_tail = parsed.pending_escape_tail;
+    return parsed;
+  };
+
+  auto append_cache_locked = [&](std::string_view chunk) -> CacheAppendOutcome_ {
+    CacheAppendOutcome_ out = {};
+    if (chunk.empty()) {
+      return out;
     }
-    while (runtime->cached_bytes + chunk.size() > max_cache_bytes &&
-           !runtime->cache_chunks.empty()) {
-      runtime->cached_bytes -= runtime->cache_chunks.front().size();
-      runtime->cache_chunks.pop_front();
-      runtime->overflowed = true;
+    auto parsed = parse_chunk_locked(chunk);
+    out.appended_bytes = parsed.appended_bytes;
+
+    for (auto &block : parsed.blocks) {
+      if (block.data.empty()) {
+        continue;
+      }
+      if (!runtime->cache.blocks.empty() &&
+          runtime->cache.blocks.back().screen == block.screen) {
+        runtime->cache.blocks.back().data.append(block.data);
+      } else {
+        runtime->cache.blocks.push_back(std::move(block));
+      }
     }
-    runtime->cache_chunks.push_back(chunk);
-    runtime->cached_bytes += chunk.size();
+    runtime->cached_bytes += out.appended_bytes;
+    if (!runtime->soft_limit_hit &&
+        runtime->cached_bytes >= kTerminalCacheSoftLimitBytes) {
+      runtime->soft_limit_hit = true;
+      out.soft_limit_hit_now = true;
+    }
+    if (runtime->cached_bytes >= kTerminalCacheHardLimitBytes) {
+      runtime->hard_limit_hit = true;
+      out.hard_limit_hit = true;
+    }
+    return out;
   };
 
   auto active_result =
@@ -745,8 +911,6 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
   };
 
   while (true) {
-    std::string deliver_chunk = {};
-    ChannelStreamProcessor deliver_processor = {};
     bool has_pending_write = false;
     unsigned long long wake_snapshot = 0;
     {
@@ -756,20 +920,6 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
       }
       wake_snapshot = runtime->wake_seq.load(std::memory_order_acquire);
       has_pending_write = !runtime->send_buffer.empty();
-      if (runtime->attached && runtime->processor &&
-          !runtime->cache_chunks.empty()) {
-        deliver_chunk = std::move(runtime->cache_chunks.front());
-        runtime->cached_bytes -= deliver_chunk.size();
-        runtime->cache_chunks.pop_front();
-        deliver_processor = runtime->processor;
-      }
-    }
-    if (deliver_processor && !deliver_chunk.empty()) {
-      try {
-        deliver_processor(deliver_chunk);
-      } catch (...) {
-      }
-      continue;
     }
 
     const StreamWaitResult_ wait_result =
@@ -821,13 +971,15 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
 
         if (!read_result.data.output.empty()) {
           ChannelStreamProcessor output_processor = {};
+          CacheAppendOutcome_ cache_outcome = {};
           {
             std::lock_guard<std::mutex> lock(runtime->mutex);
             runtime->latest_output = read_result.data.output;
             if (runtime->attached && runtime->processor) {
               output_processor = runtime->processor;
+              (void)parse_chunk_locked(read_result.data.output);
             } else {
-              append_cache_locked(read_result.data.output);
+              cache_outcome = append_cache_locked(read_result.data.output);
             }
           }
           if (output_processor) {
@@ -835,6 +987,17 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
               output_processor(read_result.data.output);
             } catch (...) {
             }
+          }
+          if (cache_outcome.hard_limit_hit) {
+            close_with_error(Err(
+                EC::FilesystemNoSpace, "terminal.stream.cache.limit",
+                runtime->channel_name,
+                "Terminal output cache hard limit exceeded (128MB); channel "
+                "closed"));
+            (void)runtime->terminal->CloseChannel({runtime->channel_name, true},
+                                                  io_control);
+            should_break = true;
+            break;
           }
         }
 
@@ -1048,42 +1211,66 @@ TermAppService::AttachChannelStream(const std::string &terminal_nickname,
     return out;
   }
 
-  std::deque<std::string> replay_chunks = {};
+  std::vector<OutputBlock> replay_blocks = {};
+  std::string main_content = {};
+  std::string latest_alternate_content = {};
   std::string fallback_output = {};
   {
     std::lock_guard<std::mutex> lock(runtime->mutex);
     runtime->max_cache_bytes = std::max<size_t>(1, max_cache_bytes);
-    while (runtime->cached_bytes > runtime->max_cache_bytes &&
-           !runtime->cache_chunks.empty()) {
-      runtime->cached_bytes -= runtime->cache_chunks.front().size();
-      runtime->cache_chunks.pop_front();
-      runtime->overflowed = true;
-    }
-    replay_chunks.swap(runtime->cache_chunks);
-    out.data.replayed_bytes = runtime->cached_bytes;
-    if (replay_chunks.empty()) {
-      fallback_output = runtime->latest_output;
-      out.data.fallback_bytes = fallback_output.size();
-    }
+    replay_blocks.swap(runtime->cache.blocks);
+    fallback_output = runtime->latest_output;
     runtime->cached_bytes = 0;
+    out.data.in_alternate_screen = runtime->cache.in_alternate_screen;
+    out.data.soft_limit_hit = runtime->soft_limit_hit;
+    out.data.hard_limit_hit = runtime->hard_limit_hit;
     out.data.overflowed = runtime->overflowed;
     runtime->overflowed = false;
     out.data.closed = runtime->closed;
     out.data.last_error = runtime->last_error;
+    runtime->soft_limit_hit = false;
     runtime->processor = processor;
     runtime->attached = false;
   }
-  for (const auto &chunk : replay_chunks) {
+
+  for (const auto &block : replay_blocks) {
+    if (block.data.empty()) {
+      continue;
+    }
+    if (block.screen == ScreenKind::Main) {
+      main_content.append(block.data);
+      continue;
+    }
+    latest_alternate_content = block.data;
+  }
+
+  if (!main_content.empty()) {
     try {
-      processor(chunk);
+      processor(main_content);
     } catch (...) {
     }
+    out.data.replayed_bytes += main_content.size();
   }
-  if (!fallback_output.empty()) {
+  if (out.data.in_alternate_screen) {
+    try {
+      processor("\x1b[?1049h");
+    } catch (...) {
+    }
+    if (!latest_alternate_content.empty()) {
+      try {
+        processor(latest_alternate_content);
+      } catch (...) {
+      }
+      out.data.replayed_bytes += latest_alternate_content.size();
+    }
+  }
+
+  if (out.data.replayed_bytes == 0 && !fallback_output.empty()) {
     try {
       processor(fallback_output);
     } catch (...) {
     }
+    out.data.fallback_bytes = fallback_output.size();
   }
   {
     std::lock_guard<std::mutex> lock(runtime->mutex);
@@ -1208,6 +1395,9 @@ TermAppService::ChannelStreamState TermAppService::GetChannelStreamState(
   out.attached = runtime->attached;
   out.closed = runtime->closed;
   out.overflowed = runtime->overflowed;
+  out.in_alternate_screen = runtime->cache.in_alternate_screen;
+  out.soft_limit_hit = runtime->soft_limit_hit;
+  out.hard_limit_hit = runtime->hard_limit_hit;
   out.cached_bytes = runtime->cached_bytes;
   out.last_error = runtime->last_error;
   return out;
