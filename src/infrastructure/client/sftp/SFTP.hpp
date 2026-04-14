@@ -1,5 +1,6 @@
 #pragma once
 // standard library
+#include "domain/client/ClientModel.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/core/Enum.hpp"
 #include "foundation/tools/string.hpp"
@@ -16,11 +17,13 @@
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -68,6 +71,99 @@ enum class SocketWaitType {
   ReadWrite,   // Wait for both readable and writable
   ReadOrWrite, // Wait for readable or writable, returns ReadReady/WriteReady
   Auto         // Determine from libssh2_session_block_directions
+};
+
+class DeathClockProtocol {
+public:
+  explicit DeathClockProtocol(
+      const AMDomain::client::ClientControlComponent &control,
+      int death_clock_timeout_ms = AMDomain::client::kFilesystemOpGraceWaitMs)
+      : control_(control), death_start_(AMTime::SteadyNow()),
+        death_clock_timeout_ms_(
+            death_clock_timeout_ms > 0
+                ? death_clock_timeout_ms
+                : AMDomain::client::kFilesystemOpGraceWaitMs) {
+    Refresh();
+  }
+
+  void Refresh() {
+    if (activated_) {
+      return;
+    }
+    if (control_.IsInterrupted()) {
+      death_start_ = AMTime::SteadyNow();
+      activated_ = true;
+      reason_ = WaitResult::Interrupted;
+      return;
+    }
+    if (control_.IsTimeout()) {
+      death_start_ = AMTime::SteadyNow();
+      activated_ = true;
+      reason_ = WaitResult::Timeout;
+    }
+  }
+
+  [[nodiscard]] bool IsActivated() const { return activated_; }
+
+  [[nodiscard]] WaitResult Reason() const { return reason_; }
+
+  [[nodiscard]] const AMDomain::client::ClientControlComponent &
+  Control() const {
+    return control_;
+  }
+
+  [[nodiscard]] std::optional<WaitResult> Check() {
+    Refresh();
+    if (!activated_) {
+      return std::nullopt;
+    }
+    if (death_clock_timeout_ms_ <= 0) {
+      return reason_;
+    }
+    if (AMTime::IntervalMS(death_start_, AMTime::SteadyNow()) >=
+        static_cast<double>(death_clock_timeout_ms_)) {
+      return reason_;
+    }
+    return std::nullopt;
+  }
+
+  [[nodiscard]] int ResolveTimeoutMs() {
+    Refresh();
+    if (activated_) {
+      return RemainingDeathTimeoutMs_();
+    }
+    const auto remain_opt = control_.RemainingTimeMs();
+    if (!remain_opt.has_value()) {
+      return -1;
+    }
+    const unsigned int remain = *remain_opt;
+    const auto max_int =
+        static_cast<unsigned int>((std::numeric_limits<int>::max)());
+    return remain > max_int ? static_cast<int>(max_int)
+                            : static_cast<int>(remain);
+  }
+
+  [[nodiscard]] int BuildDeathTimeoutMs() const {
+    return death_clock_timeout_ms_ > 0 ? death_clock_timeout_ms_ : 1;
+  }
+
+private:
+  const AMDomain::client::ClientControlComponent &control_;
+  std::chrono::steady_clock::time_point death_start_;
+  int death_clock_timeout_ms_ = AMDomain::client::kFilesystemOpGraceWaitMs;
+  bool activated_ = false;
+  WaitResult reason_ = WaitResult::Interrupted;
+
+  [[nodiscard]] int RemainingDeathTimeoutMs_() const {
+    if (death_clock_timeout_ms_ <= 0) {
+      return 0;
+    }
+    const double elapsed_ms =
+        AMTime::IntervalMS(death_start_, AMTime::SteadyNow());
+    const int elapsed = elapsed_ms <= 0.0 ? 0 : static_cast<int>(elapsed_ms);
+    const int remaining = death_clock_timeout_ms_ - elapsed;
+    return remaining > 0 ? remaining : 0;
+  }
 };
 
 // Cross-platform socket connector
@@ -1061,6 +1157,24 @@ protected:
     state_atomic_.lock().store(state);
   }
 
+  void MarkDeathClockStateMachineBroken_(WaitResult reason) {
+    ECM rcm = {};
+    switch (reason) {
+    case WaitResult::Timeout:
+      rcm = {EC::OperationTimeout, "wait_for_socket.death_clock", "",
+             "Death clock grace timeout exceeded while waiting for socket"};
+      break;
+    case WaitResult::Interrupted:
+      rcm = {EC::Terminate, "wait_for_socket.death_clock", "",
+             "Death clock grace timeout exceeded after interrupt"};
+      break;
+    default:
+      return;
+    }
+    SetState({rcm, AMDomain::client::ClientStatus::ConnectionBroken});
+    trace(TraceLevel::Error, rcm.code, "", rcm.operation, rcm.error);
+  }
+
   [[nodiscard]] ECMData<AMDomain::filesystem::CheckResult> GetState() const {
     return state_atomic_.lock().load();
   }
@@ -1311,18 +1425,21 @@ public:
   }
 
   template <typename Func>
-  auto nb_call(const AMDomain::client::ClientControlComponent &control,
-               Func &&func) -> NBResult<decltype(func())> {
+  auto nb_call(detail::DeathClockProtocol &death_clock, Func &&func)
+      -> NBResult<decltype(func())> {
     using RetType = decltype(func());
-    if (control.IsInterrupted()) {
-      return {RetType{}, WaitResult::Interrupted};
-    }
-    if (control.IsTimeout()) {
-      return {RetType{}, WaitResult::Timeout};
+    if (auto stop = death_clock.Check(); stop.has_value()) {
+      MarkDeathClockStateMachineBroken_(*stop);
+      return {RetType{}, *stop};
     }
 
     RetType rc;
     while (true) {
+      if (auto stop = death_clock.Check(); stop.has_value()) {
+        MarkDeathClockStateMachineBroken_(*stop);
+        return {RetType{}, *stop};
+      }
+
       rc = func();
 
       bool should_retry = false;
@@ -1339,26 +1456,49 @@ public:
         return {rc, WaitResult::Ready};
       }
 
-      WaitResult wr = wait_for_socket(detail::SocketWaitType::Auto, control);
+      WaitResult wr = wait_for_socket_with_protocol_(
+          detail::SocketWaitType::Auto, death_clock);
       if (wr != WaitResult::Ready) {
         return {rc, wr};
       }
     }
   }
 
+  template <typename Func>
+  auto nb_call(
+      const AMDomain::client::ClientControlComponent &control, Func &&func,
+      int death_clock_timeout_ms = AMDomain::client::kFilesystemOpGraceWaitMs)
+      -> NBResult<decltype(func())> {
+    detail::DeathClockProtocol death_clock(control, death_clock_timeout_ms);
+    return nb_call(death_clock, std::forward<Func>(func));
+  }
+
   inline WaitResult wait_for_socket(
       detail::SocketWaitType wait_dir,
-      const AMDomain::client::ClientControlComponent &control = {}) {
+      const AMDomain::client::ClientControlComponent &control = {},
+      int death_clock_timeout_ms = AMDomain::client::kFilesystemOpGraceWaitMs) {
     if (!session || sock == INVALID_SOCKET) {
       return WaitResult::Error;
     }
-    const amf &interrupt_flag = control.ControlToken();
-
-    if (control.IsInterrupted()) {
-      return WaitResult::Interrupted;
+    detail::DeathClockProtocol death_clock(control, death_clock_timeout_ms);
+    if (auto stop = death_clock.Check(); stop.has_value()) {
+      MarkDeathClockStateMachineBroken_(*stop);
+      return *stop;
     }
-    if (control.IsTimeout()) {
-      return WaitResult::Timeout;
+    return wait_for_socket_with_protocol_(wait_dir, death_clock);
+  }
+
+  inline WaitResult
+  wait_for_socket_with_protocol_(detail::SocketWaitType wait_dir,
+                                 detail::DeathClockProtocol &death_clock) {
+    if (!session || sock == INVALID_SOCKET) {
+      return WaitResult::Error;
+    }
+    const auto &control = death_clock.Control();
+    const amf &interrupt_flag = control.ControlToken();
+    if (auto stop = death_clock.Check(); stop.has_value()) {
+      MarkDeathClockStateMachineBroken_(*stop);
+      return *stop;
     }
 
     if (wait_dir == detail::SocketWaitType::Auto &&
@@ -1390,32 +1530,20 @@ public:
       }
     }
 
-    fd_set readfds;
-    fd_set writefds;
-    FD_ZERO(&readfds);
-    FD_ZERO(&writefds);
-
-    if (is_auto) {
-      const int dir = libssh2_session_block_directions(session);
-      if (dir == 0) {
-        return WaitResult::Ready;
-      }
-      if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) {
-        FD_SET(sock, &readfds);
-      }
-      if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
-        FD_SET(sock, &writefds);
-      }
-    } else {
-      if (wait_read) {
-        FD_SET(sock, &readfds);
-      }
-      if (wait_write) {
-        FD_SET(sock, &writefds);
-      }
+    size_t wake_token = 0;
+    SOCKET wake_read_sock = INVALID_SOCKET;
+    if (EnsureInterruptWakeSocketPair_()) {
+      DrainInterruptWakeSocket_();
+      wake_read_sock = GetInterruptWakeReadSocket_();
     }
 
-    size_t wake_token = 0;
+    death_clock.Refresh();
+    if (!death_clock.IsActivated() && wake_read_sock != INVALID_SOCKET &&
+        interrupt_flag) {
+      wake_token = interrupt_flag->RegisterWakeup(
+          [this]() { SignalInterruptWakeSocket_(); });
+    }
+
     auto cleanup_wakeup = [&]() {
       if (wake_token != 0) {
         if (interrupt_flag) {
@@ -1425,87 +1553,152 @@ public:
       }
     };
 
-    SOCKET wake_read_sock = INVALID_SOCKET;
-    if (EnsureInterruptWakeSocketPair_()) {
-      DrainInterruptWakeSocket_();
-      wake_read_sock = GetInterruptWakeReadSocket_();
-      if (wake_read_sock != INVALID_SOCKET) {
-        if (interrupt_flag) {
-          wake_token = interrupt_flag->RegisterWakeup(
-              [this]() { SignalInterruptWakeSocket_(); });
+    auto select_once = [&](int timeout_ms, fd_set *out_readfds,
+                           fd_set *out_writefds,
+                           bool *out_interrupt_poll_fallback) -> int {
+      fd_set local_readfds;
+      fd_set local_writefds;
+      FD_ZERO(&local_readfds);
+      FD_ZERO(&local_writefds);
+
+      if (is_auto) {
+        const int dir = libssh2_session_block_directions(session);
+        if (dir == 0) {
+          if (out_readfds) {
+            *out_readfds = local_readfds;
+          }
+          if (out_writefds) {
+            *out_writefds = local_writefds;
+          }
+          if (out_interrupt_poll_fallback) {
+            *out_interrupt_poll_fallback = false;
+          }
+          return 1;
         }
-        FD_SET(wake_read_sock, &readfds);
+        if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) {
+          FD_SET(sock, &local_readfds);
+        }
+        if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
+          FD_SET(sock, &local_writefds);
+        }
+      } else {
+        if (wait_read) {
+          FD_SET(sock, &local_readfds);
+        }
+        if (wait_write) {
+          FD_SET(sock, &local_writefds);
+        }
       }
-    }
-
-    const bool watch_socket =
-        FD_ISSET(sock, &readfds) || FD_ISSET(sock, &writefds);
-    const bool watch_wakeup = wake_read_sock != INVALID_SOCKET;
-    if (!watch_socket && !watch_wakeup) {
-      cleanup_wakeup();
-      return WaitResult::Ready;
-    }
-
-    timeval tv{};
-    timeval *timeout_ptr = nullptr;
-    bool interrupt_poll_fallback = false;
-    const auto remain_opt = control.RemainingTimeMs();
-    if (remain_opt.has_value()) {
-      if (*remain_opt == 0U) {
-        cleanup_wakeup();
-        return WaitResult::Timeout;
+      if (wake_read_sock != INVALID_SOCKET) {
+        FD_SET(wake_read_sock, &local_readfds);
       }
-      const int64_t remaining = static_cast<int64_t>(*remain_opt);
-      tv.tv_sec = static_cast<long>(remaining / 1000);
-      tv.tv_usec = static_cast<long>((remaining % 1000) * 1000);
-      timeout_ptr = &tv;
-    } else if (wake_read_sock == INVALID_SOCKET) {
-      // Fallback path: when wake socket backend is unavailable, wake select
-      // periodically so Ctrl+C can still be observed for unbounded waits.
-      tv.tv_sec = 0;
-      tv.tv_usec = 100 * 1000; // 100ms
-      timeout_ptr = &tv;
-      interrupt_poll_fallback = true;
-    }
+
+      const bool watch_socket =
+          FD_ISSET(sock, &local_readfds) || FD_ISSET(sock, &local_writefds);
+      const bool watch_wakeup = wake_read_sock != INVALID_SOCKET;
+      if (!watch_socket && !watch_wakeup) {
+        if (out_readfds) {
+          *out_readfds = local_readfds;
+        }
+        if (out_writefds) {
+          *out_writefds = local_writefds;
+        }
+        if (out_interrupt_poll_fallback) {
+          *out_interrupt_poll_fallback = false;
+        }
+        return 1;
+      }
+
+      timeval tv{};
+      timeval *timeout_ptr = nullptr;
+      bool interrupt_poll_fallback = false;
+      if (timeout_ms >= 0) {
+        const int bounded_timeout = timeout_ms;
+        tv.tv_sec = static_cast<long>(bounded_timeout / 1000);
+        tv.tv_usec = static_cast<long>((bounded_timeout % 1000) * 1000);
+        timeout_ptr = &tv;
+      } else if (wake_read_sock == INVALID_SOCKET) {
+        tv.tv_sec = 0;
+        tv.tv_usec = 100 * 1000; // 100ms polling fallback
+        timeout_ptr = &tv;
+        interrupt_poll_fallback = true;
+      }
 
 #ifdef _WIN32
-    const int rc = select(0, &readfds, &writefds, nullptr, timeout_ptr);
+      const int rc =
+          select(0, &local_readfds, &local_writefds, nullptr, timeout_ptr);
 #else
-    int nfds = static_cast<int>(sock) + 1;
-    if (wake_read_sock != INVALID_SOCKET) {
-      nfds = std::max(nfds, static_cast<int>(wake_read_sock) + 1);
-    }
-    const int rc = select(nfds, &readfds, &writefds, nullptr, timeout_ptr);
+      int nfds = static_cast<int>(sock) + 1;
+      if (wake_read_sock != INVALID_SOCKET) {
+        nfds = std::max(nfds, static_cast<int>(wake_read_sock) + 1);
+      }
+      const int rc =
+          select(nfds, &local_readfds, &local_writefds, nullptr, timeout_ptr);
 #endif
+      if (out_readfds) {
+        *out_readfds = local_readfds;
+      }
+      if (out_writefds) {
+        *out_writefds = local_writefds;
+      }
+      if (out_interrupt_poll_fallback) {
+        *out_interrupt_poll_fallback = interrupt_poll_fallback;
+      }
+      return rc;
+    };
+
+    int timeout_ms = death_clock.ResolveTimeoutMs();
+
+    fd_set selected_readfds;
+    fd_set selected_writefds;
+    bool interrupt_poll_fallback = false;
+    int rc = select_once(timeout_ms, &selected_readfds, &selected_writefds,
+                         &interrupt_poll_fallback);
+
+    if (rc < 0) {
+      if (auto stop = death_clock.Check(); stop.has_value()) {
+        cleanup_wakeup();
+        MarkDeathClockStateMachineBroken_(*stop);
+        return *stop;
+      }
+      rc = select_once(death_clock.BuildDeathTimeoutMs(), &selected_readfds,
+                       &selected_writefds, &interrupt_poll_fallback);
+    }
 
     cleanup_wakeup();
 
     if (rc < 0) {
-      return control.IsInterrupted() ? WaitResult::Interrupted
-                                     : WaitResult::Error;
+      if (auto stop = death_clock.Check(); stop.has_value()) {
+        MarkDeathClockStateMachineBroken_(*stop);
+        return *stop;
+      }
+      return WaitResult::Error;
     }
     if (rc == 0) {
-      if (interrupt_poll_fallback) {
-        return control.IsInterrupted() ? WaitResult::Interrupted
-                                       : WaitResult::Ready;
+      if (auto stop = death_clock.Check(); stop.has_value()) {
+        MarkDeathClockStateMachineBroken_(*stop);
+        return *stop;
       }
-      return control.IsInterrupted() ? WaitResult::Interrupted
-                                     : WaitResult::Timeout;
+      if (interrupt_poll_fallback) {
+        return WaitResult::Ready;
+      }
+      return WaitResult::Timeout;
     }
 
     if (wake_read_sock != INVALID_SOCKET &&
-        FD_ISSET(wake_read_sock, &readfds)) {
+        FD_ISSET(wake_read_sock, &selected_readfds)) {
       DrainInterruptWakeSocket_();
-      if (control.IsInterrupted()) {
-        return WaitResult::Interrupted;
+      if (auto stop = death_clock.Check(); stop.has_value()) {
+        MarkDeathClockStateMachineBroken_(*stop);
+        return *stop;
       }
     }
 
     if (is_read_or_write) {
-      if (FD_ISSET(sock, &readfds)) {
+      if (FD_ISSET(sock, &selected_readfds)) {
         return WaitResult::ReadReady;
       }
-      if (FD_ISSET(sock, &writefds)) {
+      if (FD_ISSET(sock, &selected_writefds)) {
         return WaitResult::WriteReady;
       }
     }
@@ -1575,6 +1768,7 @@ public:
     std::string password_tmp;
     std::string stored_password_enc = request.password;
     const char *auth_list = nullptr;
+    detail::DeathClockProtocol death_clock(control);
 
     auto NotifyAuth = [&](bool need_password, const std::string &password_enc,
                           bool password_correct) {
@@ -1670,7 +1864,7 @@ public:
     }
 
     trace_connect_state("negotiate authorized methods", request.username);
-    auto auth_list_res = nb_call(control, [&]() {
+    auto auth_list_res = nb_call(death_clock, [&]() {
       return libssh2_userauth_list(session, request.username.c_str(),
                                    request.username.length());
     });
@@ -1703,7 +1897,7 @@ public:
       if (control.IsInterrupted()) {
         return {EC::Terminate, __func__, "", "Authentication interrupted"};
       }
-      auto auth_res = nb_call(control, [&]() {
+      auto auth_res = nb_call(death_clock, [&]() {
         return libssh2_userauth_publickey_fromfile(
             session, request.username.c_str(), nullptr, request.keyfile.c_str(),
             nullptr);
@@ -1734,7 +1928,7 @@ public:
         return {EC::Terminate, __func__, "", "Authentication interrupted"};
       }
       std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
-      auto auth_res = nb_call(control, [&]() {
+      auto auth_res = nb_call(death_clock, [&]() {
         return libssh2_userauth_password(session, request.username.c_str(),
                                          plain_password.c_str());
       });
@@ -1770,7 +1964,7 @@ public:
         }
         trace_connect_state(BuildPrivateKeyStateInfo_(private_key),
                             request.username);
-        auto auth_res = nb_call(control, [&]() {
+        auto auth_res = nb_call(death_clock, [&]() {
           return libssh2_userauth_publickey_fromfile(
               session, request.username.c_str(), nullptr, private_key.c_str(),
               nullptr);
@@ -1818,7 +2012,7 @@ public:
           break;
         }
         const std::string password_enc = AMAuth::EncryptPassword(password_tmp);
-        auto auth_res = nb_call(control, [&]() {
+        auto auth_res = nb_call(death_clock, [&]() {
           return libssh2_userauth_password(session, request.username.c_str(),
                                            password_tmp.c_str());
         });
@@ -1857,7 +2051,7 @@ public:
 
     trace_connect_state("create SFTP Handle", request.hostname);
     auto sftp_init_res =
-        nb_call(control, [&]() { return libssh2_sftp_init(session); });
+        nb_call(death_clock, [&]() { return libssh2_sftp_init(session); });
     rcm = ErrorRecord(sftp_init_res, TraceLevel::Critical, "",
                       "libssh2_sftp_init");
     if (rcm.code != EC::Success) {
@@ -1871,6 +2065,7 @@ public:
     libssh2_session_set_blocking(session, 0);
     return OK;
   }
+
   EC GetLastEC(int *code = nullptr) {
     if (!session) {
       return EC::NoSession;
@@ -2017,7 +2212,8 @@ protected:
     }
 
     char path_t_buf[1024] = {0};
-    auto nb_res = nb_call(control, [&] {
+    detail::DeathClockProtocol death_clock(control);
+    auto nb_res = nb_call(death_clock, [&] {
       return libssh2_sftp_realpath(sftp, path.c_str(), path_t_buf,
                                    sizeof(path_t_buf));
     });
@@ -2169,6 +2365,7 @@ public:
 
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     libssh2_session_set_blocking(session, 0);
+    detail::DeathClockProtocol death_clock(control);
 
     for (ssize_t i = 0; i < times; i++) {
       if (control.CheckStop(rcm)) {
@@ -2177,7 +2374,7 @@ public:
 
       const double t0 = static_cast<double>(AMTime::miliseconds()) / 1000.0;
       auto stat_res = nb_call(
-          control, [&] { return libssh2_sftp_stat(sftp, "/", &attrs); });
+          death_clock, [&] { return libssh2_sftp_stat(sftp, "/", &attrs); });
       rcm = ErrorRecord(stat_res, TraceLevel::Error, "/", "libssh2_sftp_stat");
       trace(rcm);
       if (!rcm) {
@@ -2229,12 +2426,13 @@ public:
     }
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     NBResult<int> stat_res;
+    detail::DeathClockProtocol death_clock(control);
     if (args.trace_link) {
-      stat_res = nb_call(control, [&] {
+      stat_res = nb_call(death_clock, [&] {
         return libssh2_sftp_stat(sftp, args.path.c_str(), &attrs);
       });
     } else {
-      stat_res = nb_call(control, [&] {
+      stat_res = nb_call(death_clock, [&] {
         return libssh2_sftp_lstat(sftp, args.path.c_str(), &attrs);
       });
     }
@@ -2270,8 +2468,9 @@ public:
     std::string name;
     const size_t buffer_size = 4096;
     std::vector<char> filename_buffer(buffer_size, 0);
+    detail::DeathClockProtocol death_clock(control);
 
-    auto open_res = nb_call(control, [&] {
+    auto open_res = nb_call(death_clock, [&] {
       return libssh2_sftp_open_ex(sftp, args.path.c_str(), args.path.size(), 0,
                                   LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
     });
@@ -2298,7 +2497,7 @@ public:
     sftp_handle = open_res.value;
 
     while (true) {
-      auto read_res = nb_call(control, [&] {
+      auto read_res = nb_call(death_clock, [&] {
         return libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
                                        buffer_size, nullptr, 0, &attrs);
       });
@@ -2323,7 +2522,10 @@ public:
     }
 
     if (sftp_handle) {
-      libssh2_sftp_close_handle(sftp_handle);
+      detail::DeathClockProtocol close_death_clock(
+          control, AMDomain::client::kHandleCloseGraceWaitMs);
+      (void)nb_call(close_death_clock,
+                    [&]() { return libssh2_sftp_close_handle(sftp_handle); });
     }
     if (!rcm) {
       return {std::move(rcm)};
@@ -2358,8 +2560,9 @@ public:
     const size_t buffer_size = 4096;
     std::vector<char> filename_buffer(buffer_size, 0);
     std::vector<std::string> names = {};
+    detail::DeathClockProtocol death_clock(control);
 
-    auto open_res = nb_call(control, [&] {
+    auto open_res = nb_call(death_clock, [&] {
       return libssh2_sftp_open_ex(sftp, args.path.c_str(), args.path.size(), 0,
                                   LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
     });
@@ -2385,7 +2588,7 @@ public:
     sftp_handle = open_res.value;
 
     while (true) {
-      auto read_res = nb_call(control, [&] {
+      auto read_res = nb_call(death_clock, [&] {
         return libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
                                        buffer_size, nullptr, 0, nullptr);
       });
@@ -2410,7 +2613,10 @@ public:
     }
 
     if (sftp_handle) {
-      libssh2_sftp_close_handle(sftp_handle);
+      detail::DeathClockProtocol close_death_clock(
+          control, AMDomain::client::kHandleCloseGraceWaitMs);
+      (void)nb_call(close_death_clock,
+                    [&]() { return libssh2_sftp_close_handle(sftp_handle); });
     }
     if (!rcm) {
       return {std::move(rcm)};
@@ -2458,7 +2664,8 @@ public:
     if (!sftp) {
       return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
     }
-    auto nb_res = nb_call(control, [&] {
+    detail::DeathClockProtocol death_clock(control);
+    auto nb_res = nb_call(death_clock, [&] {
       return libssh2_sftp_mkdir_ex(sftp, args.path.c_str(), args.path.size(),
                                    0740);
     });
@@ -2551,8 +2758,10 @@ public:
     if (!sftp) {
       return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
     }
-    auto nb_res = nb_call(
-        control, [&] { return libssh2_sftp_rmdir(sftp, args.path.c_str()); });
+    detail::DeathClockProtocol death_clock(control);
+    auto nb_res = nb_call(death_clock, [&] {
+      return libssh2_sftp_rmdir(sftp, args.path.c_str());
+    });
     rcm =
         ErrorRecord(nb_res, TraceLevel::Error, args.path, "libssh2_sftp_rmdir");
     trace(rcm);
@@ -2575,8 +2784,10 @@ public:
     if (!sftp) {
       return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
     }
-    auto nb_res = nb_call(
-        control, [&] { return libssh2_sftp_unlink(sftp, args.path.c_str()); });
+    detail::DeathClockProtocol death_clock(control);
+    auto nb_res = nb_call(death_clock, [&] {
+      return libssh2_sftp_unlink(sftp, args.path.c_str());
+    });
     rcm = ErrorRecord(nb_res, TraceLevel::Error, args.path,
                       "libssh2_sftp_unlink");
     trace(rcm);
@@ -2609,7 +2820,8 @@ public:
     if (!sftp) {
       return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
     }
-    auto nb_res = nb_call(control, [&] {
+    detail::DeathClockProtocol death_clock(control);
+    auto nb_res = nb_call(death_clock, [&] {
       return libssh2_sftp_rename_ex(
           sftp, args.src.c_str(), args.src.size(), args.dst.c_str(),
           args.dst.size(),
@@ -2653,6 +2865,7 @@ public:
     NBResult<int> exec_res{0, WaitResult::Ready};
     NBResult<ssize_t> read_res{0, WaitResult::Ready};
     NBResult<int> close_res{0, WaitResult::Ready};
+    detail::DeathClockProtocol death_clock(control);
 
     // Set non-blocking mode
     libssh2_session_set_blocking(session, 0);
@@ -2670,8 +2883,9 @@ public:
     };
 
     // 1. Execute command
-    exec_res = nb_call(
-        control, [&] { return libssh2_channel_exec(sf.channel, cmd.c_str()); });
+    exec_res = nb_call(death_clock, [&] {
+      return libssh2_channel_exec(sf.channel, cmd.c_str());
+    });
     if (!exec_res) {
       wr = exec_res.status;
       goto cleanup;
@@ -2683,7 +2897,7 @@ public:
     stage = CmdStage::AwaitOutput;
     // 2. Read output
     while (true) {
-      read_res = nb_call(control, [&] {
+      read_res = nb_call(death_clock, [&] {
         return libssh2_channel_read(sf.channel, buffer.data(),
                                     buffer.size() - 1);
       });
@@ -2717,7 +2931,7 @@ public:
     }
 
     // 4. Close channel non-blocking
-    close_res = nb_call(control, [&] { return sf.close_nonblock(); });
+    close_res = nb_call(death_clock, [&] { return sf.close_nonblock(); });
 
     if (!close_res) {
       wr = close_res.status;

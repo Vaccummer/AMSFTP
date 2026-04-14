@@ -2281,7 +2281,7 @@ ECM ClientInterfaceService::PoolLs(
 
     if (request.check) {
       row.checked =
-          client_service_.CheckClientHandle(instance.client, false, true, control);
+          client_service_.CheckClientHandle(instance.client, false, true, component);
       row.status_rcm = row.checked->rcm;
       status = MergeStatus_(status, row.status_rcm);
     }
