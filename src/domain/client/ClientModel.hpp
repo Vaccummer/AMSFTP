@@ -113,4 +113,15 @@ struct ClientServiceArg {
   int heartbeat_timeout_ms = 100;
   int check_timeout_ms = 2000;
 };
+
+/**
+ * @brief Grace wait budget after transfer interrupt/timeout is observed.
+ *
+ * SFTP nonblocking operations may still complete shortly after a stop signal.
+ * The runtime can continue polling for at most this budget before forcing a
+ * hard terminate/timeout return.
+ */
+constexpr int kHandleCloseGraceWaitMs = 3000;
+constexpr int kTransferInterruptGraceWaitMs = 1800;
+constexpr int kFilesystemOpGraceWaitMs = 900;
 } // namespace AMDomain::client

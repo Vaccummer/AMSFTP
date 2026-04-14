@@ -795,7 +795,7 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
 
     candidate->TaskControlPort().ClearInterrupt();
     auto check_result =
-        CheckClientInternal_(candidate, true, true, BuildCheckControl_());
+        CheckClientInternal_(candidate, false, true, BuildCheckControl_());
     if (!(check_result.rcm)) {
       stale_ids.push_back(candidate_id);
       status = check_result.rcm;
@@ -1112,19 +1112,16 @@ ECMData<CheckResult> ClientAppService::CheckClientInternal_(
                   "Client handle is null"};
     return result;
   }
-  if (!update) {
-    const auto cached = client->ConfigPort().GetState();
-    if (cached.data.status == ClientStatus::OK && (cached.rcm)) {
-      return cached;
-    }
-    if (!reconnect) {
-      return cached;
-    }
-  } else {
-    auto state = client->IOPort().Check({}, control);
-    if ((state.rcm) || !reconnect) {
-      return state;
-    }
+  (void)update;
+
+  const auto cached = client->ConfigPort().GetState();
+  if (cached.data.status != ClientStatus::OK || !(cached.rcm)) {
+    return cached;
+  }
+
+  auto state = client->IOPort().Check({}, control);
+  if ((state.rcm) || !reconnect) {
+    return state;
   }
 
   client->IOPort().Connect(AMDomain::filesystem::ConnectArgs{true}, control);
