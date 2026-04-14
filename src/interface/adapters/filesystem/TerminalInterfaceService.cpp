@@ -14,11 +14,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string_view>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -285,6 +288,135 @@ void WriteTerminalBytes_(std::string_view text) {
   }
   (void)std::fwrite(text.data(), 1, text.size(), stdout);
   std::fflush(stdout);
+}
+
+constexpr const char *kTerminalExitAlternateScreen_ = "\x1b[?1049l";
+constexpr size_t kAttachReplayEscapeTailMaxBytes_ = 16U;
+
+struct AttachReplayRenderTracker_ {
+  bool in_alternate_screen = false;
+  size_t main_line_breaks = 0;
+  bool main_has_output = false;
+  std::string pending_escape_tail = {};
+};
+
+struct ScreenToggleMatch_ {
+  bool matched = false;
+  bool partial = false;
+  bool to_alternate = false;
+  size_t length = 0;
+};
+
+[[nodiscard]] bool StartsWith_(std::string_view full, std::string_view prefix) {
+  return full.size() >= prefix.size() &&
+         full.compare(0, prefix.size(), prefix.data(), prefix.size()) == 0;
+}
+
+[[nodiscard]] ScreenToggleMatch_ TryMatchScreenToggle_(std::string_view data,
+                                                       size_t pos) {
+  static constexpr std::array<std::pair<std::string_view, bool>, 6>
+      kScreenToggles = {{{"\x1b[?1049h", true},
+                         {"\x1b[?1049l", false},
+                         {"\x1b[?1047h", true},
+                         {"\x1b[?1047l", false},
+                         {"\x1b[?47h", true},
+                         {"\x1b[?47l", false}}};
+
+  if (pos >= data.size() || data[pos] != '\x1b') {
+    return {};
+  }
+  const std::string_view remain = data.substr(pos);
+  ScreenToggleMatch_ out = {};
+  for (const auto &entry : kScreenToggles) {
+    const std::string_view seq = entry.first;
+    if (remain.size() >= seq.size()) {
+      if (remain.compare(0, seq.size(), seq.data(), seq.size()) == 0) {
+        out.matched = true;
+        out.to_alternate = entry.second;
+        out.length = seq.size();
+        return out;
+      }
+      continue;
+    }
+    if (StartsWith_(seq, remain)) {
+      out.partial = true;
+      return out;
+    }
+  }
+  return out;
+}
+
+void TrackAttachReplayChunk_(AttachReplayRenderTracker_ *tracker,
+                             std::string_view chunk) {
+  if (tracker == nullptr || chunk.empty()) {
+    return;
+  }
+
+  std::string combined = {};
+  combined.reserve(tracker->pending_escape_tail.size() + chunk.size());
+  combined.append(tracker->pending_escape_tail);
+  combined.append(chunk.data(), chunk.size());
+  const std::string_view data(combined);
+
+  size_t i = 0;
+  bool ended_with_partial = false;
+  while (i < data.size()) {
+    const char ch = data[i];
+    if (ch != '\x1b') {
+      if (!tracker->in_alternate_screen) {
+        tracker->main_has_output = true;
+        if (ch == '\n') {
+          ++tracker->main_line_breaks;
+        }
+      }
+      ++i;
+      continue;
+    }
+
+    const ScreenToggleMatch_ match = TryMatchScreenToggle_(data, i);
+    if (match.partial) {
+      ended_with_partial = true;
+      break;
+    }
+    if (!match.matched) {
+      if (!tracker->in_alternate_screen) {
+        tracker->main_has_output = true;
+      }
+      ++i;
+      continue;
+    }
+    tracker->in_alternate_screen = match.to_alternate;
+    i += match.length;
+  }
+
+  if (ended_with_partial) {
+    const size_t tail_size =
+        std::min(kAttachReplayEscapeTailMaxBytes_, data.size() - i);
+    tracker->pending_escape_tail.assign(data.substr(data.size() - tail_size));
+  } else {
+    tracker->pending_escape_tail.clear();
+  }
+}
+
+[[nodiscard]] size_t
+GetAttachReplayMainRenderedLineCount_(const AttachReplayRenderTracker_ &tracker) {
+  if (!tracker.main_has_output) {
+    return 0;
+  }
+  return tracker.main_line_breaks + 1;
+}
+
+void ClearRenderedMainLines_(size_t line_count) {
+  if (line_count == 0) {
+    return;
+  }
+  for (size_t i = 0; i < line_count; ++i) {
+    WriteTerminalBytes_("\r\x1b[2K");
+    if (i + 1 < line_count) {
+      WriteTerminalBytes_("\x1b[1A");
+    }
+  }
+  WriteTerminalBytes_("\r");
 }
 
 struct LocalControlInputProcessResult_ {
@@ -849,6 +981,7 @@ ECM ExecuteTerminalSession_(
     None = 0,
     LocalEscape,
     RemoteChannelClosed,
+    CacheHardLimit,
     ConnectionBroken,
     Interrupted,
     Timeout,
@@ -956,6 +1089,11 @@ ECM ExecuteTerminalSession_(
   bool in_local_control_state = false;
   BreakReason_ break_reason = BreakReason_::None;
   bool stream_attached = false;
+  AttachReplayRenderTracker_ attach_replay_tracker = {};
+  std::mutex attach_replay_tracker_mutex = {};
+  std::atomic<bool> track_attach_replay = true;
+  bool stream_in_alternate_screen = false;
+  bool soft_limit_warning_shown = false;
 
   auto classify_stream_closed = [&](const ECM &stream_rcm) -> BreakReason_ {
     if ((stream_rcm)) {
@@ -969,6 +1107,9 @@ ECM ExecuteTerminalSession_(
     }
     if (stream_rcm.code == EC::OperationTimeout) {
       return BreakReason_::Timeout;
+    }
+    if (stream_rcm.code == EC::FilesystemNoSpace) {
+      return BreakReason_::CacheHardLimit;
     }
     if (stream_rcm.code == EC::NoConnection ||
         stream_rcm.code == EC::ConnectionLost ||
@@ -986,18 +1127,32 @@ ECM ExecuteTerminalSession_(
 
   auto attach_result = terminal_service.AttachChannelStream(
       target.nickname, channel_name,
-      [](std::string_view chunk) { WriteTerminalBytes_(chunk); });
+      [&](std::string_view chunk) {
+        WriteTerminalBytes_(chunk);
+        if (!track_attach_replay.load(std::memory_order_acquire)) {
+          return;
+        }
+        std::lock_guard<std::mutex> lock(attach_replay_tracker_mutex);
+        TrackAttachReplayChunk_(&attach_replay_tracker, chunk);
+      });
   if (!(attach_result.rcm)) {
+    track_attach_replay.store(false, std::memory_order_release);
     raw_terminal.Restore();
     RestoreCliPromptStateAfterTerminalExit_();
     prompt_cache_guard.Disable();
     prompt_io_manager.Print("");
     return attach_result.rcm;
   }
+  track_attach_replay.store(false, std::memory_order_release);
   stream_attached = true;
+  stream_in_alternate_screen = attach_result.data.in_alternate_screen;
   if (attach_result.data.overflowed) {
     prompt_io_manager.Print(
         "⚠ Terminal output cache overflowed; oldest output was dropped");
+  }
+  if (attach_result.data.soft_limit_hit) {
+    prompt_io_manager.Print("⚠ Terminal output cache reached soft limit (32MB)");
+    soft_limit_warning_shown = true;
   }
   if (refresh_prompt_on_enter &&
       (attach_result.data.replayed_bytes + attach_result.data.fallback_bytes) ==
@@ -1017,6 +1172,14 @@ ECM ExecuteTerminalSession_(
     if (stream_attached) {
       auto stream_state =
           terminal_service.GetChannelStreamState(target.nickname, channel_name);
+      if (stream_state.exists) {
+        stream_in_alternate_screen = stream_state.in_alternate_screen;
+        if (stream_state.soft_limit_hit && !soft_limit_warning_shown) {
+          prompt_io_manager.Print(
+              "⚠ Terminal output cache reached soft limit (32MB)");
+          soft_limit_warning_shown = true;
+        }
+      }
       if (stream_state.exists && stream_state.closed) {
         loop_outcome = {
             (stream_state.last_error) ? OK : stream_state.last_error, true};
@@ -1127,10 +1290,34 @@ ECM ExecuteTerminalSession_(
     }
   }
 
+  if (break_reason == BreakReason_::LocalEscape) {
+    if (stream_attached) {
+      auto stream_state =
+          terminal_service.GetChannelStreamState(target.nickname, channel_name);
+      if (stream_state.exists) {
+        stream_in_alternate_screen = stream_state.in_alternate_screen;
+      }
+    }
+    if (stream_in_alternate_screen) {
+      WriteTerminalBytes_(kTerminalExitAlternateScreen_);
+    }
+    size_t rendered_main_lines = 0;
+    {
+      std::lock_guard<std::mutex> lock(attach_replay_tracker_mutex);
+      rendered_main_lines =
+          GetAttachReplayMainRenderedLineCount_(attach_replay_tracker);
+    }
+    ClearRenderedMainLines_(rendered_main_lines);
+  }
+
   raw_terminal.Restore();
   RestoreCliPromptStateAfterTerminalExit_();
   prompt_cache_guard.Disable();
   prompt_io_manager.Print("");
+  if (break_reason == BreakReason_::CacheHardLimit) {
+    prompt_io_manager.Print(
+        "❌ Terminal output cache reached hard limit (128MB); channel closed");
+  }
 
   ECM final_rcm = loop_outcome.rcm;
   if (stream_attached) {
