@@ -3,18 +3,19 @@
 #include "domain/terminal/TerminalPort.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/client/sftp/SFTP.hpp"
+#include "infrastructure/terminal/sftp/RealtimeSSHChannelPort.hpp"
 
 #include <algorithm>
-#include <array>
-#include <cstring>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace AMInfra::client::SFTP::terminal {
 namespace AMT = AMDomain::terminal;
@@ -85,7 +86,7 @@ protected:
 
 class SSHTerminalPort final : public TerminalPortBase {
 private:
-  struct ChannelCtx {
+  struct ChannelRuntime_ {
     std::unique_ptr<detail::SafeChannel> channel = {};
     TerminalWindowInfo window = {};
     bool eof = false;
@@ -109,7 +110,8 @@ private:
   AMSFTPIOCore *sftp_core_ = nullptr;
   mutable std::recursive_mutex fallback_mtx_ = {};
   LIBSSH2_SESSION *session_ = nullptr;
-  std::map<std::string, ChannelCtx> channels_ = {};
+  std::map<std::string, ChannelRuntime_> channel_runtimes_ = {};
+  std::map<std::string, AMT::ChannelPortHandle> channels_ = {};
   std::optional<std::string> current_channel_ = std::nullopt;
   static constexpr int kDefaultCloseTimeoutMs_ = 1500;
 
@@ -152,7 +154,7 @@ private:
     (*guard).session_state = ReadSessionStateFromClient_();
     (*guard).current_channel = current_channel_;
     (*guard).channel_states.clear();
-    for (const auto &entry : channels_) {
+    for (const auto &entry : channel_runtimes_) {
       const auto &ctx = entry.second;
       ECM state = ctx.state;
       if (ctx.eof || !ctx.channel || !ctx.channel->channel ||
@@ -162,26 +164,6 @@ private:
       }
       (*guard).channel_states[entry.first] = state;
     }
-  }
-
-  [[nodiscard]] int CloseTimeoutMs_(
-      const AMDomain::client::ClientControlComponent &control) const {
-    const int timeout_ms = TimeoutMs_(control);
-    return timeout_ms >= 0 ? timeout_ms : kDefaultCloseTimeoutMs_;
-  }
-
-  void
-  BindCloseControl_(detail::SafeChannel *channel,
-                    const AMDomain::client::ClientControlComponent &control) {
-    if (!channel) {
-      return;
-    }
-    const auto control_token = control.ControlToken();
-    auto is_interrupted = [control_token]() -> bool {
-      return control_token && control_token->IsInterrupted();
-    };
-    channel->SetControlContext(std::move(is_interrupted),
-                               CloseTimeoutMs_(control), AMTime::miliseconds());
   }
 
   [[nodiscard]] ErrorCode LastEC_() const {
@@ -198,7 +180,7 @@ private:
     return sftp_core_->GetLastErrorMsg();
   }
 
-  [[nodiscard]] bool IsChannelAlive_(ChannelCtx *ctx) {
+  [[nodiscard]] bool IsChannelAlive_(ChannelRuntime_ *ctx) {
     if (!ctx || !ctx->channel || !ctx->channel->channel) {
       return false;
     }
@@ -217,18 +199,25 @@ private:
   void
   CloseAllChannels_(bool send_exit,
                     const AMDomain::client::ClientControlComponent &control) {
-    for (auto &entry : channels_) {
-      auto &ctx = entry.second;
-      if (!ctx.channel || !ctx.channel->channel) {
-        continue;
+    std::vector<AMT::ChannelPortHandle> ports = {};
+    {
+      std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+      ports.reserve(channels_.size());
+      for (auto const &entry : channels_) {
+        if (entry.second) {
+          ports.push_back(entry.second);
+        }
       }
-      ctx.exit_status = libssh2_channel_get_exit_status(ctx.channel->channel);
-      BindCloseControl_(ctx.channel.get(), control);
-      (void)ctx.channel->graceful_exit(send_exit, 50, true);
-      ctx.channel->closed = true;
-      ctx.channel.reset();
-      ctx.eof = true;
     }
+
+    for (auto &port : ports) {
+      if (port) {
+        (void)port->Close(!send_exit, control);
+      }
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    channel_runtimes_.clear();
     channels_.clear();
     current_channel_ = std::nullopt;
   }
@@ -320,30 +309,14 @@ private:
         std::optional<std::string>(requested_name));
   }
 
-  [[nodiscard]] ECMData<ChannelCtx *>
-  ResolveChannelForOp_(const std::optional<std::string> &requested_name,
-                       const char *action_name) {
-    const std::string target_name = ResolveTargetChannelName_(requested_name);
-    if (target_name.empty()) {
-      return {nullptr,
-              Err(EC::InvalidArg, action_name, "channel_name",
-                  "No channel_name provided and no active channel set")};
-    }
-    auto it = channels_.find(target_name);
-    if (it == channels_.end()) {
-      return {nullptr, Err(EC::InvalidArg, action_name, target_name,
-                           "Target channel does not exist")};
-    }
-    return {&(it->second), OK};
-  }
-
   [[nodiscard]] ECM
-  OpenOneChannel_(ChannelCtx *ctx,
+  OpenOneChannel_(ChannelRuntime_ *ctx,
                   const AMDomain::client::ClientControlComponent &control) {
     if (!ctx) {
       return {ErrorCode::InvalidArg, "terminal.open", request_.hostname,
               "Invalid channel context"};
     }
+    std::lock_guard<std::recursive_mutex> lock(sftp_core_->TransferMutex());
     if (!session_) {
       return {ErrorCode::NoSession, "terminal.open", request_.hostname,
               "Session is null"};
@@ -395,45 +368,6 @@ private:
     return OK;
   }
 
-  [[nodiscard]] ECM
-  ReadChunk_(ChannelCtx *ctx, std::string *output, size_t max_bytes,
-             const AMDomain::client::ClientControlComponent &control,
-             ssize_t (*reader)(LIBSSH2_CHANNEL *, char *, size_t)) {
-    if (!ctx || !ctx->channel || !ctx->channel->channel || !output) {
-      return {ErrorCode::InvalidArg, "terminal.read", request_.hostname,
-              "Invalid read state"};
-    }
-
-    std::array<char, 4096> buffer = {};
-    while (output->size() < max_bytes) {
-      const size_t left = max_bytes - output->size();
-      const size_t cap = std::min(buffer.size(), left);
-      const ssize_t rc = reader(ctx->channel->channel, buffer.data(), cap);
-      if (rc > 0) {
-        output->append(buffer.data(), static_cast<size_t>(rc));
-        continue;
-      }
-      if (rc == 0 || rc == LIBSSH2_ERROR_EAGAIN) {
-        ctx->eof = libssh2_channel_eof(ctx->channel->channel) != 0;
-        if (ctx->eof) {
-          ctx->exit_status =
-              libssh2_channel_get_exit_status(ctx->channel->channel);
-        }
-        return OK;
-      }
-      if (control.IsInterrupted()) {
-        return {ErrorCode::Terminate, "terminal.read", ctx->window.term,
-                "Interrupted"};
-      }
-      if (control.IsTimeout()) {
-        return {ErrorCode::OperationTimeout, "terminal.read", ctx->window.term,
-                "Timed out"};
-      }
-      return {LastEC_(), "terminal.read", ctx->window.term, LastError_()};
-    }
-    return OK;
-  }
-
 public:
   SSHTerminalPort(AMT::ClientHandle owner_client, ConRequest request,
                   AMSFTPIOCore *sftp_core)
@@ -444,10 +378,10 @@ public:
   }
 
   ~SSHTerminalPort() override {
-    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
     AMDomain::client::ClientControlComponent close_control(
         nullptr, kDefaultCloseTimeoutMs_);
     CloseTerminal_(close_control);
+    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
     SyncCacheFromRuntimeUnlocked_();
   }
 
@@ -471,7 +405,7 @@ public:
                     "Invalid channel_name literal");
       return out;
     }
-    if (channels_.find(channel_name) != channels_.end()) {
+    if (channel_runtimes_.find(channel_name) != channel_runtimes_.end()) {
       out.rcm = Err(EC::TargetAlreadyExists, "terminal.open", channel_name,
                     "Channel name already exists");
       return out;
@@ -482,14 +416,33 @@ public:
       return out;
     }
 
-    ChannelCtx ctx = {};
+    ChannelRuntime_ ctx = {};
     ctx.window = OpenWindow_(open_args, ctx.window);
     out.rcm = OpenOneChannel_(&ctx, control);
     if (!(out.rcm)) {
       return out;
     }
 
-    channels_.emplace(channel_name, std::move(ctx));
+    channel_runtimes_.emplace(channel_name, std::move(ctx));
+
+    auto channel_port_result =
+        GetChannelPort(std::optional<std::string>(channel_name), control);
+    if (!(channel_port_result.rcm) || !channel_port_result.data) {
+      channel_runtimes_.erase(channel_name);
+      out.rcm = channel_port_result.rcm
+                    ? Err(EC::InvalidHandle, "terminal.open", channel_name,
+                          "Failed to initialize channel port")
+                    : channel_port_result.rcm;
+      return out;
+    }
+
+    const ECM loop_rcm = channel_port_result.data->EnsureLoopStarted(
+        AMT::ChannelLoopStartArgs{});
+    if (!(loop_rcm)) {
+      (void)CloseChannel({channel_name, true}, control);
+      out.rcm = loop_rcm;
+      return out;
+    }
     out.data.channel_name = channel_name;
     out.data.opened = true;
     return out;
@@ -510,8 +463,8 @@ public:
       return out;
     }
 
-    auto it = channels_.find(channel_name);
-    if (it == channels_.end()) {
+    auto it = channel_runtimes_.find(channel_name);
+    if (it == channel_runtimes_.end()) {
       out.rcm = Err(EC::InvalidArg, "terminal.active", channel_name,
                     "Target channel does not exist");
       return out;
@@ -529,209 +482,70 @@ public:
     return out;
   }
 
-  ECMData<AMT::ChannelReadResult> ReadChannel(
-      const AMT::ChannelReadArgs &read_args,
+  ECMData<AMT::ChannelPortHandle> GetChannelPort(
+      const std::optional<std::string> &channel_name,
       const AMDomain::client::ClientControlComponent &control) override {
-    ECMData<AMT::ChannelReadResult> out = {};
+    (void)control;
+    ECMData<AMT::ChannelPortHandle> out = {};
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
     CacheSyncGuard_ cache_sync{this};
 
-    auto resolve_result =
-        ResolveChannelForOp_(read_args.channel_name, "terminal.read");
-    if (!(resolve_result.rcm) || !resolve_result.data) {
-      out.rcm = resolve_result.rcm;
-      out.data.eof = true;
+    const std::string target_name = ResolveTargetChannelName_(channel_name);
+    if (target_name.empty()) {
+      out.rcm = Err(EC::InvalidArg, "terminal.channel_port", "channel_name",
+                    "No channel_name provided and no active channel set");
       return out;
     }
 
-    const std::string target_name =
-        ResolveTargetChannelName_(read_args.channel_name);
-    auto *ctx = resolve_result.data;
-    out.data.channel_name = target_name;
-
-    if (!IsChannelAlive_(ctx)) {
-      out.rcm = Err(EC::NoConnection, "terminal.read", target_name,
-                    "Interactive channel not initialized");
-      out.data.eof = true;
+    auto channel_it = channel_runtimes_.find(target_name);
+    if (channel_it == channel_runtimes_.end()) {
+      out.rcm = Err(EC::ClientNotFound, "terminal.channel_port", target_name,
+                    "Target channel does not exist");
       return out;
     }
 
-    const size_t max_bytes =
-        (read_args.max_bytes == 0U ? static_cast<size_t>(32 * AMKB)
-                                   : read_args.max_bytes);
-
-    auto drain_output = [&]() -> ECM {
-      ECM read_rcm =
-          ReadChunk_(ctx, &out.data.output, max_bytes, control,
-                     [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
-                       return libssh2_channel_read(channel, buf, size);
-                     });
-      if (!(read_rcm)) {
-        return read_rcm;
-      }
-      if (out.data.output.size() >= max_bytes || ctx->eof) {
-        return OK;
-      }
-      ECM stderr_rcm =
-          ReadChunk_(ctx, &out.data.output, max_bytes, control,
-                     [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
-                       return libssh2_channel_read_stderr(channel, buf, size);
-                     });
-      if (!(stderr_rcm)) {
-        return stderr_rcm;
-      }
-      return OK;
-    };
-
-    out.rcm = drain_output();
-    if (!(out.rcm)) {
-      out.data.eof = ctx->eof;
-      return out;
-    }
-
-    if (!out.data.output.empty() || ctx->eof) {
-      out.data.eof = ctx->eof;
-      return out;
-    }
-
-    if (control.RemainingTimeMs().has_value()) {
-      const WaitResult wr = WaitSocket_(detail::SocketWaitType::Read, control);
-      if (wr == WaitResult::Interrupted) {
-        out.rcm = Err(EC::Terminate, "terminal.read", target_name,
-                      "Interrupted while waiting output");
-        out.data.eof = ctx->eof;
-        return out;
-      }
-      if (wr == WaitResult::Timeout) {
-        out.rcm = Err(EC::OperationTimeout, "terminal.read", target_name,
-                      "Timed out while waiting output");
-        out.data.eof = ctx->eof;
-        return out;
-      }
-      if (wr == WaitResult::Error) {
-        out.rcm = Err(EC::SocketRecvError, "terminal.read", target_name,
-                      "Socket error while waiting output");
-        out.data.eof = ctx->eof;
-        return out;
-      }
-      out.rcm = drain_output();
-    }
-
-    out.data.eof = ctx->eof;
-    return out;
-  }
-
-  ECMData<AMT::ChannelWriteResult> WriteChannel(
-      const AMT::ChannelWriteArgs &write_args,
-      const AMDomain::client::ClientControlComponent &control) override {
-    ECMData<AMT::ChannelWriteResult> out = {};
-    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
-    CacheSyncGuard_ cache_sync{this};
-
-    auto resolve_result =
-        ResolveChannelForOp_(write_args.channel_name, "terminal.write");
-    if (!(resolve_result.rcm) || !resolve_result.data) {
-      out.rcm = resolve_result.rcm;
-      return out;
-    }
-
-    const std::string target_name =
-        ResolveTargetChannelName_(write_args.channel_name);
-    auto *ctx = resolve_result.data;
-    out.data.channel_name = target_name;
-
-    if (!IsChannelAlive_(ctx)) {
-      out.rcm = Err(EC::NoConnection, "terminal.write", target_name,
-                    "Interactive channel not initialized");
-      return out;
-    }
-
-    size_t offset = 0;
-    while (offset < write_args.input.size()) {
-      const ssize_t rc = libssh2_channel_write(
-          ctx->channel->channel, write_args.input.data() + offset,
-          static_cast<int>(write_args.input.size() - offset));
-      if (rc > 0) {
-        offset += static_cast<size_t>(rc);
-        continue;
-      }
-      if (rc == LIBSSH2_ERROR_EAGAIN) {
-        const WaitResult wr =
-            WaitSocket_(detail::SocketWaitType::Write, control);
-        if (wr == WaitResult::Ready) {
-          continue;
-        }
-        if (wr == WaitResult::Interrupted) {
-          out.rcm = Err(EC::Terminate, "terminal.write", target_name,
-                        "Interrupted while waiting write");
-        } else if (wr == WaitResult::Timeout) {
-          out.rcm = Err(EC::OperationTimeout, "terminal.write", target_name,
-                        "Timed out while waiting write");
-        } else {
-          out.rcm = Err(EC::SocketRecvError, "terminal.write", target_name,
-                        "Socket error while waiting write");
-        }
-        out.data.bytes_written = offset;
-        return out;
-      }
-
-      out.rcm = Err(LastEC_(), "terminal.write", target_name, LastError_());
-      out.data.bytes_written = offset;
-      return out;
-    }
-
-    out.rcm = OK;
-    out.data.bytes_written = offset;
-    return out;
-  }
-
-  ECMData<AMT::ChannelResizeResult> ResizeChannel(
-      const AMT::ChannelResizeArgs &resize_args,
-      const AMDomain::client::ClientControlComponent &control) override {
-    ECMData<AMT::ChannelResizeResult> out = {};
-    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
-    CacheSyncGuard_ cache_sync{this};
-
-    auto resolve_result =
-        ResolveChannelForOp_(resize_args.channel_name, "terminal.resize");
-    if (!(resolve_result.rcm) || !resolve_result.data) {
-      out.rcm = resolve_result.rcm;
-      return out;
-    }
-
-    const std::string target_name =
-        ResolveTargetChannelName_(resize_args.channel_name);
-    auto *ctx = resolve_result.data;
-    out.data.channel_name = target_name;
-
-    ResizeWindow_(resize_args, &ctx->window);
-    if (!IsChannelAlive_(ctx)) {
+    auto port_it = channels_.find(target_name);
+    if (port_it != channels_.end() && port_it->second) {
+      out.data = port_it->second;
       out.rcm = OK;
-      out.data.resized = false;
       return out;
     }
 
-    auto resize_res = NBCall_(control, [&]() {
-      return libssh2_channel_request_pty_size_ex(
-          ctx->channel->channel, ctx->window.cols, ctx->window.rows,
-          ctx->window.width, ctx->window.height);
-    });
-    if (!resize_res || resize_res.value != 0) {
-      out.rcm = Err(LastEC_(), "terminal.resize", target_name, LastError_());
-      out.data.resized = false;
+    const std::string terminal_key =
+        AMDomain::host::HostService::NormalizeNickname(request_.nickname);
+
+    auto &runtime = channel_it->second;
+    AMInfra::terminal::RealtimeSSHChannelBinding binding = {};
+    binding.core_mutex = std::addressof(CoreMutex_());
+    binding.sftp_core = sftp_core_;
+    binding.channel_holder = std::addressof(runtime.channel);
+    binding.eof = std::addressof(runtime.eof);
+    binding.exit_status = std::addressof(runtime.exit_status);
+    binding.state = std::addressof(runtime.state);
+    binding.window_cols = std::addressof(runtime.window.cols);
+    binding.window_rows = std::addressof(runtime.window.rows);
+    binding.window_width = std::addressof(runtime.window.width);
+    binding.window_height = std::addressof(runtime.window.height);
+    binding.host = request_.hostname;
+
+    auto port = std::make_shared<AMInfra::terminal::RealtimeSSHChannelPort>(
+        terminal_key, target_name, std::move(binding));
+    if (!port) {
+      out.rcm = Err(EC::InvalidHandle, "terminal.channel_port", target_name,
+                    "Failed to create realtime SSH channel port");
       return out;
     }
 
+    channels_[target_name] = port;
+    out.data = port;
     out.rcm = OK;
-    out.data.resized = true;
     return out;
   }
-
   ECMData<AMT::ChannelCloseResult> CloseChannel(
       const AMT::ChannelCloseArgs &close_args,
       const AMDomain::client::ClientControlComponent &control) override {
     ECMData<AMT::ChannelCloseResult> out = {};
-    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
+    std::unique_lock<std::recursive_mutex> lock(CoreMutex_());
     CacheSyncGuard_ cache_sync{this};
 
     const std::string target_name =
@@ -742,31 +556,42 @@ public:
       return out;
     }
 
-    auto it = channels_.find(target_name);
-    if (it == channels_.end()) {
+    auto runtime_it = channel_runtimes_.find(target_name);
+    if (runtime_it == channel_runtimes_.end()) {
       out.rcm = Err(EC::InvalidArg, "terminal.close", target_name,
                     "Target channel does not exist");
       return out;
     }
 
-    auto &ctx = it->second;
+    auto channel_it = channels_.find(target_name);
+    AMT::ChannelPortHandle channel_port =
+        (channel_it != channels_.end()) ? channel_it->second : nullptr;
     out.data.channel_name = target_name;
-    if (ctx.channel && ctx.channel->channel) {
-      ctx.exit_status = libssh2_channel_get_exit_status(ctx.channel->channel);
-      BindCloseControl_(ctx.channel.get(), control);
-      out.rcm = ctx.channel->graceful_exit(!close_args.force, 50, true);
-      ctx.channel->closed = true;
+
+    lock.unlock();
+    if (channel_port) {
+      auto close_result = channel_port->Close(close_args.force, control);
+      out.rcm = close_result.rcm;
+      out.data.exit_code = close_result.data.exit_code;
     } else {
       out.rcm = OK;
     }
-    out.data.exit_code = ctx.exit_status;
+    lock.lock();
 
-    channels_.erase(it);
+    auto current_it = channel_runtimes_.find(target_name);
+    if (current_it != channel_runtimes_.end()) {
+      if (out.data.exit_code < 0) {
+        out.data.exit_code = current_it->second.exit_status;
+      }
+      channel_runtimes_.erase(current_it);
+    }
+    channels_.erase(target_name);
     if (current_channel_.has_value() && *current_channel_ == target_name) {
       current_channel_ = std::nullopt;
     }
 
-    out.data.closed = channels_.find(target_name) == channels_.end();
+    out.data.closed =
+        channel_runtimes_.find(target_name) == channel_runtimes_.end();
     if (out.rcm.code == ErrorCode::Success ||
         out.rcm.code == ErrorCode::Terminate ||
         out.rcm.code == ErrorCode::OperationTimeout) {
@@ -774,7 +599,6 @@ public:
     }
     return out;
   }
-
   ECMData<AMT::ChannelRenameResult> RenameChannel(
       const AMT::ChannelRenameArgs &rename_args,
       const AMDomain::client::ClientControlComponent &control) override {
@@ -805,20 +629,30 @@ public:
       return out;
     }
 
-    auto src_it = channels_.find(src_name);
-    if (src_it == channels_.end()) {
+    auto src_it = channel_runtimes_.find(src_name);
+    if (src_it == channel_runtimes_.end()) {
       out.rcm = Err(EC::ClientNotFound, "terminal.rename", src_name,
                     "Source channel does not exist");
       return out;
     }
-    if (channels_.find(dst_name) != channels_.end()) {
+    if (channel_runtimes_.find(dst_name) != channel_runtimes_.end()) {
       out.rcm = Err(EC::TargetAlreadyExists, "terminal.rename", dst_name,
                     "Target channel already exists");
       return out;
     }
 
-    channels_.emplace(dst_name, std::move(src_it->second));
-    channels_.erase(src_it);
+    channel_runtimes_.emplace(dst_name, std::move(src_it->second));
+    channel_runtimes_.erase(src_it);
+    auto src_port_it = channels_.find(src_name);
+    if (src_port_it != channels_.end()) {
+      channels_.erase(src_port_it);
+    }
+    auto channel_port_result =
+        GetChannelPort(std::optional<std::string>(dst_name), control);
+    if (!(channel_port_result.rcm)) {
+      out.rcm = channel_port_result.rcm;
+      return out;
+    }
     if (current_channel_.has_value() && *current_channel_ == src_name) {
       current_channel_ = dst_name;
     }
@@ -836,7 +670,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
     CacheSyncGuard_ cache_sync{this};
 
-    for (const auto &entry : channels_) {
+    for (const auto &entry : channel_runtimes_) {
       out.data.channel_names.push_back(entry.first);
     }
     if (current_channel_.has_value()) {
@@ -874,9 +708,9 @@ public:
     out.data.status = check_result.data.status;
 
     if (current_channel_.has_value()) {
-      auto it = channels_.find(*current_channel_);
+      auto it = channel_runtimes_.find(*current_channel_);
       out.data.is_open =
-          (it != channels_.end()) && IsChannelAlive_(&(it->second));
+          (it != channel_runtimes_.end()) && IsChannelAlive_(&(it->second));
     } else {
       out.data.is_open = false;
     }
@@ -900,8 +734,8 @@ public:
     }
 
     out.data.channel_name = target_name;
-    auto it = channels_.find(target_name);
-    if (it == channels_.end()) {
+    auto it = channel_runtimes_.find(target_name);
+    if (it == channel_runtimes_.end()) {
       out.rcm = Err(EC::ClientNotFound, "terminal.check_channel", target_name,
                     "Target channel does not exist");
       return out;
@@ -947,21 +781,6 @@ public:
       names.push_back(entry.first);
     }
     return names;
-  }
-
-  [[nodiscard]] ECMData<std::intptr_t> GetRemoteSocketHandle() const override {
-    std::lock_guard<std::recursive_mutex> lock(CoreMutex_());
-    if (!sftp_core_) {
-      return {static_cast<std::intptr_t>(-1),
-              Err(EC::NoSession, "terminal.remote_socket", request_.hostname,
-                  "SFTP IO core is unavailable")};
-    }
-    const std::intptr_t handle = sftp_core_->RemoteSocketHandle();
-    if (handle < 0) {
-      return {handle, Err(EC::NoConnection, "terminal.remote_socket",
-                          request_.hostname, "Client socket is unavailable")};
-    }
-    return {handle, OK};
   }
 };
 

@@ -1,47 +1,24 @@
 #pragma once
 
 #include "domain/client/ClientPort.hpp"
+#include "domain/terminal/ChannelPort.hpp"
 #include "domain/terminal/TerminalPort.hpp"
 #include "foundation/core/DataClass.hpp"
-#include <functional>
+
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace AMApplication::terminal {
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using TerminalHandle = AMDomain::terminal::TerminalHandle;
+using ChannelPortHandle = AMDomain::terminal::ChannelPortHandle;
 
 class TermAppService final : public NonCopyableNonMovable {
 public:
-  using ChannelStreamProcessor = std::function<void(std::string_view)>;
-
-  struct ChannelStreamAttachResult {
-    size_t replayed_bytes = 0;
-    size_t fallback_bytes = 0;
-    bool overflowed = false;
-    bool in_alternate_screen = false;
-    bool soft_limit_hit = false;
-    bool hard_limit_hit = false;
-    bool closed = false;
-    ECM last_error = OK;
-  };
-
-  struct ChannelStreamState {
-    bool exists = false;
-    bool attached = false;
-    bool closed = false;
-    bool overflowed = false;
-    bool in_alternate_screen = false;
-    bool soft_limit_hit = false;
-    bool hard_limit_hit = false;
-    size_t cached_bytes = 0;
-    ECM last_error = OK;
-  };
-
   TermAppService() = default;
   ~TermAppService() override;
 
@@ -64,53 +41,34 @@ public:
   ECM RemoveTerminal(const std::string &nickname,
                      const ClientControlComponent &control = {});
 
-  [[nodiscard]] ECMData<ChannelStreamAttachResult>
-  AttachChannelStream(const std::string &terminal_nickname,
+  [[nodiscard]] ECMData<ChannelPortHandle>
+  EnsureChannelPort(const std::string &terminal_nickname,
+                    const std::string &channel_name,
+                    const ClientControlComponent &control = {});
+
+  ECM DropChannelPort(const std::string &terminal_nickname,
                       const std::string &channel_name,
-                      ChannelStreamProcessor processor,
-                      size_t max_cache_bytes = (16U * 1024U * 1024U));
+                      const ClientControlComponent &control = {});
 
-  ECM DetachChannelStream(const std::string &terminal_nickname,
-                          const std::string &channel_name);
-
-  ECM StopChannelStream(const std::string &terminal_nickname,
-                        const std::string &channel_name);
-
-  ECM QueueChannelInput(const std::string &terminal_nickname,
-                        const std::string &channel_name,
-                        std::string input_bytes);
-
-  [[nodiscard]] ChannelStreamState
-  GetChannelStreamState(const std::string &terminal_nickname,
-                        const std::string &channel_name) const;
+  ECM DropTerminalChannelPorts(const std::string &terminal_nickname,
+                               const ClientControlComponent &control = {});
 
 private:
-  struct ChannelStreamRuntime;
-  using ChannelStreamRuntimeHandle = std::shared_ptr<ChannelStreamRuntime>;
-
   [[nodiscard]] static std::string BuildTerminalKey_(const ClientHandle &client,
                                                      const char *action);
 
   [[nodiscard]] static std::string
   NormalizeTerminalKey_(const std::string &nickname);
 
-  [[nodiscard]] static std::string
-  BuildChannelStreamKey_(const std::string &terminal_key,
-                         const std::string &channel_name);
-
   [[nodiscard]] ECMData<TerminalHandle>
   QueryTerminal_(const std::string &terminal_key) const;
 
-  void StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime);
-  void StopChannelStreamRuntime_(ChannelStreamRuntimeHandle runtime);
-  void StopAllChannelStreams_();
-  void StopAllTerminalStreamsByKey_(const std::string &terminal_key);
+  void DropAllTerminalChannelPortsByKey_(const std::string &terminal_key,
+                                         const ClientControlComponent &control);
 
 private:
   mutable std::mutex mutex_ = {};
   std::map<std::string, TerminalHandle> terminals_ = {};
-  mutable std::mutex stream_mutex_ = {};
-  std::map<std::string, ChannelStreamRuntimeHandle> channel_streams_ = {};
 };
 
 } // namespace AMApplication::terminal
