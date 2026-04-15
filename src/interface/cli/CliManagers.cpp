@@ -30,6 +30,9 @@ ECM CLIServices::Init(amf task_control_token) {
   if (!interfaces.filesystem_interface_service.IsReady()) {
     return Err(EC::InvalidHandle, __func__, "<context>", "filesystem interface service is not initialized");
   }
+  if (!interfaces.terminal_interface_service.IsReady()) {
+    return Err(EC::InvalidHandle, __func__, "<context>", "terminal interface service is not initialized");
+  }
   if (!interfaces.var_interface_service.IsReady()) {
     return Err(EC::InvalidHandle, __func__, "<context>", "var interface service is not initialized");
   }
@@ -46,15 +49,14 @@ ECM CLIServices::Init(amf task_control_token) {
 
   AMDomain::signal::SignalHook hook = {};
   hook.callback = [token = task_control_token](int signal_num) {
-    if (signal_num != SIGINT) {
-      return;
-    }
-    if (ic_is_editline_active()) {
-      (void)ic_async_stop();
+    if (signal_num != SIGINT && signal_num != SIGTERM) {
       return;
     }
     if (token) {
       token->RequestInterrupt();
+    }
+    if (signal_num == SIGINT && ic_is_editline_active()) {
+      (void)ic_async_stop();
     }
   };
   hook.priority = 500;

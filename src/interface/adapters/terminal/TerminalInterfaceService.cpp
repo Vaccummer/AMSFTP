@@ -1,29 +1,27 @@
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#endif
-
+#include "interface/adapters/terminal/TerminalInterfaceService.hpp"
 #include "Isocline/isocline.h"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/terminal/TerminalPort.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/terminal.hpp"
-#include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
 #include "interface/style/StyleIndex.hpp"
 #include "interface/style/StyleManager.hpp"
 
+
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <string_view>
-#include <utility>
 #include <unordered_map>
 #include <unordered_set>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -37,7 +35,7 @@
 #include <unistd.h>
 #endif
 
-namespace AMInterface::filesystem {
+namespace AMInterface::terminal {
 namespace {
 
 AMDomain::client::ClientControlComponent
@@ -291,133 +289,6 @@ void WriteTerminalBytes_(std::string_view text) {
 }
 
 constexpr const char *kTerminalExitAlternateScreen_ = "\x1b[?1049l";
-constexpr size_t kAttachReplayEscapeTailMaxBytes_ = 16U;
-
-struct AttachReplayRenderTracker_ {
-  bool in_alternate_screen = false;
-  size_t main_line_breaks = 0;
-  bool main_has_output = false;
-  std::string pending_escape_tail = {};
-};
-
-struct ScreenToggleMatch_ {
-  bool matched = false;
-  bool partial = false;
-  bool to_alternate = false;
-  size_t length = 0;
-};
-
-[[nodiscard]] bool StartsWith_(std::string_view full, std::string_view prefix) {
-  return full.size() >= prefix.size() &&
-         full.compare(0, prefix.size(), prefix.data(), prefix.size()) == 0;
-}
-
-[[nodiscard]] ScreenToggleMatch_ TryMatchScreenToggle_(std::string_view data,
-                                                       size_t pos) {
-  static constexpr std::array<std::pair<std::string_view, bool>, 6>
-      kScreenToggles = {{{"\x1b[?1049h", true},
-                         {"\x1b[?1049l", false},
-                         {"\x1b[?1047h", true},
-                         {"\x1b[?1047l", false},
-                         {"\x1b[?47h", true},
-                         {"\x1b[?47l", false}}};
-
-  if (pos >= data.size() || data[pos] != '\x1b') {
-    return {};
-  }
-  const std::string_view remain = data.substr(pos);
-  ScreenToggleMatch_ out = {};
-  for (const auto &entry : kScreenToggles) {
-    const std::string_view seq = entry.first;
-    if (remain.size() >= seq.size()) {
-      if (remain.compare(0, seq.size(), seq.data(), seq.size()) == 0) {
-        out.matched = true;
-        out.to_alternate = entry.second;
-        out.length = seq.size();
-        return out;
-      }
-      continue;
-    }
-    if (StartsWith_(seq, remain)) {
-      out.partial = true;
-      return out;
-    }
-  }
-  return out;
-}
-
-void TrackAttachReplayChunk_(AttachReplayRenderTracker_ *tracker,
-                             std::string_view chunk) {
-  if (tracker == nullptr || chunk.empty()) {
-    return;
-  }
-
-  std::string combined = {};
-  combined.reserve(tracker->pending_escape_tail.size() + chunk.size());
-  combined.append(tracker->pending_escape_tail);
-  combined.append(chunk.data(), chunk.size());
-  const std::string_view data(combined);
-
-  size_t i = 0;
-  bool ended_with_partial = false;
-  while (i < data.size()) {
-    const char ch = data[i];
-    if (ch != '\x1b') {
-      if (!tracker->in_alternate_screen) {
-        tracker->main_has_output = true;
-        if (ch == '\n') {
-          ++tracker->main_line_breaks;
-        }
-      }
-      ++i;
-      continue;
-    }
-
-    const ScreenToggleMatch_ match = TryMatchScreenToggle_(data, i);
-    if (match.partial) {
-      ended_with_partial = true;
-      break;
-    }
-    if (!match.matched) {
-      if (!tracker->in_alternate_screen) {
-        tracker->main_has_output = true;
-      }
-      ++i;
-      continue;
-    }
-    tracker->in_alternate_screen = match.to_alternate;
-    i += match.length;
-  }
-
-  if (ended_with_partial) {
-    const size_t tail_size =
-        std::min(kAttachReplayEscapeTailMaxBytes_, data.size() - i);
-    tracker->pending_escape_tail.assign(data.substr(data.size() - tail_size));
-  } else {
-    tracker->pending_escape_tail.clear();
-  }
-}
-
-[[nodiscard]] size_t
-GetAttachReplayMainRenderedLineCount_(const AttachReplayRenderTracker_ &tracker) {
-  if (!tracker.main_has_output) {
-    return 0;
-  }
-  return tracker.main_line_breaks + 1;
-}
-
-void ClearRenderedMainLines_(size_t line_count) {
-  if (line_count == 0) {
-    return;
-  }
-  for (size_t i = 0; i < line_count; ++i) {
-    WriteTerminalBytes_("\r\x1b[2K");
-    if (i + 1 < line_count) {
-      WriteTerminalBytes_("\x1b[1A");
-    }
-  }
-  WriteTerminalBytes_("\r");
-}
 
 struct LocalControlInputProcessResult_ {
   std::string forward_bytes = {};
@@ -992,19 +863,13 @@ ECM ExecuteTerminalSession_(
       AMTerminalTools::GetTerminalViewportInfo();
   auto status_result = terminal.CheckSession({}, control);
   if (!status_result.rcm) {
-    if (status_result.rcm.code == EC::OperationUnsupported) {
-      return BuildTerminalUnsupportedError_(target.nickname);
-    }
     return status_result.rcm;
-  }
-  if (!status_result.data.is_supported) {
-    return BuildTerminalUnsupportedError_(target.nickname);
   }
 
   std::string channel_name = {};
   bool refresh_prompt_on_enter = false;
   const std::string requested_channel =
-      target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
+      target.channel_name.has_value() ? *target.channel_name : "";
 
   if (!requested_channel.empty()) {
     auto check_result = terminal.CheckChannel(
@@ -1059,15 +924,12 @@ ECM ExecuteTerminalSession_(
   ScopedPromptOutputCache_ prompt_cache_guard(&prompt_io_manager);
   ScopedRawTerminal_ raw_terminal = {};
   if (!raw_terminal.Activate()) {
-    prompt_cache_guard.Disable();
     return Err(EC::CommonFailure, "terminal.raw_mode", "<stdin>",
                raw_terminal.Error());
   }
   InteractiveTerminalWaiter_ terminal_waiter(terminal, control);
   ECM wait_init_rcm = terminal_waiter.Init();
   if (!wait_init_rcm) {
-    raw_terminal.Restore();
-    prompt_cache_guard.Disable();
     return wait_init_rcm;
   }
 
@@ -1079,7 +941,7 @@ ECM ExecuteTerminalSession_(
           std::optional<std::string>(channel_name), last_geometry.cols,
           last_geometry.rows, last_geometry.width, last_geometry.height},
       control);
-  if (!(initial_resize_result.rcm)) {
+  if (!initial_resize_result.rcm) {
     raw_terminal.Restore();
     RestoreCliPromptStateAfterTerminalExit_();
     prompt_cache_guard.Disable();
@@ -1089,9 +951,6 @@ ECM ExecuteTerminalSession_(
   bool in_local_control_state = false;
   BreakReason_ break_reason = BreakReason_::None;
   bool stream_attached = false;
-  AttachReplayRenderTracker_ attach_replay_tracker = {};
-  std::mutex attach_replay_tracker_mutex = {};
-  std::atomic<bool> track_attach_replay = true;
   bool stream_in_alternate_screen = false;
   bool soft_limit_warning_shown = false;
 
@@ -1127,23 +986,14 @@ ECM ExecuteTerminalSession_(
 
   auto attach_result = terminal_service.AttachChannelStream(
       target.nickname, channel_name,
-      [&](std::string_view chunk) {
-        WriteTerminalBytes_(chunk);
-        if (!track_attach_replay.load(std::memory_order_acquire)) {
-          return;
-        }
-        std::lock_guard<std::mutex> lock(attach_replay_tracker_mutex);
-        TrackAttachReplayChunk_(&attach_replay_tracker, chunk);
-      });
-  if (!(attach_result.rcm)) {
-    track_attach_replay.store(false, std::memory_order_release);
+      [](std::string_view chunk) { WriteTerminalBytes_(chunk); });
+  if (!attach_result.rcm) {
     raw_terminal.Restore();
     RestoreCliPromptStateAfterTerminalExit_();
     prompt_cache_guard.Disable();
     prompt_io_manager.Print("");
     return attach_result.rcm;
   }
-  track_attach_replay.store(false, std::memory_order_release);
   stream_attached = true;
   stream_in_alternate_screen = attach_result.data.in_alternate_screen;
   if (attach_result.data.overflowed) {
@@ -1151,7 +1001,8 @@ ECM ExecuteTerminalSession_(
         "⚠ Terminal output cache overflowed; oldest output was dropped");
   }
   if (attach_result.data.soft_limit_hit) {
-    prompt_io_manager.Print("⚠ Terminal output cache reached soft limit (32MB)");
+    prompt_io_manager.Print(
+        "⚠ Terminal output cache reached soft limit (32MB)");
     soft_limit_warning_shown = true;
   }
   if (refresh_prompt_on_enter &&
@@ -1301,13 +1152,6 @@ ECM ExecuteTerminalSession_(
     if (stream_in_alternate_screen) {
       WriteTerminalBytes_(kTerminalExitAlternateScreen_);
     }
-    size_t rendered_main_lines = 0;
-    {
-      std::lock_guard<std::mutex> lock(attach_replay_tracker_mutex);
-      rendered_main_lines =
-          GetAttachReplayMainRenderedLineCount_(attach_replay_tracker);
-    }
-    ClearRenderedMainLines_(rendered_main_lines);
   }
 
   raw_terminal.Restore();
@@ -1341,8 +1185,27 @@ ECM ExecuteTerminalSession_(
 }
 } // namespace
 
-ECM FilesystemInterfaceSerivce::ShellRun(
-    const FilesystemShellRunArg &arg,
+TerminalInterfaceService::TerminalInterfaceService(
+    AMApplication::client::ClientAppService &client_service,
+    AMApplication::terminal::TermAppService &terminal_service,
+    AMApplication::filesystem::FilesystemAppService &filesystem_service,
+    AMInterface::style::AMStyleService &style_service,
+    AMInterface::prompt::AMPromptIOManager &prompt_io_manager)
+    : client_service_(client_service), terminal_service_(terminal_service),
+      filesystem_service_(filesystem_service), style_service_(style_service),
+      prompt_io_manager_(prompt_io_manager), default_interrupt_flag_(nullptr) {}
+
+void TerminalInterfaceService::SetDefaultControlToken(
+    const AMDomain::client::amf &token) {
+  default_interrupt_flag_ = token;
+}
+
+AMDomain::client::amf TerminalInterfaceService::GetDefaultControlToken() const {
+  return default_interrupt_flag_;
+}
+
+ECM TerminalInterfaceService::ShellRun(
+    const TerminalShellRunArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const std::string command = AMStr::Strip(arg.cmd);
@@ -1424,17 +1287,16 @@ ECM FilesystemInterfaceSerivce::ShellRun(
   return OK;
 }
 
-ECM FilesystemInterfaceSerivce::LaunchTerminal(
-    const FilesystemTerminalArg &arg,
+ECM TerminalInterfaceService::LaunchTerminal(
+    const TerminalLaunchArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  const auto fs_arg = filesystem_service_.GetInitArg();
-  const int send_timeout_ms = fs_arg.terminal_send_timeout_ms;
-  std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
-      AMStr::Strip(filesystem_service_.CurrentNickname()));
+  const int send_timeout_ms =
+      filesystem_service_.GetInitArg().terminal_send_timeout_ms;
+  std::string default_nickname = filesystem_service_.CurrentNickname();
   if (default_nickname.empty()) {
-    default_nickname = "local";
+    default_nickname = AMDomain::host::klocalname;
   }
 
   auto target_result = ParseTerminalTargetSpec_(arg.target, default_nickname);
@@ -1484,7 +1346,7 @@ ECM FilesystemInterfaceSerivce::LaunchTerminal(
 
   auto temp_terminal_result =
       terminal_service_.CreateTerminal(temp_client_result.data, false);
-  if (!(temp_terminal_result.rcm) || !temp_terminal_result.data) {
+  if (!temp_terminal_result.rcm || !temp_terminal_result.data) {
     const ECM rcm = (temp_terminal_result.rcm.code == EC::OperationUnsupported)
                         ? BuildTerminalUnsupportedError_(target.nickname)
                         : temp_terminal_result.rcm;
@@ -1495,14 +1357,14 @@ ECM FilesystemInterfaceSerivce::LaunchTerminal(
   const ECM run_rcm = ExecuteTerminalSession_(
       terminal_service_, *temp_terminal_result.data, target, control,
       send_timeout_ms, prompt_io_manager_);
-  if (!(run_rcm)) {
+  if (!run_rcm) {
     prompt_io_manager_.ErrorFormat(run_rcm);
   }
   return run_rcm;
 }
 
-ECM FilesystemInterfaceSerivce::AddTerminal(
-    const FilesystemTermAddArg &arg,
+ECM TerminalInterfaceService::AddTerminal(
+    const TerminalAddArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
@@ -1578,8 +1440,8 @@ ECM FilesystemInterfaceSerivce::AddTerminal(
   return status;
 }
 
-ECM FilesystemInterfaceSerivce::ListTerminals(
-    const FilesystemTermListArg &arg,
+ECM TerminalInterfaceService::ListTerminals(
+    const TerminalListArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   (void)arg;
@@ -1599,8 +1461,8 @@ ECM FilesystemInterfaceSerivce::ListTerminals(
   return OK;
 }
 
-ECM FilesystemInterfaceSerivce::RemoveTerminal(
-    const FilesystemTermRemoveArg &arg,
+ECM TerminalInterfaceService::RemoveTerminal(
+    const TerminalRemoveArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
@@ -1715,8 +1577,8 @@ ECM FilesystemInterfaceSerivce::RemoveTerminal(
   return status;
 }
 
-ECM FilesystemInterfaceSerivce::AddChannel(
-    const FilesystemChannelAddArg &arg,
+ECM TerminalInterfaceService::AddChannel(
+    const ChannelAddArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
@@ -1772,8 +1634,8 @@ ECM FilesystemInterfaceSerivce::AddChannel(
   return OK;
 }
 
-ECM FilesystemInterfaceSerivce::ListChannels(
-    const FilesystemChannelListArg &arg,
+ECM TerminalInterfaceService::ListChannels(
+    const ChannelListArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
@@ -1804,8 +1666,8 @@ ECM FilesystemInterfaceSerivce::ListChannels(
   return OK;
 }
 
-ECM FilesystemInterfaceSerivce::RemoveChannel(
-    const FilesystemChannelRemoveArg &arg,
+ECM TerminalInterfaceService::RemoveChannel(
+    const ChannelRemoveArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
@@ -1865,8 +1727,8 @@ ECM FilesystemInterfaceSerivce::RemoveChannel(
   return OK;
 }
 
-ECM FilesystemInterfaceSerivce::RenameChannel(
-    const FilesystemChannelRenameArg &arg,
+ECM TerminalInterfaceService::RenameChannel(
+    const ChannelRenameArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
@@ -1944,4 +1806,4 @@ ECM FilesystemInterfaceSerivce::RenameChannel(
   return OK;
 }
 
-} // namespace AMInterface::filesystem
+} // namespace AMInterface::terminal

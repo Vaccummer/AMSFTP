@@ -13,9 +13,9 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <windows.h>
 #else
 #include <cerrno>
 #include <fcntl.h>
@@ -213,8 +213,8 @@ public:
     auto handle_result = terminal_->GetRemoteSocketHandle();
     if (!(handle_result.rcm) || handle_result.data < 0) {
       return (handle_result.rcm)
-                 ? Err(EC::NoConnection, "terminal.stream.wait.init", "<remote>",
-                       "Remote handle is invalid")
+                 ? Err(EC::NoConnection, "terminal.stream.wait.init",
+                       "<remote>", "Remote handle is invalid")
                  : handle_result.rcm;
     }
 
@@ -263,8 +263,8 @@ public:
 
 private:
   [[nodiscard]] bool IsWakeTriggered_(unsigned long long wake_snapshot) const {
-    return wake_seq_ != nullptr && wake_seq_->load(std::memory_order_acquire) !=
-                                       wake_snapshot;
+    return wake_seq_ != nullptr &&
+           wake_seq_->load(std::memory_order_acquire) != wake_snapshot;
   }
 
 #ifdef _WIN32
@@ -324,14 +324,17 @@ private:
     }
     const DWORD timeout =
         timeout_ms < 0 ? INFINITE : static_cast<DWORD>(timeout_ms);
-    const DWORD wait_rc =
-        WaitForMultipleObjects(wait_count_, wait_handles_.data(), FALSE, timeout);
+    const DWORD wait_rc = WaitForMultipleObjects(
+        wait_count_, wait_handles_.data(), FALSE, timeout);
     if (wait_rc == WAIT_TIMEOUT) {
       return IsWakeTriggered_(wake_snapshot)
-                 ? StreamWaitResult_{StreamWaitStatus_::Ready, false, false,
-                                     true, {}}
-                 : StreamWaitResult_{StreamWaitStatus_::Timeout, false, false,
-                                     false, {}};
+                 ? StreamWaitResult_{StreamWaitStatus_::Ready,
+                                     false,
+                                     false,
+                                     true,
+                                     {}}
+                 : StreamWaitResult_{
+                       StreamWaitStatus_::Timeout, false, false, false, {}};
     }
     if (wait_rc == WAIT_FAILED) {
       return {StreamWaitStatus_::Error, false, false, false,
@@ -344,7 +347,10 @@ private:
       return {control_token_ && control_token_->IsInterrupted()
                   ? StreamWaitStatus_::Interrupted
                   : StreamWaitStatus_::Ready,
-              false, false, true, {}};
+              false,
+              false,
+              true,
+              {}};
     }
     if (remote_index_ != kInvalidIndex_ && index == remote_index_) {
       return {StreamWaitStatus_::Ready, watch_read, watch_write, false, {}};
@@ -374,15 +380,19 @@ private:
 
       int slice_ms = 50;
       if (timeout_ms >= 0) {
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start);
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start);
         const int remain_ms = timeout_ms - static_cast<int>(elapsed.count());
         if (remain_ms <= 0) {
           return IsWakeTriggered_(wake_snapshot)
-                     ? StreamWaitResult_{StreamWaitStatus_::Ready, false, false,
-                                         true, {}}
-                     : StreamWaitResult_{StreamWaitStatus_::Timeout, false,
-                                         false, false, {}};
+                     ? StreamWaitResult_{StreamWaitStatus_::Ready,
+                                         false,
+                                         false,
+                                         true,
+                                         {}}
+                     : StreamWaitResult_{
+                           StreamWaitStatus_::Timeout, false, false, false, {}};
         }
         slice_ms = std::max(1, std::min(slice_ms, remain_ms));
       }
@@ -406,7 +416,9 @@ private:
       if (rc > 0) {
         return {StreamWaitStatus_::Ready,
                 watch_read && FD_ISSET(remote_sock_, &readfds),
-                watch_write && FD_ISSET(remote_sock_, &writefds), false, {}};
+                watch_write && FD_ISSET(remote_sock_, &writefds),
+                false,
+                {}};
       }
       if (rc == 0) {
         if (timeout_ms < 0) {
@@ -417,10 +429,13 @@ private:
                 std::chrono::steady_clock::now() - start);
         if (elapsed.count() >= timeout_ms) {
           return IsWakeTriggered_(wake_snapshot)
-                     ? StreamWaitResult_{StreamWaitStatus_::Ready, false, false,
-                                         true, {}}
-                     : StreamWaitResult_{StreamWaitStatus_::Timeout, false,
-                                         false, false, {}};
+                     ? StreamWaitResult_{StreamWaitStatus_::Ready,
+                                         false,
+                                         false,
+                                         true,
+                                         {}}
+                     : StreamWaitResult_{
+                           StreamWaitStatus_::Timeout, false, false, false, {}};
         }
         continue;
       }
@@ -476,9 +491,9 @@ private:
     return OK;
   }
 
-  [[nodiscard]] StreamWaitResult_
-  WaitPosix_(bool watch_read, bool watch_write, int timeout_ms,
-             unsigned long long wake_snapshot) {
+  [[nodiscard]] StreamWaitResult_ WaitPosix_(bool watch_read, bool watch_write,
+                                             int timeout_ms,
+                                             unsigned long long wake_snapshot) {
     if (IsWakeTriggered_(wake_snapshot)) {
       return {StreamWaitStatus_::Ready, false, false, true, {}};
     }
@@ -505,24 +520,31 @@ private:
     const int rc = poll(fds.data(), nfds, timeout_ms);
     if (rc == 0) {
       return IsWakeTriggered_(wake_snapshot)
-                 ? StreamWaitResult_{StreamWaitStatus_::Ready, false, false,
-                                     true, {}}
-                 : StreamWaitResult_{StreamWaitStatus_::Timeout, false, false,
-                                     false, {}};
+                 ? StreamWaitResult_{StreamWaitStatus_::Ready,
+                                     false,
+                                     false,
+                                     true,
+                                     {}}
+                 : StreamWaitResult_{
+                       StreamWaitStatus_::Timeout, false, false, false, {}};
     }
     if (rc < 0) {
       if (errno == EINTR) {
         return {control_token_ && control_token_->IsInterrupted()
                     ? StreamWaitStatus_::Interrupted
                     : StreamWaitStatus_::Ready,
-                false, false, false, {}};
+                false,
+                false,
+                false,
+                {}};
       }
       return {StreamWaitStatus_::Error, false, false, false,
               std::strerror(errno)};
     }
 
     bool wake_ready = false;
-    if (wake_index >= 0 && (fds[static_cast<size_t>(wake_index)].revents != 0)) {
+    if (wake_index >= 0 &&
+        (fds[static_cast<size_t>(wake_index)].revents != 0)) {
       std::array<char, 64> buffer = {};
       while (read(wake_pipe_[0], buffer.data(), buffer.size()) > 0) {
       }
@@ -534,7 +556,8 @@ private:
     return {StreamWaitStatus_::Ready,
             watch_read && (fds[0].revents & (POLLIN | POLLPRI)) != 0,
             watch_write && (fds[0].revents & POLLOUT) != 0,
-            wake_ready || IsWakeTriggered_(wake_snapshot), {}};
+            wake_ready || IsWakeTriggered_(wake_snapshot),
+            {}};
   }
 
   void ShutdownPosix_() {
@@ -587,13 +610,14 @@ private:
       nullptr;
 #endif
 };
-}
+} // namespace
 
 struct TermAppService::ChannelStreamRuntime {
   std::string terminal_key = {};
   std::string channel_name = {};
   TerminalHandle terminal = nullptr;
-  AMDomain::client::amf control_token = AMDomain::client::CreateClientControlToken();
+  AMDomain::client::amf control_token =
+      AMDomain::client::CreateClientControlToken();
   std::thread read_thread = {};
   std::atomic<unsigned long long> wake_seq = 0;
   mutable std::mutex mutex = {};
@@ -694,14 +718,14 @@ TermAppService::CreateTerminal(const ClientHandle &client, bool detach) {
     return {nullptr, open_result.rcm};
   }
 
-  auto active_result = created->ActiveChannel({kDefaultTerminalChannelName}, {});
+  auto active_result =
+      created->ActiveChannel({kDefaultTerminalChannelName}, {});
   if (!(active_result.rcm) || !active_result.data.activated) {
-    return {
-        nullptr,
-        active_result.rcm
-            ? Err(EC::CommonFailure, "terminal.create.active_default",
-                  terminal_key, "Failed to activate default terminal channel")
-            : active_result.rcm};
+    return {nullptr, active_result.rcm
+                         ? Err(EC::CommonFailure,
+                               "terminal.create.active_default", terminal_key,
+                               "Failed to activate default terminal channel")
+                         : active_result.rcm};
   }
 
   if (detach) {
@@ -811,6 +835,7 @@ TermAppService::GetTerminalByNickname(const std::string &nickname,
   if (matched_names.size() == 1 && matched_terminal) {
     return {matched_terminal, OK};
   }
+
   if (matched_names.size() > 1) {
     return {nullptr, Err(EC::ClientNotFound, "terminal.get", nickname,
                          AMStr::fmt("Ambiguous nickname, candidates: {}",
@@ -832,7 +857,8 @@ std::vector<std::string> TermAppService::ListTerminalNames() const {
   return names;
 }
 
-void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) {
+void TermAppService::StreamReadLoop_(
+    const ChannelStreamRuntimeHandle &runtime) {
   if (!runtime || !runtime->terminal) {
     return;
   }
@@ -848,7 +874,8 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
     return parsed;
   };
 
-  auto append_cache_locked = [&](std::string_view chunk) -> CacheAppendOutcome_ {
+  auto append_cache_locked =
+      [&](std::string_view chunk) -> CacheAppendOutcome_ {
     CacheAppendOutcome_ out = {};
     if (chunk.empty()) {
       return out;
@@ -884,11 +911,11 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
       runtime->terminal->ActiveChannel({runtime->channel_name}, {});
   if (!(active_result.rcm) || !active_result.data.activated) {
     std::lock_guard<std::mutex> lock(runtime->mutex);
-    runtime->last_error = active_result.rcm
-                              ? Err(EC::NoConnection, "terminal.stream.active",
-                                    runtime->channel_name,
-                                    "Failed to activate target channel")
-                              : active_result.rcm;
+    runtime->last_error =
+        active_result.rcm
+            ? Err(EC::NoConnection, "terminal.stream.active",
+                  runtime->channel_name, "Failed to activate target channel")
+            : active_result.rcm;
     runtime->closed = true;
     return;
   }
@@ -922,9 +949,8 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
       has_pending_write = !runtime->send_buffer.empty();
     }
 
-    const StreamWaitResult_ wait_result =
-        remote_waiter.Wait(true, has_pending_write, kStreamWaitTimeoutMs,
-                           wake_snapshot);
+    const StreamWaitResult_ wait_result = remote_waiter.Wait(
+        true, has_pending_write, kStreamWaitTimeoutMs, wake_snapshot);
     if (wait_result.status == StreamWaitStatus_::Timeout) {
       continue;
     }
@@ -961,8 +987,8 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
             should_exit = runtime->stop_requested;
           }
           if (should_exit) {
-            close_with_error(read_result.rcm.code == EC::Terminate ? OK
-                                                                   : read_result.rcm);
+            close_with_error(
+                read_result.rcm.code == EC::Terminate ? OK : read_result.rcm);
             should_break = true;
             break;
           }
@@ -975,11 +1001,9 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
           {
             std::lock_guard<std::mutex> lock(runtime->mutex);
             runtime->latest_output = read_result.data.output;
+            cache_outcome = append_cache_locked(read_result.data.output);
             if (runtime->attached && runtime->processor) {
               output_processor = runtime->processor;
-              (void)parse_chunk_locked(read_result.data.output);
-            } else {
-              cache_outcome = append_cache_locked(read_result.data.output);
             }
           }
           if (output_processor) {
@@ -1038,17 +1062,17 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
             should_exit = runtime->stop_requested;
           }
           if (should_exit) {
-            close_with_error(write_result.rcm.code == EC::Terminate
-                                 ? OK
-                                 : write_result.rcm);
+            close_with_error(
+                write_result.rcm.code == EC::Terminate ? OK : write_result.rcm);
             should_break = true;
             break;
           }
           break;
         }
 
-        const size_t consumed = std::min(
-            write_chunk.size(), static_cast<size_t>(write_result.data.bytes_written));
+        const size_t consumed =
+            std::min(write_chunk.size(),
+                     static_cast<size_t>(write_result.data.bytes_written));
         if (consumed == 0) {
           break;
         }
@@ -1071,7 +1095,8 @@ void TermAppService::StreamReadLoop_(const ChannelStreamRuntimeHandle &runtime) 
   }
 }
 
-void TermAppService::StopChannelStreamRuntime_(ChannelStreamRuntimeHandle runtime) {
+void TermAppService::StopChannelStreamRuntime_(
+    ChannelStreamRuntimeHandle runtime) {
   if (!runtime) {
     return;
   }
@@ -1161,8 +1186,8 @@ TermAppService::AttachChannelStream(const std::string &terminal_nickname,
   auto terminal_result = QueryTerminal_(terminal_key);
   if (!(terminal_result.rcm) || !terminal_result.data) {
     out.rcm = terminal_result.rcm
-                  ? Err(EC::InvalidHandle, "terminal.stream.attach", terminal_key,
-                        "Terminal handle is null")
+                  ? Err(EC::InvalidHandle, "terminal.stream.attach",
+                        terminal_key, "Terminal handle is null")
                   : terminal_result.rcm;
     return out;
   }
@@ -1218,9 +1243,8 @@ TermAppService::AttachChannelStream(const std::string &terminal_nickname,
   {
     std::lock_guard<std::mutex> lock(runtime->mutex);
     runtime->max_cache_bytes = std::max<size_t>(1, max_cache_bytes);
-    replay_blocks.swap(runtime->cache.blocks);
+    replay_blocks = runtime->cache.blocks;
     fallback_output = runtime->latest_output;
-    runtime->cached_bytes = 0;
     out.data.in_alternate_screen = runtime->cache.in_alternate_screen;
     out.data.soft_limit_hit = runtime->soft_limit_hit;
     out.data.hard_limit_hit = runtime->hard_limit_hit;
@@ -1368,8 +1392,9 @@ ECM TermAppService::QueueChannelInput(const std::string &terminal_nickname,
   return OK;
 }
 
-TermAppService::ChannelStreamState TermAppService::GetChannelStreamState(
-    const std::string &terminal_nickname, const std::string &channel_name) const {
+TermAppService::ChannelStreamState
+TermAppService::GetChannelStreamState(const std::string &terminal_nickname,
+                                      const std::string &channel_name) const {
   ChannelStreamState out = {};
   const std::string terminal_key = NormalizeTerminalKey_(terminal_nickname);
   const std::string channel = AMStr::Strip(channel_name);
@@ -1466,4 +1491,3 @@ ECM TermAppService::RemoveTerminal(const std::string &nickname,
 }
 
 } // namespace AMApplication::terminal
-

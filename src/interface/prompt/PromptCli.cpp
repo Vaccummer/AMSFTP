@@ -68,6 +68,10 @@ struct PromptValueQueryContext {
   const std::vector<std::pair<std::string, std::string>> *candidates = nullptr;
   std::string valid_tag;
   std::string invalid_tag;
+  mutable std::mutex cache_mtx;
+  mutable std::string cached_input;
+  mutable bool cached_result = false;
+  mutable bool has_cached_result = false;
 };
 
 void SplitPromptForReadline_(const std::string &full_prompt,
@@ -120,6 +124,49 @@ CurrentProfile_(IsoclineProfileManager &profile_manager) {
   return profile_manager.CurrentProfile();
 }
 
+void DedupProfileHistoryTail_(const std::shared_ptr<IsoclineProfile> &profile) {
+  if (!profile) {
+    return;
+  }
+  while (true) {
+    const std::vector<std::string> history = profile->CollectHistory();
+    if (history.size() < 2) {
+      return;
+    }
+    if (history[0] != history[1]) {
+      return;
+    }
+    if (!profile->RemoveLastHistoryEntry()) {
+      return;
+    }
+  }
+}
+
+bool QueryCheckerCachedResult_(const PromptValueQueryContext &ctx,
+                              const std::string &text) {
+  if (!ctx.checker || !(*ctx.checker)) {
+    return true;
+  }
+  {
+    std::lock_guard<std::mutex> lock(ctx.cache_mtx);
+    if (ctx.has_cached_result && ctx.cached_input == text) {
+      return ctx.cached_result;
+    }
+  }
+  bool evaluated = false;
+  try {
+    evaluated = (*ctx.checker)(text);
+  } catch (...) {
+    evaluated = false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(ctx.cache_mtx);
+    ctx.cached_input = text;
+    ctx.cached_result = evaluated;
+    ctx.has_cached_result = true;
+  }
+  return evaluated;
+}
 /**
  * @brief Query-mode highlighter that marks valid/invalid input values.
  */
@@ -134,7 +181,7 @@ void PromptValueQueryHighlight_(ic_highlight_env_t *henv, const char *input,
   }
 
   const std::string text(input);
-  const bool is_valid = (*ctx->checker)(text);
+  const bool is_valid = QueryCheckerCachedResult_(*ctx, text);
   const std::string &tag = is_valid ? ctx->valid_tag : ctx->invalid_tag;
   if (tag.empty()) {
     return;
@@ -963,6 +1010,7 @@ std::optional<std::string> PromptIOManager::Prompt(
   // isocline_profile_manager_.RemoveLastHistoryEntry();
   std::string out = line;
   ic_free(line);
+  DedupCurrentHistoryTail_(out);
   return out;
 }
 
@@ -1014,10 +1062,48 @@ PromptIOManager::PromptCore(const std::string &prompt) {
   // isocline_profile_manager_.RemoveLastHistoryEntry();
   std::string out = line;
   ic_free(line);
+  DedupCurrentHistoryTail_(out);
   ClearActivePromptHeader_();
   return out;
 }
 
+
+bool PromptIOManager::IsContinuousDuplicateTypein_(
+    const std::string &value, const std::string &nickname) {
+  std::lock_guard<std::mutex> lock(io_state_.typein_result_mutex_);
+  if (!io_state_.has_last_typein_result_) {
+    return false;
+  }
+  return io_state_.last_typein_result_ == value &&
+         io_state_.last_typein_nickname_ == nickname;
+}
+
+void PromptIOManager::CacheTypeinResult_(const std::string &value,
+                                         const std::string &nickname) {
+  std::lock_guard<std::mutex> lock(io_state_.typein_result_mutex_);
+  io_state_.last_typein_result_ = value;
+  io_state_.last_typein_nickname_ = nickname;
+  io_state_.has_last_typein_result_ = true;
+}
+
+void PromptIOManager::DedupCurrentHistoryTail_(
+    const std::string &current_input) {
+  auto profile = CurrentProfile_(isocline_profile_manager_);
+  if (!profile || !profile->Use()) {
+    return;
+  }
+  const std::string nickname = isocline_profile_manager_.CurrentNickname();
+  const bool duplicate_cached = !current_input.empty() &&
+                                IsContinuousDuplicateTypein_(current_input,
+                                                             nickname);
+  if (duplicate_cached) {
+    (void)profile->RemoveLastHistoryEntry();
+  }
+  DedupProfileHistoryTail_(profile);
+  if (!current_input.empty()) {
+    CacheTypeinResult_(current_input, nickname);
+  }
+}
 std::optional<std::string>
 PromptIOManager::SecurePrompt(const std::string &prompt) {
   ScopedAtomicFlag_ secure_phase_guard(&io_state_.secure_phase_);
@@ -1032,5 +1118,4 @@ PromptIOManager::SecurePrompt(const std::string &prompt) {
 }
 
 } // namespace AMInterface::prompt
-
 

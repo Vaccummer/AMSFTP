@@ -15,6 +15,7 @@
 #include "interface/adapters/client/ClientInterfaceService.hpp"
 #include "interface/adapters/config/ConfigInterfaceService.hpp"
 #include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
+#include "interface/adapters/terminal/TerminalInterfaceService.hpp"
 #include "interface/adapters/transfer/TransferInterfaceService.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/cli/InteractiveEventRegistry.hpp"
@@ -103,6 +104,8 @@ struct CLIServices : public NonCopyableNonMovable {
         client_interface_service = {};
     mutable ServiceHolder<AMInterface::filesystem::FilesystemInterfaceSerivce>
         filesystem_interface_service = {};
+    mutable ServiceHolder<AMInterface::terminal::TerminalInterfaceService>
+        terminal_interface_service = {};
     mutable ServiceHolder<AMInterface::var::VarInterfaceService>
         var_interface_service = {};
     mutable ServiceHolder<AMInterface::transfer::TransferInterfaceService>

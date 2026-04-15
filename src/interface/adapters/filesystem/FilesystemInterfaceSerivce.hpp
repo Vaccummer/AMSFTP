@@ -2,7 +2,6 @@
 #include "application/client/ClientAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
-#include "application/terminal/TermAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/core/Enum.hpp"
 #include "interface/prompt/Prompt.hpp"
@@ -65,44 +64,6 @@ struct FilesystemTestRTTArg {
   int times = 1;
 };
 
-struct FilesystemShellRunArg {
-  std::string cmd = {};
-  int max_time_s = -1;
-};
-
-struct FilesystemTerminalArg {
-  std::string target = {};
-};
-
-struct FilesystemTermAddArg {
-  std::vector<std::string> nicknames = {};
-  bool force = false;
-};
-
-struct FilesystemTermListArg {};
-
-struct FilesystemTermRemoveArg {
-  std::vector<std::string> nicknames = {};
-};
-
-struct FilesystemChannelAddArg {
-  std::string target = {};
-};
-
-struct FilesystemChannelListArg {
-  std::string nickname = {};
-};
-
-struct FilesystemChannelRemoveArg {
-  std::string target = {};
-  bool force = false;
-};
-
-struct FilesystemChannelRenameArg {
-  std::string src = {};
-  std::string dst = {};
-};
-
 struct FilesystemRenameArg {
   std::string target = {};
   std::string dst = {};
@@ -138,7 +99,6 @@ class FilesystemInterfaceSerivce final : public NonCopyableNonMovable {
 public:
   FilesystemInterfaceSerivce(
       AMApplication::client::ClientAppService &client_service,
-      AMApplication::terminal::TermAppService &terminal_service,
       AMApplication::host::HostAppService &host_service,
       AMApplication::filesystem::FilesystemAppService &filesystem_service,
       AMInterface::style::AMStyleService &style_service,
@@ -187,43 +147,6 @@ public:
               const std::optional<AMDomain::client::ClientControlComponent>
                   &control_opt = std::nullopt) const;
 
-  ECM ShellRun(const FilesystemShellRunArg &arg,
-               const std::optional<AMDomain::client::ClientControlComponent>
-                   &control_opt = std::nullopt) const;
-
-  ECM LaunchTerminal(
-      const FilesystemTerminalArg &arg = {},
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
-  ECM AddTerminal(
-      const FilesystemTermAddArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
-  ECM ListTerminals(
-      const FilesystemTermListArg &arg = {},
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
-  ECM RemoveTerminal(
-      const FilesystemTermRemoveArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
-  ECM AddChannel(
-      const FilesystemChannelAddArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
-  ECM ListChannels(
-      const FilesystemChannelListArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
-  ECM RemoveChannel(
-      const FilesystemChannelRemoveArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
-  ECM RenameChannel(
-      const FilesystemChannelRenameArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
-
   ECM Rename(const FilesystemRenameArg &arg,
              const std::optional<AMDomain::client::ClientControlComponent>
                  &control_opt = std::nullopt) const;
@@ -253,7 +176,6 @@ private:
   [[nodiscard]] ECMData<PathTarget> MatchOne(const PathTarget &path) const;
 
   AMApplication::client::ClientAppService &client_service_;
-  AMApplication::terminal::TermAppService &terminal_service_;
   AMApplication::host::HostAppService &host_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   AMInterface::style::AMStyleService &style_service_;

@@ -435,9 +435,9 @@ private:
   }
 
 public:
-  SSHTerminalPort(AMT::ClientHandle owner_client, const ConRequest &request,
+  SSHTerminalPort(AMT::ClientHandle owner_client, ConRequest request,
                   AMSFTPIOCore *sftp_core)
-      : request_(request), owner_client_(std::move(owner_client)),
+      : request_(std::move(request)), owner_client_(std::move(owner_client)),
         sftp_core_(sftp_core) {
     SyncCoreHandles_();
     SyncCacheFromRuntimeUnlocked_();

@@ -19,6 +19,7 @@
 #include "interface/adapters/client/ClientInterfaceService.hpp"
 #include "interface/adapters/config/ConfigInterfaceService.hpp"
 #include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
+#include "interface/adapters/terminal/TerminalInterfaceService.hpp"
 #include "interface/adapters/transfer/TransferInterfaceService.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/prompt/Prompt.hpp"
@@ -97,6 +98,8 @@ struct InterfaceServiceBuildState final {
       client_interface_service = nullptr;
   std::unique_ptr<AMInterface::filesystem::FilesystemInterfaceSerivce>
       filesystem_interface_service = nullptr;
+  std::unique_ptr<AMInterface::terminal::TerminalInterfaceService>
+      terminal_interface_service = nullptr;
   std::unique_ptr<AMInterface::var::VarInterfaceService> var_interface_service =
       nullptr;
   std::unique_ptr<AMDomain::transfer::ITransferPoolPort> transfer_pool =
@@ -647,11 +650,18 @@ ECM BuildClientInterfaceServices_(
 
   state->filesystem_interface_service =
       std::make_unique<AMInterface::filesystem::FilesystemInterfaceSerivce>(
-          *app_state.client_service, *app_state.terminal_service,
-          *app_state.host_service, *app_state.filesystem_service,
+          *app_state.client_service, *app_state.host_service,
+          *app_state.filesystem_service,
           *app_state.style_service, *app_state.prompt_io_manager);
   state->filesystem_interface_service->SetDefaultControlToken(
       task_control_token);
+
+  state->terminal_interface_service =
+      std::make_unique<AMInterface::terminal::TerminalInterfaceService>(
+          *app_state.client_service, *app_state.terminal_service,
+          *app_state.filesystem_service, *app_state.style_service,
+          *app_state.prompt_io_manager);
+  state->terminal_interface_service->SetDefaultControlToken(task_control_token);
 
   state->var_interface_service =
       std::make_unique<AMInterface::var::VarInterfaceService>(
@@ -811,6 +821,8 @@ void BindServicesToCliManagers_(BootstrapServices *runtime,
       std::move(interface_state->config_interface_service));
   runtime->managers.interfaces.filesystem_interface_service.SetInstance(
       std::move(interface_state->filesystem_interface_service));
+  runtime->managers.interfaces.terminal_interface_service.SetInstance(
+      std::move(interface_state->terminal_interface_service));
   runtime->managers.interfaces.var_interface_service.SetInstance(
       std::move(interface_state->var_interface_service));
   runtime->managers.domain.transfer_pool.SetInstance(

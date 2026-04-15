@@ -1851,13 +1851,13 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
       scoped_refresh.active = true;
 
       const auto token = GetDefaultControlToken();
+      constexpr int kInterruptPollSliceMs = 20;
       bool watch_canceled = false;
       auto is_generic_task_label = [](const std::string &s) -> bool {
         return s.rfind("Task ", 0) == 0;
       };
       while (true) {
         if (token && token->IsInterrupted()) {
-          token->ClearInterrupt();
           watch_canceled = true;
           break;
         }
@@ -1912,7 +1912,19 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
         if (frozen_count >= watch_items.size()) {
           break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
+        int remaining_ms = refresh_ms;
+        while (remaining_ms > 0) {
+          if (token && token->IsInterrupted()) {
+            watch_canceled = true;
+            break;
+          }
+          const int sleep_ms = std::min(remaining_ms, kInterruptPollSliceMs);
+          std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+          remaining_ms -= sleep_ms;
+        }
+        if (watch_canceled) {
+          break;
+        }
       }
 
       scoped_refresh.active = false;
@@ -1927,6 +1939,9 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
         scoped_cursor.hidden = false;
       }
       if (watch_canceled) {
+        if (token) {
+          token->ClearInterrupt();
+        }
         return OK;
       }
     }
