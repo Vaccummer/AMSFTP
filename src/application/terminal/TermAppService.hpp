@@ -8,7 +8,6 @@
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 namespace AMApplication::terminal {
@@ -65,10 +64,11 @@ public:
   ECM RemoveTerminal(const std::string &nickname,
                      const ClientControlComponent &control = {});
 
-  [[nodiscard]] ECMData<ChannelStreamAttachResult> AttachChannelStream(
-      const std::string &terminal_nickname, const std::string &channel_name,
-      ChannelStreamProcessor processor,
-      size_t max_cache_bytes = (16U * 1024U * 1024U));
+  [[nodiscard]] ECMData<ChannelStreamAttachResult>
+  AttachChannelStream(const std::string &terminal_nickname,
+                      const std::string &channel_name,
+                      ChannelStreamProcessor processor,
+                      size_t max_cache_bytes = (16U * 1024U * 1024U));
 
   ECM DetachChannelStream(const std::string &terminal_nickname,
                           const std::string &channel_name);
@@ -88,8 +88,8 @@ private:
   struct ChannelStreamRuntime;
   using ChannelStreamRuntimeHandle = std::shared_ptr<ChannelStreamRuntime>;
 
-  [[nodiscard]] static std::string
-  BuildTerminalKey_(const ClientHandle &client, const char *action);
+  [[nodiscard]] static std::string BuildTerminalKey_(const ClientHandle &client,
+                                                     const char *action);
 
   [[nodiscard]] static std::string
   NormalizeTerminalKey_(const std::string &nickname);

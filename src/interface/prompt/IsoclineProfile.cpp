@@ -472,7 +472,7 @@ bool IsoclineProfile::AddHistoryEntry(const std::string &line) const {
   }
   const long count = ic_history_count();
   if (count > 0) {
-    const char *last = ic_history_get(count - 1);
+    const char *last = ic_history_get(0);
     if (last != nullptr && line == last) {
       return true;
     }
@@ -558,3 +558,4 @@ IsoclineProfile::TemporarySetHighlighter(
 }
 
 } // namespace AMInterface::prompt
+

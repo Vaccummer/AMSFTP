@@ -593,7 +593,7 @@ struct ConnectArgs : BaseArgStruct {
 
 struct CmdArgs : BaseArgStruct {
   int timeout_ms = -1;
-  AMInterface::filesystem::FilesystemShellRunArg request = {};
+  AMInterface::terminal::TerminalShellRunArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
@@ -608,7 +608,7 @@ struct CmdArgs : BaseArgStruct {
     arg.cmd = command;
     arg.max_time_s =
         timeout_ms < 0 ? -1 : std::max(1, (timeout_ms + 999) / 1000);
-    return managers.interfaces.filesystem_interface_service->ShellRun(arg);
+    return managers.interfaces.terminal_interface_service->ShellRun(arg);
   }
   void reset() override {
     timeout_ms = -1;
@@ -617,20 +617,20 @@ struct CmdArgs : BaseArgStruct {
 };
 
 struct TerminalArgs : BaseArgStruct {
-  AMInterface::filesystem::FilesystemTerminalArg request = {};
+  AMInterface::terminal::TerminalLaunchArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
     arg.target = AMStr::Strip(arg.target);
-    return managers.interfaces.filesystem_interface_service->LaunchTerminal(
+    return managers.interfaces.terminal_interface_service->LaunchTerminal(
         arg);
   }
   void reset() override { request = {}; }
 };
 
 struct TermAddArgs : BaseArgStruct {
-  AMInterface::filesystem::FilesystemTermAddArg request = {};
+  AMInterface::terminal::TerminalAddArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
@@ -638,24 +638,24 @@ struct TermAddArgs : BaseArgStruct {
     for (auto &nickname : arg.nicknames) {
       nickname = AMStr::Strip(nickname);
     }
-    return managers.interfaces.filesystem_interface_service->AddTerminal(arg);
+    return managers.interfaces.terminal_interface_service->AddTerminal(arg);
   }
   void reset() override { request = {}; }
 };
 
 struct TermListArgs : BaseArgStruct {
-  AMInterface::filesystem::FilesystemTermListArg request = {};
+  AMInterface::terminal::TerminalListArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    return managers.interfaces.filesystem_interface_service->ListTerminals(
+    return managers.interfaces.terminal_interface_service->ListTerminals(
         request);
   }
   void reset() override { request = {}; }
 };
 
 struct TermRemoveArgs : BaseArgStruct {
-  AMInterface::filesystem::FilesystemTermRemoveArg request = {};
+  AMInterface::terminal::TerminalRemoveArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
@@ -663,56 +663,56 @@ struct TermRemoveArgs : BaseArgStruct {
     for (auto &nickname : arg.nicknames) {
       nickname = AMStr::Strip(nickname);
     }
-    return managers.interfaces.filesystem_interface_service->RemoveTerminal(
+    return managers.interfaces.terminal_interface_service->RemoveTerminal(
         arg);
   }
   void reset() override { request = {}; }
 };
 
 struct ChannelAddArgs : BaseArgStruct {
-  AMInterface::filesystem::FilesystemChannelAddArg request = {};
+  AMInterface::terminal::ChannelAddArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
     arg.target = AMStr::Strip(arg.target);
-    return managers.interfaces.filesystem_interface_service->AddChannel(arg);
+    return managers.interfaces.terminal_interface_service->AddChannel(arg);
   }
   void reset() override { request = {}; }
 };
 
 struct ChannelListArgs : BaseArgStruct {
-  AMInterface::filesystem::FilesystemChannelListArg request = {};
+  AMInterface::terminal::ChannelListArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
-    return managers.interfaces.filesystem_interface_service->ListChannels(arg);
+    return managers.interfaces.terminal_interface_service->ListChannels(arg);
   }
   void reset() override { request = {}; }
 };
 
 struct ChannelRemoveArgs : BaseArgStruct {
-  AMInterface::filesystem::FilesystemChannelRemoveArg request = {};
+  AMInterface::terminal::ChannelRemoveArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
     arg.target = AMStr::Strip(arg.target);
-    return managers.interfaces.filesystem_interface_service->RemoveChannel(arg);
+    return managers.interfaces.terminal_interface_service->RemoveChannel(arg);
   }
   void reset() override { request = {}; }
 };
 
 struct ChannelRenameArgs : BaseArgStruct {
-  AMInterface::filesystem::FilesystemChannelRenameArg request = {};
+  AMInterface::terminal::ChannelRenameArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
     auto arg = request;
     arg.src = AMStr::Strip(arg.src);
     arg.dst = AMStr::Strip(arg.dst);
-    return managers.interfaces.filesystem_interface_service->RenameChannel(arg);
+    return managers.interfaces.terminal_interface_service->RenameChannel(arg);
   }
   void reset() override { request = {}; }
 };

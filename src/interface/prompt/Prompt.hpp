@@ -159,6 +159,10 @@ private:
     std::atomic<bool> refresh_detached_mode_{false};
     std::string active_prompt_header_;
     std::atomic<bool> has_active_prompt_header_{false};
+    std::mutex typein_result_mutex_;
+    std::string last_typein_result_;
+    std::string last_typein_nickname_;
+    bool has_last_typein_result_ = false;
   };
 
   static std::string EnsureTrailingNewline_(const std::string &text);
@@ -193,6 +197,11 @@ private:
   [[nodiscard]] bool ShouldReplayPromptHeader_() const;
   [[nodiscard]] std::string BuildReplayFrame_(const std::string &msg);
   [[nodiscard]] bool TryCacheOutput_(const std::string &text);
+  bool IsContinuousDuplicateTypein_(const std::string &value,
+                                    const std::string &nickname);
+  void CacheTypeinResult_(const std::string &value,
+                          const std::string &nickname);
+  void DedupCurrentHistoryTail_(const std::string &current_input = "");
   void EmitOutput_(const std::string &text, bool allow_cache = true);
   void PrintSyncLocked_(const std::string &text);
   void PrintSyncRefreshLocked_(const std::string &text);
@@ -226,3 +235,4 @@ public:
 };
 
 } // namespace AMInterface::prompt
+

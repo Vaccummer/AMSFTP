@@ -329,7 +329,8 @@ struct AMError {
     }
   }
 
-  AMError(EC ec, std::string op, std::string tgt, std::string err, RawError raw)
+  AMError(EC ec, std::string op, std::string tgt, std::string err,
+          std::optional<RawError> raw)
       : code(ec), operation(std::move(op)), target(std::move(tgt)),
         error(std::move(err)), raw_error(raw) {
     if (code != EC::Success) {

@@ -26,15 +26,17 @@ constexpr const char *kTerminalLeaseKey = "terminal.lease";
   if (!client) {
     return false;
   }
-  const auto transfer = client->MetaDataPort().QueryNamedValue<bool>(kTransferLeaseKey);
-  if (transfer.name_found && transfer.type_match && transfer.value.has_value() &&
-      transfer.value.value()) {
+  const auto transfer =
+      client->MetaDataPort().QueryNamedValue<bool>(kTransferLeaseKey);
+  if (transfer.name_found && transfer.type_match &&
+      transfer.value.has_value() && transfer.value.value()) {
     return true;
   }
 
-  const auto terminal = client->MetaDataPort().QueryNamedValue<bool>(kTerminalLeaseKey);
-  if (terminal.name_found && terminal.type_match && terminal.value.has_value() &&
-      terminal.value.value()) {
+  const auto terminal =
+      client->MetaDataPort().QueryNamedValue<bool>(kTerminalLeaseKey);
+  if (terminal.name_found && terminal.type_match &&
+      terminal.value.has_value() && terminal.value.value()) {
     return true;
   }
   return false;

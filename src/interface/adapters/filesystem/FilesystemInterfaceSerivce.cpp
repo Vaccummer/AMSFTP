@@ -338,13 +338,12 @@ void PrintGroupedClientPaths(
 
 FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
     AMApplication::client::ClientAppService &client_service,
-    AMApplication::terminal::TermAppService &terminal_service,
     AMApplication::host::HostAppService &host_service,
     AMApplication::filesystem::FilesystemAppService &filesystem_service,
     AMInterface::style::AMStyleService &style_service,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager)
-    : client_service_(client_service), terminal_service_(terminal_service),
-      host_service_(host_service), filesystem_service_(filesystem_service),
+    : client_service_(client_service), host_service_(host_service),
+      filesystem_service_(filesystem_service),
       style_service_(style_service), prompt_io_manager_(prompt_io_manager),
       default_interrupt_flag_(nullptr) {}
 
