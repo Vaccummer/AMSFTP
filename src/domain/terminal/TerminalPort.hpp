@@ -2,6 +2,7 @@
 
 #include "domain/client/ClientPort.hpp"
 #include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
+#include "domain/terminal/ChannelPort.hpp"
 #include "domain/terminal/TerminalModel.hpp"
 #include <cstdint>
 #include <memory>
@@ -28,17 +29,9 @@ public:
   ActiveChannel(const ChannelActiveArgs &active_args,
                 const ClientControlComponent &control = {}) = 0;
 
-  virtual ECMData<ChannelReadResult>
-  ReadChannel(const ChannelReadArgs &read_args,
-              const ClientControlComponent &control = {}) = 0;
-
-  virtual ECMData<ChannelWriteResult>
-  WriteChannel(const ChannelWriteArgs &write_args,
-               const ClientControlComponent &control = {}) = 0;
-
-  virtual ECMData<ChannelResizeResult>
-  ResizeChannel(const ChannelResizeArgs &resize_args,
-                const ClientControlComponent &control = {}) = 0;
+  virtual ECMData<ChannelPortHandle>
+  GetChannelPort(const std::optional<std::string> &channel_name = std::nullopt,
+                 const ClientControlComponent &control = {}) = 0;
 
   virtual ECMData<ChannelCloseResult>
   CloseChannel(const ChannelCloseArgs &close_args,
@@ -69,8 +62,6 @@ public:
   [[nodiscard]] virtual std::vector<std::string>
   GetCachedChannelNames() const = 0;
 
-  [[nodiscard]] virtual ECMData<std::intptr_t>
-  GetRemoteSocketHandle() const = 0;
 };
 
 using TerminalHandle = std::shared_ptr<ITerminalPort>;

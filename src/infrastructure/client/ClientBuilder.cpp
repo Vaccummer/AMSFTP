@@ -4,9 +4,9 @@
 #include "infrastructure/client/common/Base.hpp"
 #include "infrastructure/client/ftp/FTP.hpp"
 #include "infrastructure/client/local/Local.hpp"
-#include "infrastructure/client/local/Terminal.hpp"
+#include "infrastructure/terminal/local/Terminal.hpp"
 #include "infrastructure/client/sftp/SFTP.hpp"
-#include "infrastructure/client/sftp/Terminal.hpp"
+#include "infrastructure/terminal/sftp/Terminal.hpp"
 #include <memory>
 #include <utility>
 #include <vector>

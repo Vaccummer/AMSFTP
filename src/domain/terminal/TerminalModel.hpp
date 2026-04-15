@@ -23,17 +23,14 @@ struct ChannelActiveArgs {
 };
 
 struct ChannelReadArgs {
-  std::optional<std::string> channel_name = std::nullopt;
   size_t max_bytes = 4096;
 };
 
 struct ChannelWriteArgs {
-  std::optional<std::string> channel_name = std::nullopt;
   std::string input = "";
 };
 
 struct ChannelResizeArgs {
-  std::optional<std::string> channel_name = std::nullopt;
   int cols = 80;
   int rows = 24;
   int width = 0;
@@ -119,3 +116,4 @@ struct ChannelCheckResult {
 };
 
 } // namespace AMDomain::terminal
+
