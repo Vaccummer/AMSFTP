@@ -265,6 +265,24 @@ public:
         std::optional<std::string>(channel_name_));
   }
 
+  ECM Init(const AMT::ChannelInitArgs &init_args,
+           const ClientControlComponent &control = {}) override {
+    (void)init_args;
+    (void)control;
+    return OK;
+  }
+
+  ECM Rename(const std::string &new_channel_name) override {
+    const std::string renamed = AMStr::Strip(new_channel_name);
+    if (renamed.empty()) {
+      return Err(EC::InvalidArg, "terminal.channel.rename", channel_name_,
+                 "new channel name is empty");
+    }
+    channel_name_ = renamed;
+    cache_.SetChannelName(channel_name_);
+    return OK;
+  }
+
   [[nodiscard]] ECMData<AMT::ChannelCacheReplayResult>
   AttachConsumer(AMT::ChannelOutputProcessor processor) override {
     return cache_.AttachConsumer(std::move(processor));

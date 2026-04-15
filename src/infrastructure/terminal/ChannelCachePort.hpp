@@ -502,6 +502,7 @@ private:
     return min_remove_bytes;
   }
 
+public:
   void SetChannelName(std::string channel_name) {
     std::lock_guard<std::mutex> lock(mutex_);
     channel_name_ = std::move(channel_name);
