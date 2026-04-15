@@ -71,11 +71,19 @@ struct ChannelPortState {
   ECM last_error = OK;
 };
 
+struct ChannelInitArgs {
+  int cols = 80;
+  int rows = 24;
+  int width = 0;
+  int height = 0;
+  std::string term = "xterm-256color";
+};
+
 using ChannelOutputProcessor = std::function<void(std::string_view)>;
 
 struct ChannelLoopStartArgs {
   AMDomain::client::ClientControlComponent control = {};
-  int write_kick_timeout_ms = 100;
+  int write_kick_timeout_ms = 0;
 };
 
 struct ChannelForegroundBindArgs {
@@ -83,7 +91,7 @@ struct ChannelForegroundBindArgs {
   std::intptr_t key_event_handle = -1;
   AMAtomic<std::vector<char>> *key_cache = nullptr;
   AMDomain::client::ClientControlComponent control = {};
-  int write_kick_timeout_ms = 100;
+  int write_kick_timeout_ms = 0;
 };
 
 struct ChannelLoopState {
@@ -104,6 +112,11 @@ public:
   [[nodiscard]] virtual std::string GetChannelName() const = 0;
 
   [[nodiscard]] virtual ECMData<std::intptr_t> GetWaitHandle() const = 0;
+
+  virtual ECM Init(const ChannelInitArgs &init_args,
+                   const ClientControlComponent &control = {}) = 0;
+
+  virtual ECM Rename(const std::string &new_channel_name) = 0;
 
   [[nodiscard]] virtual ECMData<ChannelCacheReplayResult>
   AttachConsumer(ChannelOutputProcessor processor) = 0;

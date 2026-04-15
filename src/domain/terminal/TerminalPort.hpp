@@ -4,7 +4,6 @@
 #include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
 #include "domain/terminal/ChannelPort.hpp"
 #include "domain/terminal/TerminalModel.hpp"
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -61,7 +60,6 @@ public:
 
   [[nodiscard]] virtual std::vector<std::string>
   GetCachedChannelNames() const = 0;
-
 };
 
 using TerminalHandle = std::shared_ptr<ITerminalPort>;
@@ -70,4 +68,3 @@ using TerminalHandle = std::shared_ptr<ITerminalPort>;
 CreateTerminalPort(const ClientHandle &client);
 
 } // namespace AMDomain::terminal
-

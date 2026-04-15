@@ -296,7 +296,9 @@ public:
     in_alternate_screen_ = in_alternate_screen;
     cursor_col_ = 0;
     rows_rendered_ = 0;
+    current_row_has_content_ = false;
     touched_main_screen_ = false;
+    first_row_confirmed_new_region_ = false;
     parser_state_ = ParserState_::None;
     escape_buffer_.clear();
   }
@@ -315,25 +317,48 @@ public:
     }
   }
 
-  [[nodiscard]] size_t RenderedRows() const { return rows_rendered_; }
+  [[nodiscard]] size_t RenderedRows() const { return EffectiveRenderedRows_(); }
 
   void ClearRenderedRowsInTerminal() {
-    if (rows_rendered_ == 0U) {
+    const size_t rows_to_clear = EffectiveRenderedRows_();
+    if (rows_to_clear == 0U) {
       return;
     }
-    for (size_t i = 0; i < rows_rendered_; ++i) {
+    for (size_t i = 0; i < rows_to_clear; ++i) {
       WriteTerminalBytes_("\r\x1b[2K");
-      if (i + 1U < rows_rendered_) {
+      if (i + 1U < rows_to_clear) {
         WriteTerminalBytes_("\x1b[1A");
       }
     }
     rows_rendered_ = 0;
+    current_row_has_content_ = false;
     touched_main_screen_ = false;
+    first_row_confirmed_new_region_ = false;
     cursor_col_ = 0;
   }
 
 private:
   enum class ParserState_ { None = 0, Esc, Csi };
+
+  [[nodiscard]] size_t EffectiveRenderedRows_() const {
+    if (rows_rendered_ == 0U) {
+      return 0U;
+    }
+    // Keep cleanup scoped to rows that actually contain rendered content.
+    // Avoid clearing one extra line when the stream leaves an empty trailing
+    // row (for example after '\n' or wrap-to-next-row with no further output).
+    if (!current_row_has_content_ && rows_rendered_ > 0U) {
+      size_t rows = rows_rendered_ - 1U;
+      if (!first_row_confirmed_new_region_ && rows > 0U) {
+        --rows;
+      }
+      return rows;
+    }
+    if (!first_row_confirmed_new_region_ && rows_rendered_ > 0U) {
+      return rows_rendered_ - 1U;
+    }
+    return rows_rendered_;
+  }
 
   void ProcessByte_(unsigned char ch) {
     if (parser_state_ == ParserState_::None) {
@@ -391,6 +416,7 @@ private:
     }
     touched_main_screen_ = true;
     rows_rendered_ = 1U;
+    first_row_confirmed_new_region_ = false;
   }
 
   void ProcessVisibleByte_(unsigned char ch) {
@@ -403,9 +429,17 @@ private:
       return;
     }
     if (ch == static_cast<unsigned char>('\n')) {
-      EnsureMainScreenTouched_();
-      ++rows_rendered_;
+      if (!touched_main_screen_) {
+        // The very first newline may originate from the remote side to move
+        // away from the local command line. Do not count the origin row.
+        touched_main_screen_ = true;
+        rows_rendered_ = 1U;
+        first_row_confirmed_new_region_ = true;
+      } else {
+        ++rows_rendered_;
+      }
       cursor_col_ = 0;
+      current_row_has_content_ = false;
       return;
     }
     if (ch == static_cast<unsigned char>('\b')) {
@@ -422,6 +456,7 @@ private:
         next_tab_col -= cols_;
       }
       cursor_col_ = next_tab_col;
+      current_row_has_content_ = (cursor_col_ > 0);
       return;
     }
 
@@ -431,9 +466,11 @@ private:
 
     EnsureMainScreenTouched_();
     ++cursor_col_;
+    current_row_has_content_ = true;
     if (cursor_col_ >= cols_) {
       ++rows_rendered_;
       cursor_col_ = 0;
+      current_row_has_content_ = false;
     }
   }
 
@@ -441,7 +478,9 @@ private:
   int cols_ = 80;
   int cursor_col_ = 0;
   size_t rows_rendered_ = 0U;
+  bool current_row_has_content_ = false;
   bool touched_main_screen_ = false;
+  bool first_row_confirmed_new_region_ = false;
   bool in_alternate_screen_ = false;
   ParserState_ parser_state_ = ParserState_::None;
   std::string escape_buffer_ = {};
@@ -1129,6 +1168,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const int send_timeout_ms =
       filesystem_service_.GetInitArg().terminal_send_timeout_ms;
+  const int write_kick_timeout_ms =
+      (send_timeout_ms < 0) ? 0 : send_timeout_ms;
   std::string default_nickname = filesystem_service_.CurrentNickname();
   if (default_nickname.empty()) {
     default_nickname = AMDomain::host::klocalname;
@@ -1301,7 +1342,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
   const auto channel_port = channel_port_result.data;
 
   const ECM loop_rcm = channel_port->EnsureLoopStarted(
-      {control, std::max(1, send_timeout_ms > 0 ? send_timeout_ms : 100)});
+      {control, write_kick_timeout_ms});
   if (!(loop_rcm)) {
     prompt_io_manager_.ErrorFormat(loop_rcm);
     return loop_rcm;
@@ -1353,8 +1394,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
   bind_args.key_event_handle = keyboard_monitor->WaitHandle();
   bind_args.key_cache = keyboard_monitor->KeyCache();
   bind_args.control = control;
-  bind_args.write_kick_timeout_ms =
-      std::max(1, send_timeout_ms > 0 ? send_timeout_ms : 100);
+  bind_args.write_kick_timeout_ms = write_kick_timeout_ms;
 
   auto bind_result = channel_port->BindForeground(bind_args);
   if (!(bind_result.rcm)) {

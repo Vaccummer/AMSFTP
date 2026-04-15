@@ -4,8 +4,8 @@
 #include "infrastructure/client/common/Base.hpp"
 #include "infrastructure/client/ftp/FTP.hpp"
 #include "infrastructure/client/local/Local.hpp"
-#include "infrastructure/terminal/local/Terminal.hpp"
 #include "infrastructure/client/sftp/SFTP.hpp"
+#include "infrastructure/terminal/local/Terminal.hpp"
 #include "infrastructure/terminal/sftp/Terminal.hpp"
 #include <memory>
 #include <utility>
@@ -84,41 +84,43 @@ ECMData<TerminalHandle> CreateTerminalPort(const ClientHandle &client) {
                            "Client IO port cannot provide SFTP session reuse")};
     }
     if (sftp_core->session == nullptr) {
-      return {nullptr, Err(EC::NoConnection, "CreateTerminalPort",
-                           request.nickname, "Client session is not connected")};
+      return {nullptr,
+              Err(EC::NoConnection, "CreateTerminalPort", request.nickname,
+                  "Client session is not connected")};
     }
 
-    auto terminal =
-        std::make_shared<AMInfra::client::SFTP::terminal::SSHTerminalPort>(
-            client, request, sftp_core);
+    auto terminal = std::make_shared<AMInfra::terminal::SFTP::SSHTerminalPort>(
+        client, request, sftp_core);
     if (!terminal) {
-      return {nullptr, Err(EC::InvalidHandle, "CreateTerminalPort",
-                           request.nickname,
-                           "Failed to create terminal handle")};
+      return {nullptr,
+              Err(EC::InvalidHandle, "CreateTerminalPort", request.nickname,
+                  "Failed to create terminal handle")};
     }
     return {std::move(terminal), OK};
   }
   case AMDomain::host::ClientProtocol::LOCAL: {
-    auto *local_core =
-        dynamic_cast<AMInfra::client::LOCAL::AMLocalIOCore *>(&client->IOPort());
+    auto *local_core = dynamic_cast<AMInfra::client::LOCAL::AMLocalIOCore *>(
+        &client->IOPort());
     if (local_core == nullptr) {
-      return {nullptr, Err(EC::OperationUnsupported, "CreateTerminalPort",
-                           request.nickname,
-                           "Client IO port cannot provide local terminal runtime")};
+      return {nullptr,
+              Err(EC::OperationUnsupported, "CreateTerminalPort",
+                  request.nickname,
+                  "Client IO port cannot provide local terminal runtime")};
     }
     auto terminal =
         std::make_shared<AMInfra::client::LOCAL::terminal::LocalTerminalPort>(
             client, request, local_core);
     if (!terminal) {
-      return {nullptr, Err(EC::InvalidHandle, "CreateTerminalPort",
-                           request.nickname,
-                           "Failed to create terminal handle")};
+      return {nullptr,
+              Err(EC::InvalidHandle, "CreateTerminalPort", request.nickname,
+                  "Failed to create terminal handle")};
     }
     return {std::move(terminal), OK};
   }
   default:
     return {nullptr,
-            Err(EC::OperationUnsupported, "CreateTerminalPort", request.nickname,
+            Err(EC::OperationUnsupported, "CreateTerminalPort",
+                request.nickname,
                 "Current client protocol does not support terminal mode")};
   }
 }
