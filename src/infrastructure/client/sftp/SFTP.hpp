@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -21,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -592,6 +594,8 @@ class InterruptWakeBridge {
 public:
   enum class Backend { None, SocketPair, Pipe, EventFd };
 
+  ~InterruptWakeBridge() { Close(); }
+
   bool Ensure() {
     std::lock_guard<std::mutex> lock(mtx_);
     if (read_sock_ != INVALID_SOCKET && write_sock_ != INVALID_SOCKET) {
@@ -859,6 +863,23 @@ inline std::string HostKeyTypeToProtocol(int type) {
   }
 }
 
+inline std::string BuildPrivateKeyStateInfo_(const std::string &key_path) {
+  const std::string key_basename = AMPath::basename(key_path);
+  return AMStr::fmt("authorize with private_key: {}",
+                    key_basename.empty() ? key_path : key_basename);
+}
+
+inline int
+ResolveTimeoutMs_(const AMDomain::client::ClientControlComponent &control) {
+  const auto remain_opt = control.RemainingTimeMs();
+  if (!remain_opt.has_value()) {
+    return -1;
+  }
+  return static_cast<int>(std::min<unsigned int>(
+      *remain_opt,
+      static_cast<unsigned int>((std::numeric_limits<int>::max)())));
+}
+
 class SafeChannel {
 public:
   LIBSSH2_CHANNEL *channel = nullptr;
@@ -1119,6 +1140,31 @@ protected:
   detail::InterruptWakeBridge interrupt_wake_;
   SOCKET sock = INVALID_SOCKET;
 
+  struct KeepaliveRuntime final {
+    std::mutex lifecycle_mtx = {};
+    std::thread worker = {};
+    std::mutex wait_mtx = {};
+    std::condition_variable cv = {};
+    std::atomic<bool> shutdown{false};
+    std::atomic<uint64_t> wake_seq{0};
+    std::atomic<int> interval_s{60};
+    std::atomic<int> timeout_ms{5000};
+    AMAtomic<std::chrono::steady_clock::time_point> last_io_steady{
+        std::chrono::steady_clock::time_point{}};
+    void ShutDown() {
+      {
+        std::lock_guard<std::mutex> lock(lifecycle_mtx);
+        shutdown.store(true, std::memory_order_release);
+      }
+      cv.notify_all();
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+  };
+
+  KeepaliveRuntime keepalive_ = {};
+
   void trace(TraceLevel level, EC error_code, const std::string &target = "",
              const std::string &action = "",
              const std::string &msg = "") const {
@@ -1144,13 +1190,6 @@ protected:
     }
     connect_state(normalized, target);
     trace(TraceLevel::Info, EC::Success, target, "connect.state", normalized);
-  }
-
-  [[nodiscard]] static std::string
-  BuildPrivateKeyStateInfo_(const std::string &key_path) {
-    const std::string key_basename = AMPath::basename(key_path);
-    return AMStr::fmt("authorize with private_key: {}",
-                      key_basename.empty() ? key_path : key_basename);
   }
 
   void SetState(const ECMData<AMDomain::filesystem::CheckResult> &state) {
@@ -1179,6 +1218,104 @@ protected:
     return state_atomic_.lock().load();
   }
 
+  void TouchLastIO_() {
+    auto last_io = keepalive_.last_io_steady.lock();
+    last_io.store(AMTime::SteadyNow());
+  }
+
+  void NotifyKeepaliveWakeup_() {
+    (void)keepalive_.wake_seq.fetch_add(1, std::memory_order_acq_rel);
+    keepalive_.cv.notify_all();
+  }
+
+  void EnsureKeepaliveWorkerStarted_() {
+    std::lock_guard<std::mutex> lock(keepalive_.lifecycle_mtx);
+    if (keepalive_.worker.joinable()) {
+      return;
+    }
+    keepalive_.shutdown.store(false, std::memory_order_release);
+    keepalive_.worker = std::thread(&SFTPSessionBase::KeepaliveLoop_, this);
+  }
+
+  [[nodiscard]] bool ShouldRunKeepalive_() const {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    const auto state = state_atomic_.lock().load();
+    if (state.data.status != AMDomain::client::ClientStatus::OK || !state.rcm) {
+      return false;
+    }
+    return session != nullptr && sftp != nullptr && sock != INVALID_SOCKET;
+  }
+
+  ECM KeepaliveTick_() {
+    const int timeout_ms =
+        std::max(1, keepalive_.timeout_ms.load(std::memory_order_acquire));
+    const AMDomain::client::ClientControlComponent keepalive_control(
+        nullptr, timeout_ms);
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    const auto state = state_atomic_.lock().load();
+    if (state.data.status != AMDomain::client::ClientStatus::OK || !state.rcm ||
+        session == nullptr || sftp == nullptr || sock == INVALID_SOCKET) {
+      return OK;
+    }
+
+    int seconds_to_next = 0;
+    auto keepalive_res = nb_call(
+        keepalive_control,
+        [&]() { return libssh2_keepalive_send(session, &seconds_to_next); },
+        timeout_ms);
+    ECM rcm =
+        ErrorRecord(keepalive_res, TraceLevel::Error,
+                    config_part_->GetNickname(), "libssh2_keepalive_send");
+    if (!rcm) {
+      SetState({rcm, AMDomain::client::ClientStatus::ConnectionBroken});
+      trace(rcm);
+      return rcm;
+    }
+    return OK;
+  }
+
+  void KeepaliveLoop_() {
+    while (true) {
+      if (keepalive_.shutdown.load(std::memory_order_acquire)) {
+        return;
+      }
+
+      const int interval_s =
+          std::max(1, keepalive_.interval_s.load(std::memory_order_acquire));
+      const uint64_t wake_seq =
+          keepalive_.wake_seq.load(std::memory_order_acquire);
+      std::unique_lock<std::mutex> wait_lock(keepalive_.wait_mtx);
+      (void)keepalive_.cv.wait_for(
+          wait_lock, std::chrono::seconds(interval_s), [this, wake_seq]() {
+            if (keepalive_.shutdown.load(std::memory_order_acquire)) {
+              return true;
+            }
+            return keepalive_.wake_seq.load(std::memory_order_acquire) !=
+                   wake_seq;
+          });
+      wait_lock.unlock();
+
+      if (keepalive_.shutdown.load(std::memory_order_acquire)) {
+        return;
+      }
+      if (!ShouldRunKeepalive_()) {
+        continue;
+      }
+
+      const auto now = AMTime::SteadyNow();
+      const auto last_io = keepalive_.last_io_steady.lock().load();
+      if (last_io != std::chrono::steady_clock::time_point{}) {
+        const double idle_ms = AMTime::IntervalMS(last_io, now);
+        if (idle_ms >= 0.0 &&
+            idle_ms < static_cast<double>(interval_s) * 1000.0) {
+          continue;
+        }
+      }
+
+      (void)KeepaliveTick_();
+    }
+  }
+
   [[nodiscard]] OS_TYPE GetCachedOSType_() const {
     return config_part_ ? config_part_->GetOSType() : OS_TYPE::Uncertain;
   }
@@ -1198,18 +1335,6 @@ protected:
       config_part_->SetHomeDir(home_dir);
     }
   }
-
-  bool EnsureInterruptWakeSocketPair_() { return interrupt_wake_.Ensure(); }
-
-  [[nodiscard]] SOCKET GetInterruptWakeReadSocket_() const {
-    return interrupt_wake_.ReadSocket();
-  }
-
-  void CloseInterruptWakeSocketPair_() { interrupt_wake_.Close(); }
-
-  void SignalInterruptWakeSocket_() { interrupt_wake_.Signal(); }
-
-  void DrainInterruptWakeSocket_() { interrupt_wake_.Drain(); }
 
   ECM ErrorRecord(int code, TraceLevel level, const std::string &taregt,
                   const std::string &action) {
@@ -1333,6 +1458,9 @@ private:
           "Shared private keys not provided, loading default private keys from "
           "~/.ssh");
     auto [error, listd] = AMPath::listdir(AMPath::abspath("~/.ssh"));
+    if (!error) {
+      return;
+    };
     for (auto &info : listd) {
       if (info.type == PathType::FILE) {
         if (detail::IsValidKey(info.path)) {
@@ -1342,12 +1470,12 @@ private:
     }
   }
 
-  virtual void OnBeforeDisconnect_() {}
+  virtual void OnBeforeDisconnect_() {};
 
   void Disconnect() {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     OnBeforeDisconnect_();
-    CloseInterruptWakeSocketPair_();
+    interrupt_wake_.Close();
     if (sftp) {
       libssh2_sftp_shutdown(sftp);
       sftp = nullptr;
@@ -1375,18 +1503,17 @@ private:
 public:
   LIBSSH2_SESSION *session = nullptr;
   LIBSSH2_SFTP *sftp = nullptr;
-  ~SFTPSessionBase() override { Disconnect(); }
+
+  ~SFTPSessionBase() override {
+    keepalive_.ShutDown();
+    Disconnect();
+  }
 
   /**
    * @brief Expose the transfer serialization mutex for runtime transfer
    * execution helpers.
    */
   std::recursive_mutex &TransferMutex() { return mtx; }
-
-  /**
-   * @brief Expose the transfer serialization mutex for const runtime helpers.
-   */
-  const std::recursive_mutex &TransferMutex() const { return mtx; }
 
   SFTPSessionBase(AMDomain::client::IClientConfigPort *config_port,
                   AMDomain::client::IClientControlToken *control_port,
@@ -1405,7 +1532,7 @@ public:
           "SFTPSessionBase requires non-null task control port");
     }
     RegisterTraceCallback(std::move(trace_cb));
-    RegisterAuthCallback(this->auth_cb);
+    interrupt_wake_.Ensure();
     RegisterKnownHostCallback(std::move(known_host_cb));
     if (this->auth_cb) {
       this->password_auth_cb = true;
@@ -1415,18 +1542,9 @@ public:
     }
   }
 
-  ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {
-    if (buffer_size <= 0) {
-      return request_atomic_.lock()->buffer_size;
-    }
-    auto req = request_atomic_.lock();
-    req->buffer_size = buffer_size;
-    return req->buffer_size;
-  }
-
   template <typename Func>
-  auto nb_call(detail::DeathClockProtocol &death_clock, Func &&func)
-      -> NBResult<decltype(func())> {
+  auto nb_call(detail::DeathClockProtocol &death_clock, Func &&func,
+               bool touch_io = true) -> NBResult<decltype(func())> {
     using RetType = decltype(func());
     if (auto stop = death_clock.Check(); stop.has_value()) {
       MarkDeathClockStateMachineBroken_(*stop);
@@ -1453,11 +1571,14 @@ public:
       }
 
       if (!should_retry) {
+        if (touch_io) {
+          TouchLastIO_();
+        }
         return {rc, WaitResult::Ready};
       }
 
-      WaitResult wr = wait_for_socket_with_protocol_(
-          detail::SocketWaitType::Auto, death_clock);
+      WaitResult wr =
+          wait_for_socket(detail::SocketWaitType::Auto, death_clock);
       if (wr != WaitResult::Ready) {
         return {rc, wr};
       }
@@ -1467,10 +1588,10 @@ public:
   template <typename Func>
   auto nb_call(
       const AMDomain::client::ClientControlComponent &control, Func &&func,
-      int death_clock_timeout_ms = AMDomain::client::kFilesystemOpGraceWaitMs)
-      -> NBResult<decltype(func())> {
+      int death_clock_timeout_ms = AMDomain::client::kFilesystemOpGraceWaitMs,
+      bool touch_io = true) -> NBResult<decltype(func())> {
     detail::DeathClockProtocol death_clock(control, death_clock_timeout_ms);
-    return nb_call(death_clock, std::forward<Func>(func));
+    return nb_call(death_clock, std::forward<Func>(func), touch_io);
   }
 
   inline WaitResult wait_for_socket(
@@ -1485,12 +1606,11 @@ public:
       MarkDeathClockStateMachineBroken_(*stop);
       return *stop;
     }
-    return wait_for_socket_with_protocol_(wait_dir, death_clock);
+    return wait_for_socket(wait_dir, death_clock);
   }
 
-  inline WaitResult
-  wait_for_socket_with_protocol_(detail::SocketWaitType wait_dir,
-                                 detail::DeathClockProtocol &death_clock) {
+  inline WaitResult wait_for_socket(detail::SocketWaitType wait_dir,
+                                    detail::DeathClockProtocol &death_clock) {
     if (!session || sock == INVALID_SOCKET) {
       return WaitResult::Error;
     }
@@ -1532,16 +1652,16 @@ public:
 
     size_t wake_token = 0;
     SOCKET wake_read_sock = INVALID_SOCKET;
-    if (EnsureInterruptWakeSocketPair_()) {
-      DrainInterruptWakeSocket_();
-      wake_read_sock = GetInterruptWakeReadSocket_();
+    if (interrupt_wake_.Ensure()) {
+      interrupt_wake_.Drain();
+      wake_read_sock = interrupt_wake_.ReadSocket();
     }
 
     death_clock.Refresh();
     if (!death_clock.IsActivated() && wake_read_sock != INVALID_SOCKET &&
         interrupt_flag) {
       wake_token = interrupt_flag->RegisterWakeup(
-          [this]() { SignalInterruptWakeSocket_(); });
+          [this]() { interrupt_wake_.Signal(); });
     }
 
     auto cleanup_wakeup = [&]() {
@@ -1687,7 +1807,7 @@ public:
 
     if (wake_read_sock != INVALID_SOCKET &&
         FD_ISSET(wake_read_sock, &selected_readfds)) {
-      DrainInterruptWakeSocket_();
+      interrupt_wake_.Drain();
       if (auto stop = death_clock.Check(); stop.has_value()) {
         MarkDeathClockStateMachineBroken_(*stop);
         return *stop;
@@ -1711,37 +1831,9 @@ public:
     this->private_keys = keys;
   }
 
-  [[nodiscard]] static int
-  ResolveTimeoutMs_(const AMDomain::client::ClientControlComponent &control) {
-    const auto remain_opt = control.RemainingTimeMs();
-    if (!remain_opt.has_value()) {
-      return -1;
-    }
-    return static_cast<int>(std::min<unsigned int>(
-        *remain_opt,
-        static_cast<unsigned int>((std::numeric_limits<int>::max)())));
-  }
-
-  ECM Check(int timeout_ms = -1, int64_t start_time = -1,
-            amf interrupt_flag = nullptr) {
-    auto rcm = stat(AMFSI::StatArgs{".", false},
-                    AMDomain::client::ClientControlComponent(
-                        std::move(interrupt_flag), timeout_ms))
-                   .rcm;
-    AMDomain::client::ClientStatus status =
-        rcm.code == EC::Success
-            ? AMDomain::client::ClientStatus::OK
-            : (rcm.code == EC::NotInitialized
-                   ? AMDomain::client::ClientStatus::NotInitialized
-                   : (rcm.code == EC::NoConnection
-                          ? AMDomain::client::ClientStatus::NoConnection
-                          : AMDomain::client::ClientStatus::ConnectionBroken));
-    SetState({rcm, status});
-    return rcm;
-  }
-
   ECM BaseConnect(bool force,
                   const AMDomain::client::ClientControlComponent &control) {
+    EnsureKeepaliveWorkerStarted_();
     if (control.IsTimeout()) {
       return {EC::OperationTimeout, __func__, "", "Operation timed out"};
     }
@@ -1812,6 +1904,9 @@ public:
               "Libssh2 Session initialization failed"};
     }
     libssh2_session_set_blocking(session, 0);
+    libssh2_keepalive_config(
+        session, 0,
+        std::max(1, keepalive_.interval_s.load(std::memory_order_acquire)));
 
     if (request.compression) {
       libssh2_session_flag(session, LIBSSH2_FLAG_COMPRESS, 1);
@@ -1892,7 +1987,7 @@ public:
     password_auth = (strstr(auth_list, "password") != nullptr);
 
     if (!request.keyfile.empty()) {
-      trace_connect_state(BuildPrivateKeyStateInfo_(request.keyfile),
+      trace_connect_state(detail::BuildPrivateKeyStateInfo_(request.keyfile),
                           request.username);
       if (control.IsInterrupted()) {
         return {EC::Terminate, __func__, "", "Authentication interrupted"};
@@ -1962,7 +2057,7 @@ public:
         if (private_key == request.keyfile) {
           continue;
         }
-        trace_connect_state(BuildPrivateKeyStateInfo_(private_key),
+        trace_connect_state(detail::BuildPrivateKeyStateInfo_(private_key),
                             request.username);
         auto auth_res = nb_call(death_clock, [&]() {
           return libssh2_userauth_publickey_fromfile(
@@ -2063,14 +2158,17 @@ public:
 
     SetState({OK, AMDomain::client::ClientStatus::OK});
     libssh2_session_set_blocking(session, 0);
+    TouchLastIO_();
+    NotifyKeepaliveWakeup_();
     return OK;
   }
 
   EC GetLastEC(int *code = nullptr) {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!session) {
       return EC::NoSession;
     }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
+
     int ori_code = libssh2_session_last_errno(session);
     if (code) {
       *code = ori_code;
@@ -2087,10 +2185,10 @@ public:
   }
 
   std::string GetLastErrorMsg() {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!session) {
       return "Session not initialized";
     }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
     int ori_code = libssh2_session_last_errno(session);
     if (ori_code != LIBSSH2_ERROR_SFTP_PROTOCOL) {
       char *errmsg = nullptr;
@@ -2624,31 +2722,6 @@ public:
     return {{std::move(names)}, std::move(rcm)};
   }
 
-  /*
-   * Deprecated orchestration APIs (migration reference only):
-   * AMFSI::GetsizeResult
-   * getsize(const AMFSI::GetsizeArgs &args,
-   *         const AMDomain::client::ClientControlComponent &control);
-   * AMFSI::FindResult
-   * find(const AMFSI::FindArgs &args,
-   *      const AMDomain::client::ClientControlComponent &control);
-   * ECM mkdirs(const AMFSI::MkdirsArgs &args,
-   *            const AMDomain::client::ClientControlComponent &control);
-   * AMFSI::DeleteResult
-   * remove(const AMFSI::RemoveArgs &args,
-   *        const AMDomain::client::ClientControlComponent &control);
-   * ECM saferm(const AMFSI::SafermArgs &args,
-   *            const AMDomain::client::ClientControlComponent &control);
-   * ECM copy(const AMFSI::CopyArgs &args,
-   *          const AMDomain::client::ClientControlComponent &control);
-   * AMFSI::IWalkResult
-   * iwalk(const AMFSI::IWalkArgs &args,
-   *       const AMDomain::client::ClientControlComponent &control);
-   * AMFSI::WalkResult
-   * walk(const AMFSI::WalkArgs &args,
-   *      const AMDomain::client::ClientControlComponent &control);
-   */
-
   ECMData<AMFSI::MkdirResult>
   mkdir(const AMFSI::MkdirArgs &args,
         const AMDomain::client::ClientControlComponent &control) override {
@@ -2840,7 +2913,7 @@ public:
       const std::string &cmd,
       const AMDomain::client::ClientControlComponent &control,
       const AMFSI::ConductCmdArgs::OutputProcessor &processor = {}) {
-    const int max_time_ms = ResolveTimeoutMs_(control);
+    const int max_time_ms = detail::ResolveTimeoutMs_(control);
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (control.IsInterrupted()) {
       return {ECM{EC::Terminate, "command.exec", cmd,
@@ -3084,10 +3157,5 @@ public:
       return "C:\\Users\\" + request.username;
     }
   }
-
-  /*
-   * Deprecated legacy-signature APIs were removed from AMSFTPIOCore to align
-   * with the Args+ControlComponent IOCore pattern used by AMFTPIOCore.
-   */
 };
 } // namespace AMInfra::client::SFTP
