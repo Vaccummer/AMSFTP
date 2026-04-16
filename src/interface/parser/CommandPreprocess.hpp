@@ -35,7 +35,8 @@ public:
    *
    * Quote wrappers are removed, and backtick escapes are restored for every
    * escaped character except `$` (`` `$`` is preserved for post-parse var
-   * substitution).
+   * substitution). Quoted literals that start with '-' are preserved as
+   * positionals by inserting `--` before them during preprocess.
    */
   std::vector<std::string> SplitCliTokens(const std::string &input) const;
 

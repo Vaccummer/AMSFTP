@@ -4,6 +4,7 @@
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/cli/CLIBind.hpp"
+#include "interface/cli/CliCommandValidation.hpp"
 #include "interface/cli/ParseErrorFormatter.hpp"
 #include "interface/completion/CompletionRuntimeAdapter.hpp"
 #include "interface/completion/Engine.hpp"
@@ -251,6 +252,7 @@ void RegisterPromptGetters_(AMInterface::prompt::CLIPromtRender &core_prompt,
                                                         &running_count);
     return std::to_string(running_count);
   });
+  core_prompt.RegisterGetter("task_paused", []() { return std::string("0"); });
 }
 
 class ScopedInteractiveEventCallbacks_ : public NonCopyableNonMovable {
@@ -367,6 +369,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   AMInterface::prompt::CLIPromtRender core_prompt(
       managers.interfaces.style_service.Get());
   RegisterPromptGetters_(core_prompt, managers);
+  std::string last_core_prompt_parse_error = "";
+  std::string last_core_prompt_render_error = "";
 
   AMInterface::prompt::CLIPromtRender::RenderArg prompt_arg = {};
 
@@ -403,6 +407,32 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 
     // managers.interfaces.prompt_io_manager->Print("");
     const std::string prompt_text = core_prompt.Render(prompt_arg);
+    if (!core_prompt.State().parse_ok) {
+      std::string err = "failed to parse core prompt template";
+      if (!core_prompt.State().diagnostics.items.empty()) {
+        err = core_prompt.State().diagnostics.items.front().message;
+      }
+      if (err != last_core_prompt_parse_error) {
+        managers.interfaces.prompt_io_manager->FmtPrint(
+            "❌ CorePrompt parse failed: {}", err);
+        last_core_prompt_parse_error = err;
+      }
+    } else {
+      last_core_prompt_parse_error.clear();
+      if (!core_prompt.State().render_ok) {
+        std::string err = core_prompt.State().render_error;
+        if (err.empty()) {
+          err = "failed to render core prompt template";
+        }
+        if (err != last_core_prompt_render_error) {
+          managers.interfaces.prompt_io_manager->FmtPrint(
+              "❌ CorePrompt render failed: {}", err);
+          last_core_prompt_render_error = err;
+        }
+      } else {
+        last_core_prompt_render_error.clear();
+      }
+    }
 
     std::optional<std::string> line_opt = std::nullopt;
     if (auto profile = managers.interfaces.prompt_profile_history_manager
@@ -443,6 +473,17 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     }
     std::vector<std::string> cli_args = std::move(prep.data);
     if (cli_args.empty()) {
+      continue;
+    }
+    if (const auto invalid_command_error = BuildUnknownCommandError(
+            cli_args, command_tree, managers.interfaces.style_service.Get());
+        invalid_command_error.has_value()) {
+      managers.interfaces.prompt_io_manager->Print(*invalid_command_error);
+      ECM parse_rcm = {EC::InvalidArg, "", "", *invalid_command_error};
+      store_exit_code(static_cast<int>(parse_rcm.code));
+      prompt_arg.result = parse_rcm;
+      prompt_arg.elapsed_time_ms = std::max<int64_t>(
+          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
       continue;
     }
     // CLI11 consumes args via pop_back, so reverse to preserve order.

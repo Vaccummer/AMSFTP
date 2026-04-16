@@ -27,6 +27,7 @@ public:
   void SetCommandTree(const CommandNode *command_tree) {
     command_tree_ = command_tree;
   }
+  [[nodiscard]] const CommandNode *CommandTree() const { return command_tree_; }
   void SetRuntime(std::shared_ptr<ITokenAnalyzerRuntime> runtime) {
     runtime_ = std::move(runtime);
   }
