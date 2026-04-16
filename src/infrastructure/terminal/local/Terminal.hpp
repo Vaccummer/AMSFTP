@@ -8,12 +8,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -113,7 +115,7 @@ private:
                                   size_t max_bytes);
   static bool
   WaitReadableWindows_(ChannelRuntime_ *ctx,
-                       const AMDomain::client::ClientControlComponent &control,
+                       const AMDomain::client::ControlComponent &control,
                        bool *timed_out);
   static ECM OpenOneChannelWindows_(ChannelRuntime_ *ctx,
                                     const AMT::ChannelOpenArgs &open_args);
@@ -123,7 +125,7 @@ private:
                                 size_t max_bytes);
   static bool
   WaitReadablePosix_(ChannelRuntime_ *ctx,
-                     const AMDomain::client::ClientControlComponent &control,
+                     const AMDomain::client::ControlComponent &control,
                      bool *timed_out);
   static ECM OpenOneChannelPosix_(ChannelRuntime_ *ctx,
                                   const AMT::ChannelOpenArgs &open_args);
@@ -145,7 +147,7 @@ private:
   ResolveChannelForOp_(const std::optional<std::string> &requested_name,
                        const char *action_name);
   [[nodiscard]] ECM
-  ValidateSessionReady_(const AMDomain::client::ClientControlComponent &control,
+  ValidateSessionReady_(const AMDomain::client::ControlComponent &control,
                         const char *action) const;
   void CloseChannelRuntime_(ChannelRuntime_ *ctx, bool force);
 
@@ -176,50 +178,50 @@ public:
 
   ECMData<AMT::ChannelOpenResult>
   OpenChannel(const AMT::ChannelOpenArgs &open_args,
-              const AMDomain::client::ClientControlComponent &control) override;
+              const AMDomain::client::ControlComponent &control) override;
 
   ECMData<AMT::ChannelActiveResult> ActiveChannel(
       const AMT::ChannelActiveArgs &active_args,
-      const AMDomain::client::ClientControlComponent &control) override;
+      const AMDomain::client::ControlComponent &control) override;
 
   ECMData<AMT::ChannelPortHandle> GetChannelPort(
       const std::optional<std::string> &channel_name,
-      const AMDomain::client::ClientControlComponent &control) override;
+      const AMDomain::client::ControlComponent &control) override;
 
   ECMData<AMT::ChannelReadResult> ReadChannel(
       const AMT::ChannelReadArgs &read_args,
-      const AMDomain::client::ClientControlComponent &control,
+      const AMDomain::client::ControlComponent &control,
       const std::optional<std::string> &bound_channel_name = std::nullopt);
 
   ECMData<AMT::ChannelWriteResult> WriteChannel(
       const AMT::ChannelWriteArgs &write_args,
-      const AMDomain::client::ClientControlComponent &control,
+      const AMDomain::client::ControlComponent &control,
       const std::optional<std::string> &bound_channel_name = std::nullopt);
 
   ECMData<AMT::ChannelResizeResult> ResizeChannel(
       const AMT::ChannelResizeArgs &resize_args,
-      const AMDomain::client::ClientControlComponent &control,
+      const AMDomain::client::ControlComponent &control,
       const std::optional<std::string> &bound_channel_name = std::nullopt);
 
   ECMData<AMT::ChannelCloseResult> CloseChannel(
       const AMT::ChannelCloseArgs &close_args,
-      const AMDomain::client::ClientControlComponent &control) override;
+      const AMDomain::client::ControlComponent &control) override;
 
   ECMData<AMT::ChannelRenameResult> RenameChannel(
       const AMT::ChannelRenameArgs &rename_args,
-      const AMDomain::client::ClientControlComponent &control) override;
+      const AMDomain::client::ControlComponent &control) override;
 
   ECMData<AMT::ChannelListResult> ListChannels(
       const AMT::ChannelListArgs &list_args,
-      const AMDomain::client::ClientControlComponent &control) override;
+      const AMDomain::client::ControlComponent &control) override;
 
   ECMData<AMT::CheckSessionResult> CheckSession(
       const AMT::CheckSessionArgs &check_args,
-      const AMDomain::client::ClientControlComponent &control) override;
+      const AMDomain::client::ControlComponent &control) override;
 
   ECMData<AMT::ChannelCheckResult> CheckChannel(
       const AMT::ChannelCheckArgs &check_args,
-      const AMDomain::client::ClientControlComponent &control) override;
+      const AMDomain::client::ControlComponent &control) override;
 
   [[nodiscard]] AMDomain::filesystem::CheckResult
   GetSessionState() const override;
@@ -237,7 +239,7 @@ public:
 
 class LocalChannelPort final : public AMT::IChannelPort {
 public:
-  using ClientControlComponent = AMDomain::client::ClientControlComponent;
+  using ControlComponent = AMDomain::client::ControlComponent;
 
   LocalChannelPort(std::string terminal_key, std::string channel_name,
                    LocalTerminalPort *owner)
@@ -245,7 +247,7 @@ public:
         channel_name_(std::move(channel_name)), owner_(owner),
         cache_(channel_name_) {}
 
-  ~LocalChannelPort() override = default;
+  ~LocalChannelPort() override;
 
   [[nodiscard]] std::string GetTerminalKey() const override {
     return terminal_key_;
@@ -266,7 +268,7 @@ public:
   }
 
   ECM Init(const AMT::ChannelInitArgs &init_args,
-           const ClientControlComponent &control = {}) override {
+           const ControlComponent &control = {}) override {
     (void)init_args;
     (void)control;
     return OK;
@@ -292,7 +294,7 @@ public:
 
   [[nodiscard]] ECMData<AMT::ChannelReadWrappedResult>
   ReadWrapped(const AMT::ChannelReadArgs &read_args,
-              const ClientControlComponent &control = {}) override {
+              const ControlComponent &control = {}) override {
     if (owner_ == nullptr) {
       return {AMT::ChannelReadWrappedResult{},
               Err(EC::InvalidHandle, "terminal.channel.read", channel_name_,
@@ -305,7 +307,7 @@ public:
 
   [[nodiscard]] ECMData<AMT::ChannelWriteResult>
   WriteRaw(const AMT::ChannelWriteArgs &write_args,
-           const ClientControlComponent &control = {}) override {
+           const ControlComponent &control = {}) override {
     if (owner_ == nullptr) {
       return {AMT::ChannelWriteResult{},
               Err(EC::InvalidHandle, "terminal.channel.write", channel_name_,
@@ -317,7 +319,7 @@ public:
 
   [[nodiscard]] ECMData<AMT::ChannelResizeResult>
   Resize(const AMT::ChannelResizeArgs &resize_args,
-         const ClientControlComponent &control = {}) override {
+         const ControlComponent &control = {}) override {
     if (owner_ == nullptr) {
       return {AMT::ChannelResizeResult{},
               Err(EC::InvalidHandle, "terminal.channel.resize", channel_name_,
@@ -328,7 +330,10 @@ public:
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCloseResult>
-  Close(bool force, const ClientControlComponent &control = {}) override {
+  Close(bool force, const ControlComponent &control = {}) override {
+    RequestStop_();
+    JoinLoop_();
+
     if (owner_ == nullptr) {
       return {AMT::ChannelCloseResult{},
               Err(EC::InvalidHandle, "terminal.channel.close", channel_name_,
@@ -340,7 +345,20 @@ public:
     } else {
       cache_.MarkChannelClosed(OK);
     }
-    closed_ = true;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      closed_ = true;
+      foreground_bound_ = false;
+      detach_requested_ = false;
+      loop_running_ = false;
+      loop_started_ = false;
+      key_event_handle_ = -1;
+      key_cache_ = nullptr;
+      send_buffer_.clear();
+      key_ctrl_state_.store(false, std::memory_order_release);
+      last_error_ = close_result.rcm;
+      SignalLoopStateChanged_();
+    }
     return close_result;
   }
 
@@ -376,60 +394,399 @@ public:
   ECM EnsureLoopStarted(
       const AMT::ChannelLoopStartArgs &start_args = {}) override {
     (void)start_args;
-    return Err(EC::OperationUnsupported, "terminal.channel.loop.start",
-               channel_name_,
-               "Realtime loop is unsupported for local channels");
+    if (owner_ == nullptr) {
+      const ECM rcm = Err(EC::InvalidHandle, "terminal.channel.loop.start",
+                          channel_name_, "Local channel owner is null");
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      last_error_ = rcm;
+      return rcm;
+    }
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      if (closed_) {
+        last_error_ = Err(EC::NoConnection, "terminal.channel.loop.start",
+                          channel_name_, "Channel is closed");
+        return last_error_;
+      }
+
+#ifdef _WIN32
+      if (state_wait_handle_ == nullptr) {
+        state_wait_handle_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (state_wait_handle_ == nullptr) {
+          last_error_ = Err(EC::CommonFailure, "terminal.channel.loop.start",
+                            channel_name_,
+                            "Failed to create local loop state wait handle");
+          return last_error_;
+        }
+      }
+#endif
+
+      if (loop_started_ && loop_thread_.joinable()) {
+        loop_running_ = true;
+        last_error_ = OK;
+        return OK;
+      }
+
+      stop_requested_.store(false, std::memory_order_release);
+      loop_started_ = true;
+      loop_running_ = true;
+      detach_requested_ = false;
+      last_error_ = OK;
+    }
+
+    try {
+      loop_thread_ = std::thread([this]() { RunLoop_(); });
+    } catch (...) {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      loop_started_ = false;
+      loop_running_ = false;
+      last_error_ = Err(EC::CommonFailure, "terminal.channel.loop.start",
+                        channel_name_, "Failed to create local loop thread");
+      return last_error_;
+    }
+
+    SignalLoopStateChanged_();
+    return OK;
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCacheReplayResult>
   BindForeground(const AMT::ChannelForegroundBindArgs &bind_args) override {
-    if (!bind_args.processor) {
-      return {AMT::ChannelCacheReplayResult{},
-              Err(EC::InvalidArg, "terminal.channel.bind", channel_name_,
-                  "Foreground output processor is empty")};
+    if (!bind_args.processor || bind_args.key_cache == nullptr) {
+      const ECM rcm = Err(EC::InvalidArg, "terminal.channel.bind",
+                          channel_name_,
+                          "Foreground binding arguments are invalid");
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      last_error_ = rcm;
+      return {AMT::ChannelCacheReplayResult{}, rcm};
     }
+
+    const ECM loop_rcm =
+        EnsureLoopStarted({bind_args.control, bind_args.write_kick_timeout_ms});
+    if (!(loop_rcm)) {
+      return {AMT::ChannelCacheReplayResult{}, loop_rcm};
+    }
+
     auto result = AttachConsumer(bind_args.processor);
-    if (result.rcm) {
-      foreground_bound_ = true;
-      detach_requested_ = false;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      if (result.rcm) {
+        foreground_bound_ = true;
+        detach_requested_ = false;
+        key_event_handle_ = bind_args.key_event_handle;
+        key_cache_ = bind_args.key_cache;
+        key_ctrl_state_.store(false, std::memory_order_release);
+        last_error_ = OK;
+      } else {
+        last_error_ = result.rcm;
+      }
+      SignalLoopStateChanged_();
     }
     return result;
   }
 
   ECM UnbindForeground() override {
-    foreground_bound_ = false;
-    detach_requested_ = false;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      foreground_bound_ = false;
+      detach_requested_ = false;
+      key_event_handle_ = -1;
+      key_cache_ = nullptr;
+      key_ctrl_state_.store(false, std::memory_order_release);
+      SignalLoopStateChanged_();
+    }
+    RequestStop_();
+    JoinLoop_();
     return DetachConsumer();
   }
 
   ECM RequestForegroundDetach() override {
-    foreground_bound_ = false;
-    detach_requested_ = true;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      foreground_bound_ = false;
+      detach_requested_ = true;
+      key_event_handle_ = -1;
+      key_cache_ = nullptr;
+      key_ctrl_state_.store(false, std::memory_order_release);
+      SignalLoopStateChanged_();
+    }
+    RequestStop_();
+    JoinLoop_();
     return DetachConsumer();
   }
 
   [[nodiscard]] AMT::ChannelLoopState GetLoopState() const override {
     AMT::ChannelLoopState state = {};
     AMT::ChannelPortState const port_state = GetState();
-    state.loop_running = false;
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    state.closed = closed_ || port_state.closed;
+    state.loop_running = loop_running_ && !state.closed;
     state.foreground_bound = foreground_bound_;
-    state.closed = port_state.closed;
     state.detach_requested = detach_requested_;
-    state.state_wait_handle = -1;
-    state.last_error = port_state.last_error;
+#ifdef _WIN32
+    state.state_wait_handle = state_wait_handle_ != nullptr
+                                  ? reinterpret_cast<std::intptr_t>(
+                                        state_wait_handle_)
+                                  : static_cast<std::intptr_t>(-1);
+#else
+    state.state_wait_handle = static_cast<std::intptr_t>(-1);
+#endif
+    state.last_error = last_error_;
+    if (!(state.last_error) && port_state.last_error) {
+      state.last_error = port_state.last_error;
+    }
     state.has_error = !(state.last_error);
     return state;
   }
 
 private:
+  [[nodiscard]] static bool IsConnectionBrokenCode_(ErrorCode code) {
+    return code == EC::NoConnection || code == EC::ConnectionLost ||
+           code == EC::NoSession || code == EC::ClientNotFound;
+  }
+
+  void RequestStop_() {
+    stop_requested_.store(true, std::memory_order_release);
+    SignalLoopStateChanged_();
+  }
+
+  void JoinLoop_() {
+    if (!loop_thread_.joinable()) {
+      return;
+    }
+    if (std::this_thread::get_id() == loop_thread_id_) {
+      return;
+    }
+    loop_thread_.join();
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    loop_started_ = false;
+    loop_running_ = false;
+    loop_thread_id_ = std::thread::id{};
+    SignalLoopStateChanged_();
+  }
+
+  bool DrainKeyInput_() {
+    AMAtomic<std::vector<char>> *key_cache = nullptr;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      if (!foreground_bound_ || key_cache_ == nullptr || closed_) {
+        return false;
+      }
+      key_cache = key_cache_;
+    }
+
+    std::vector<char> keys = {};
+    {
+      auto guard = key_cache->lock();
+      if (guard->empty()) {
+        return false;
+      }
+      keys.swap(*guard);
+    }
+
+    bool changed = false;
+    bool detach = false;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      for (char const ch : keys) {
+        if (!key_ctrl_state_.load(std::memory_order_acquire)) {
+          if (ch == '\x1d') {
+            key_ctrl_state_.store(true, std::memory_order_release);
+            continue;
+          }
+          send_buffer_.push_back(ch);
+          changed = true;
+          continue;
+        }
+
+        if (ch == 'q' || ch == 'Q') {
+          detach = true;
+          key_ctrl_state_.store(false, std::memory_order_release);
+          continue;
+        }
+
+        key_ctrl_state_.store(false, std::memory_order_release);
+        send_buffer_.push_back(ch);
+        changed = true;
+      }
+    }
+
+    if (detach) {
+      (void)RequestForegroundDetach();
+      return true;
+    }
+    return changed;
+  }
+
+  bool FlushSend_() {
+    std::string chunk = {};
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      if (send_buffer_.empty() || !foreground_bound_ || closed_) {
+        return false;
+      }
+      const size_t n = std::min<size_t>(send_buffer_.size(), 32U * 1024U);
+      chunk.assign(send_buffer_.data(), n);
+    }
+
+    auto write_result = WriteRaw({chunk}, {});
+    if (!(write_result.rcm)) {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      last_error_ = write_result.rcm;
+      if (IsConnectionBrokenCode_(write_result.rcm.code)) {
+        closed_ = true;
+      }
+      if (closed_) {
+        stop_requested_.store(true, std::memory_order_release);
+      }
+      SignalLoopStateChanged_();
+      return false;
+    }
+
+    const size_t consumed =
+        std::min(chunk.size(), static_cast<size_t>(write_result.data.bytes_written));
+    if (consumed == 0U) {
+      return false;
+    }
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      if (consumed <= send_buffer_.size()) {
+        send_buffer_.erase(0, consumed);
+      } else {
+        send_buffer_.clear();
+      }
+    }
+    return true;
+  }
+
+  void RunLoop_() {
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      loop_thread_id_ = std::this_thread::get_id();
+      loop_running_ = true;
+      loop_started_ = true;
+      SignalLoopStateChanged_();
+    }
+
+    while (!stop_requested_.load(std::memory_order_acquire)) {
+      bool active_foreground = false;
+      bool is_closed = false;
+      {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        active_foreground = foreground_bound_;
+        is_closed = closed_;
+      }
+      if (is_closed) {
+        break;
+      }
+
+      bool progressed = false;
+      if (active_foreground) {
+        if (DrainKeyInput_()) {
+          progressed = true;
+        }
+
+        if (FlushSend_()) {
+          progressed = true;
+        }
+
+        auto read_result = ReadWrapped({32U * 1024U}, {});
+        if (!(read_result.rcm)) {
+          std::lock_guard<std::recursive_mutex> lock(mutex_);
+          last_error_ = read_result.rcm;
+          closed_ = true;
+          stop_requested_.store(true, std::memory_order_release);
+          SignalLoopStateChanged_();
+          break;
+        }
+
+        if (!read_result.data.output.empty()) {
+          progressed = true;
+        }
+
+        if (!(read_result.data.last_error)) {
+          std::lock_guard<std::recursive_mutex> lock(mutex_);
+          last_error_ = read_result.data.last_error;
+          SignalLoopStateChanged_();
+        }
+
+        if (read_result.data.hard_limit_hit || read_result.data.eof) {
+          std::lock_guard<std::recursive_mutex> lock(mutex_);
+          closed_ = true;
+          if (!(read_result.data.last_error)) {
+            last_error_ = read_result.data.last_error;
+          }
+          stop_requested_.store(true, std::memory_order_release);
+          SignalLoopStateChanged_();
+          break;
+        }
+      }
+
+      if (!progressed) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      loop_running_ = false;
+      loop_started_ = false;
+      foreground_bound_ = false;
+      key_event_handle_ = -1;
+      key_cache_ = nullptr;
+      key_ctrl_state_.store(false, std::memory_order_release);
+      loop_thread_id_ = std::thread::id{};
+      SignalLoopStateChanged_();
+    }
+  }
+
+  void SignalLoopStateChanged_() {
+#ifdef _WIN32
+    if (state_wait_handle_ != nullptr) {
+      (void)SetEvent(state_wait_handle_);
+    }
+#endif
+  }
+
+  void CloseStateWaitHandle_() {
+#ifdef _WIN32
+    if (state_wait_handle_ != nullptr) {
+      (void)CloseHandle(state_wait_handle_);
+      state_wait_handle_ = nullptr;
+    }
+#endif
+  }
+
   std::string terminal_key_ = {};
   std::string channel_name_ = {};
   LocalTerminalPort *owner_ = nullptr;
   AMInfra::terminal::ChannelCacheStore cache_;
+  mutable std::recursive_mutex mutex_ = {};
+  std::thread loop_thread_ = {};
+  std::thread::id loop_thread_id_ = {};
+  std::atomic<bool> stop_requested_ = false;
+  std::atomic<bool> key_ctrl_state_ = false;
+  std::intptr_t key_event_handle_ = -1;
+  AMAtomic<std::vector<char>> *key_cache_ = nullptr;
+  std::string send_buffer_ = {};
   bool foreground_bound_ = false;
   bool detach_requested_ = false;
+  bool loop_running_ = false;
+  bool loop_started_ = false;
   bool closed_ = false;
+  ECM last_error_ = OK;
+#ifdef _WIN32
+  HANDLE state_wait_handle_ = nullptr;
+#endif
 };
+
+inline LocalChannelPort::~LocalChannelPort() {
+  RequestStop_();
+  JoinLoop_();
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  CloseStateWaitHandle_();
+}
 
 inline LocalTerminalPort::~LocalTerminalPort() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -545,7 +902,7 @@ LocalTerminalPort::ResolveChannelForOp_(
 }
 
 inline ECM LocalTerminalPort::ValidateSessionReady_(
-    const AMDomain::client::ClientControlComponent &control,
+    const AMDomain::client::ControlComponent &control,
     const char *action) const {
   if (control.IsInterrupted()) {
     return Err(EC::Terminate, action, request_.nickname, "Interrupted by user");
@@ -575,7 +932,7 @@ inline ECM LocalTerminalPort::ValidateSessionReady_(
 
 inline ECMData<AMT::ChannelOpenResult> LocalTerminalPort::OpenChannel(
     const AMT::ChannelOpenArgs &open_args,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ControlComponent &control) {
   ECMData<AMT::ChannelOpenResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   CacheSyncGuard_ cache_sync{this};
@@ -621,7 +978,7 @@ inline ECMData<AMT::ChannelOpenResult> LocalTerminalPort::OpenChannel(
 
 inline ECMData<AMT::ChannelActiveResult> LocalTerminalPort::ActiveChannel(
     const AMT::ChannelActiveArgs &active_args,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ControlComponent &control) {
   (void)control;
   ECMData<AMT::ChannelActiveResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -648,7 +1005,7 @@ inline ECMData<AMT::ChannelActiveResult> LocalTerminalPort::ActiveChannel(
 
 inline ECMData<AMT::ChannelPortHandle> LocalTerminalPort::GetChannelPort(
     const std::optional<std::string> &channel_name,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ControlComponent &control) {
   (void)control;
   ECMData<AMT::ChannelPortHandle> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -693,7 +1050,7 @@ inline ECMData<AMT::ChannelPortHandle> LocalTerminalPort::GetChannelPort(
 
 inline ECMData<AMT::ChannelReadResult> LocalTerminalPort::ReadChannel(
     const AMT::ChannelReadArgs &read_args,
-    const AMDomain::client::ClientControlComponent &control,
+    const AMDomain::client::ControlComponent &control,
     const std::optional<std::string> &bound_channel_name) {
   ECMData<AMT::ChannelReadResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -786,7 +1143,7 @@ inline ECMData<AMT::ChannelReadResult> LocalTerminalPort::ReadChannel(
 
 inline ECMData<AMT::ChannelWriteResult> LocalTerminalPort::WriteChannel(
     const AMT::ChannelWriteArgs &write_args,
-    const AMDomain::client::ClientControlComponent &control,
+    const AMDomain::client::ControlComponent &control,
     const std::optional<std::string> &bound_channel_name) {
   ECMData<AMT::ChannelWriteResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -901,7 +1258,7 @@ inline ECMData<AMT::ChannelWriteResult> LocalTerminalPort::WriteChannel(
 
 inline ECMData<AMT::ChannelResizeResult> LocalTerminalPort::ResizeChannel(
     const AMT::ChannelResizeArgs &resize_args,
-    const AMDomain::client::ClientControlComponent &control,
+    const AMDomain::client::ControlComponent &control,
     const std::optional<std::string> &bound_channel_name) {
   (void)control;
   ECMData<AMT::ChannelResizeResult> out = {};
@@ -972,7 +1329,7 @@ inline ECMData<AMT::ChannelResizeResult> LocalTerminalPort::ResizeChannel(
 
 inline ECMData<AMT::ChannelCloseResult> LocalTerminalPort::CloseChannel(
     const AMT::ChannelCloseArgs &close_args,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ControlComponent &control) {
   (void)control;
   ECMData<AMT::ChannelCloseResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -1009,7 +1366,7 @@ inline ECMData<AMT::ChannelCloseResult> LocalTerminalPort::CloseChannel(
 
 inline ECMData<AMT::ChannelRenameResult> LocalTerminalPort::RenameChannel(
     const AMT::ChannelRenameArgs &rename_args,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ControlComponent &control) {
   (void)control;
   ECMData<AMT::ChannelRenameResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -1070,7 +1427,7 @@ inline ECMData<AMT::ChannelRenameResult> LocalTerminalPort::RenameChannel(
 
 inline ECMData<AMT::ChannelListResult> LocalTerminalPort::ListChannels(
     const AMT::ChannelListArgs &list_args,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ControlComponent &control) {
   (void)list_args;
   (void)control;
   ECMData<AMT::ChannelListResult> out = {};
@@ -1088,7 +1445,7 @@ inline ECMData<AMT::ChannelListResult> LocalTerminalPort::ListChannels(
 
 inline ECMData<AMT::CheckSessionResult> LocalTerminalPort::CheckSession(
     const AMT::CheckSessionArgs &check_args,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ControlComponent &control) {
   (void)check_args;
   (void)control;
   ECMData<AMT::CheckSessionResult> out = {};
@@ -1126,7 +1483,7 @@ inline ECMData<AMT::CheckSessionResult> LocalTerminalPort::CheckSession(
 
 inline ECMData<AMT::ChannelCheckResult> LocalTerminalPort::CheckChannel(
     const AMT::ChannelCheckArgs &check_args,
-    const AMDomain::client::ClientControlComponent &control) {
+    const AMDomain::client::ControlComponent &control) {
   (void)control;
   ECMData<AMT::ChannelCheckResult> out = {};
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -1328,7 +1685,7 @@ inline bool LocalTerminalPort::DrainWindowsOutput_(ChannelRuntime_ *ctx,
 
 inline bool LocalTerminalPort::WaitReadableWindows_(
     ChannelRuntime_ *ctx,
-    const AMDomain::client::ClientControlComponent &control, bool *timed_out) {
+    const AMDomain::client::ControlComponent &control, bool *timed_out) {
   if (timed_out != nullptr) {
     *timed_out = false;
   }
@@ -1555,7 +1912,7 @@ inline bool LocalTerminalPort::DrainPosixOutput_(ChannelRuntime_ *ctx,
 
 inline bool LocalTerminalPort::WaitReadablePosix_(
     ChannelRuntime_ *ctx,
-    const AMDomain::client::ClientControlComponent &control, bool *timed_out) {
+    const AMDomain::client::ControlComponent &control, bool *timed_out) {
   if (timed_out != nullptr) {
     *timed_out = false;
   }
@@ -1720,4 +2077,14 @@ inline void LocalTerminalPort::CloseChannelRuntime_(ChannelRuntime_ *ctx,
 }
 
 } // namespace AMInfra::client::LOCAL::terminal
+
+
+
+
+
+
+
+
+
+
 
