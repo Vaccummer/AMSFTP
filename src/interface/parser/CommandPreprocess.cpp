@@ -248,10 +248,10 @@ void ProtectQuotedDashLiterals_(std::vector<CliTokenWithMeta_> *tokens,
   }
 
   std::vector<CliTokenWithMeta_> rewritten = {};
-  rewritten.reserve(src.size() + 1);
+  rewritten.reserve(src.size());
   std::optional<CommandNode::OptionValueRule> pending_value_rule = std::nullopt;
   size_t pending_value_index = 0;
-  bool options_ended = false;
+  size_t positional_index = 0;
 
   for (size_t idx = 0; idx < src.size(); ++idx) {
     const auto &token = src[idx];
@@ -260,38 +260,37 @@ void ProtectQuotedDashLiterals_(std::vector<CliTokenWithMeta_> *tokens,
       rewritten.push_back(token);
       continue;
     }
-    if (options_ended) {
-      rewritten.push_back(token);
-      continue;
-    }
-    if (!token.quoted && text == "--") {
-      rewritten.push_back(token);
-      options_ended = true;
-      pending_value_rule.reset();
-      pending_value_index = 0;
-      continue;
-    }
     if (pending_value_rule.has_value()) {
       ConsumePendingOptionValue_(&pending_value_rule, &pending_value_index);
       rewritten.push_back(token);
       continue;
     }
-    if (!token.quoted &&
-        (StartsWithLongOption_(text) || StartsWithShortOption_(text))) {
+    const bool option_definition =
+        !token.quoted &&
+        (StartsWithLongOption_(text) || StartsWithShortOption_(text));
+    if (option_definition) {
       SetPendingOptionValueByToken_(text, command_path, command_tree,
                                     &pending_value_rule, &pending_value_index);
       rewritten.push_back(token);
       continue;
     }
 
-    // Quoted tokens starting with '-' should stay positional literals.
+    // Quoted '-' literals collide with CLI11 options. For path positionals, map
+    // to an equivalent relative path form ("./-x") before parse.
     if (token.quoted && StartsWithDashLiteral_(text)) {
-      if (rewritten.empty() || rewritten.back().text != "--") {
-        rewritten.push_back({"--", false});
+      const auto semantic =
+          command_tree->ResolvePositionalSemantic(command_path, positional_index);
+      if (semantic.has_value() &&
+          semantic.value() == AMCommandArgSemantic::Path) {
+        auto rewritten_token = token;
+        rewritten_token.text = AMStr::fmt("./{}", text);
+        rewritten.push_back(std::move(rewritten_token));
+        ++positional_index;
+        continue;
       }
-      options_ended = true;
     }
     rewritten.push_back(token);
+    ++positional_index;
   }
   *tokens = std::move(rewritten);
 }
