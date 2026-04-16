@@ -41,13 +41,13 @@
 
 namespace AMInterface::terminal {
 namespace {
-AMDomain::client::ClientControlComponent
+AMDomain::client::ControlComponent
 ResolveControl_(AMDomain::client::amf default_interrupt_flag,
-                const std::optional<AMDomain::client::ClientControlComponent>
+                const std::optional<AMDomain::client::ControlComponent>
                     &control_opt) {
   return control_opt.has_value() ? control_opt.value()
-                                 : AMDomain::client::ClientControlComponent(
-                                       default_interrupt_flag, -1);
+                                  : AMDomain::client::ControlComponent(
+                                        default_interrupt_flag, 0);
 }
 
 [[nodiscard]] ECM BuildTerminalUnsupportedError_(const std::string &nickname) {
@@ -158,7 +158,7 @@ JoinChannelSummary_(const std::vector<std::string> &channels) {
 [[nodiscard]] ECMData<std::string> BuildTerminalSummaryLine_(
     const std::string &terminal_name,
     AMDomain::terminal::ITerminalPort *terminal,
-    const AMDomain::client::ClientControlComponent &control,
+    const AMDomain::client::ControlComponent &control,
     AMInterface::style::AMStyleService &style_service) {
   if (terminal == nullptr) {
     const std::string styled_header = style_service.Format(
@@ -1085,7 +1085,7 @@ AMDomain::client::amf TerminalInterfaceService::GetDefaultControlToken() const {
 
 ECM TerminalInterfaceService::ShellRun(
     const TerminalShellRunArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   const std::string command = AMStr::Strip(arg.cmd);
   if (command.empty()) {
@@ -1102,11 +1102,11 @@ ECM TerminalInterfaceService::ShellRun(
 
   const auto base_control =
       ResolveControl_(default_interrupt_flag_, control_opt);
-  AMDomain::client::ClientControlComponent run_control = base_control;
+  AMDomain::client::ControlComponent run_control = base_control;
   if (arg.max_time_s >= 0) {
     constexpr int kMaxSafeSeconds = std::numeric_limits<int>::max() / 1000;
     const int safe_seconds = std::min(arg.max_time_s, kMaxSafeSeconds);
-    run_control = AMDomain::client::ClientControlComponent(
+    run_control = AMDomain::client::ControlComponent(
         base_control.ControlToken(), safe_seconds * 1000);
   }
 
@@ -1168,7 +1168,7 @@ ECM TerminalInterfaceService::ShellRun(
 
 ECM TerminalInterfaceService::LaunchTerminal(
     const TerminalLaunchArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const int send_timeout_ms =
@@ -1248,11 +1248,13 @@ ECM TerminalInterfaceService::LaunchTerminal(
     return rcm;
   }
 
-  if (terminal_handle->GetRequest().protocol !=
-      AMDomain::host::ClientProtocol::SFTP) {
-    const ECM rcm = Err(EC::OperationUnsupported, "", target.nickname,
-                        "Windows realtime terminal launch currently supports "
-                        "SSH channels only");
+  const auto protocol = terminal_handle->GetRequest().protocol;
+  if (protocol != AMDomain::host::ClientProtocol::SFTP &&
+      protocol != AMDomain::host::ClientProtocol::LOCAL) {
+    const ECM rcm =
+        Err(EC::OperationUnsupported, "", target.nickname,
+            "Windows realtime terminal launch currently supports SFTP and "
+            "LOCAL channels only");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1447,13 +1449,13 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
 #ifdef _WIN32
   HANDLE control_event = nullptr;
-  std::unique_ptr<AMDomain::client::ControlTokenWakeupSafeGaurd> control_guard =
+  std::unique_ptr<AMDomain::client::InterruptWakeupSafeGuard> control_guard =
       nullptr;
   if (control.ControlToken()) {
     control_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (control_event != nullptr) {
       control_guard =
-          std::make_unique<AMDomain::client::ControlTokenWakeupSafeGaurd>(
+          std::make_unique<AMDomain::client::InterruptWakeupSafeGuard>(
               control.ControlToken(),
               [control_event]() { (void)SetEvent(control_event); });
     }
@@ -1556,7 +1558,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
 }
 ECM TerminalInterfaceService::AddTerminal(
     const TerminalAddArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const auto nicknames = NormalizeTerminalNicknames_(arg.nicknames);
@@ -1633,7 +1635,7 @@ ECM TerminalInterfaceService::AddTerminal(
 
 ECM TerminalInterfaceService::ListTerminals(
     const TerminalListArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   (void)arg;
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
@@ -1654,7 +1656,7 @@ ECM TerminalInterfaceService::ListTerminals(
 
 ECM TerminalInterfaceService::RemoveTerminal(
     const TerminalRemoveArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   if (arg.nicknames.empty()) {
@@ -1770,7 +1772,7 @@ ECM TerminalInterfaceService::RemoveTerminal(
 
 ECM TerminalInterfaceService::AddChannel(
     const ChannelAddArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
@@ -1827,7 +1829,7 @@ ECM TerminalInterfaceService::AddChannel(
 
 ECM TerminalInterfaceService::ListChannels(
     const ChannelListArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string nickname =
@@ -1859,7 +1861,7 @@ ECM TerminalInterfaceService::ListChannels(
 
 ECM TerminalInterfaceService::RemoveChannel(
     const ChannelRemoveArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
@@ -1920,7 +1922,7 @@ ECM TerminalInterfaceService::RemoveChannel(
 
 ECM TerminalInterfaceService::RenameChannel(
     const ChannelRenameArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const std::optional<AMDomain::client::ControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
@@ -1998,4 +2000,5 @@ ECM TerminalInterfaceService::RenameChannel(
 }
 
 } // namespace AMInterface::terminal
+
 
