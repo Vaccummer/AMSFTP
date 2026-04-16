@@ -82,11 +82,6 @@ FindBestSuggestion_(const std::string &invalid_token,
   if (!best.has_value()) {
     return std::nullopt;
   }
-  const size_t threshold =
-      std::max<size_t>(2, (invalid.size() + best->name.size()) / 3);
-  if (best_score > threshold) {
-    return std::nullopt;
-  }
   return best;
 }
 
@@ -105,14 +100,11 @@ std::string BuildInvalidMessage_(
   const auto kind_style = is_module ? AMInterface::style::StyleIndex::Module
                                     : AMInterface::style::StyleIndex::Command;
   const std::string kind_text = is_module ? "module" : "command";
-  const std::string kind = style_service.Format(kind_text, kind_style);
   const std::string name = style_service.Format(suggestion->name, kind_style);
-  const std::string colon =
-      style_service.Format(":", AMInterface::style::StyleIndex::AtSign);
   return AMStr::fmt(
-      "❌ InvalidArg \"{}\" is not a valid module or command, did you mean {}{} "
+      "❌ InvalidArg \"{}\" is not a valid module or command, did you mean {}: "
       "\"{}\"",
-      invalid, kind, colon, name);
+      invalid, kind_text, name);
 }
 
 std::vector<SuggestedCommand_>
