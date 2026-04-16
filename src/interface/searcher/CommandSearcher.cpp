@@ -249,7 +249,7 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
       }
       break;
     }
-    if (node && node->subcommands.find(text) != node->subcommands.end()) {
+    if (node && node->subcommands.contains(text)) {
       path += " " + text;
       node = command_tree->FindNode(path);
       consumed = i + 1;
@@ -270,4 +270,5 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
 }
 
 } // namespace AMInterface::searcher
+
 

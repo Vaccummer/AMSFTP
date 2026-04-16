@@ -446,7 +446,8 @@ void AMCompleteEngine::StartAsyncWorkers_() {
   const size_t count = std::max<size_t>(1, args_.complete_async_workers);
   async_workers_.reserve(count);
   for (size_t i = 0; i < count; ++i) {
-    async_workers_.emplace_back([this]() { AsyncWorkerLoop_(); });
+    async_workers_.emplace_back(
+        [this](std::stop_token stop_token) { AsyncWorkerLoop_(stop_token); });
   }
 }
 
@@ -458,6 +459,11 @@ void AMCompleteEngine::StopAsyncWorkers_() {
   CancelPendingAsyncRequests_();
   async_queue_cv_.notify_all();
 
+  for (auto &worker : async_workers_) {
+    if (worker.joinable()) {
+      worker.request_stop();
+    }
+  }
   for (auto &worker : async_workers_) {
     if (worker.joinable()) {
       worker.join();
@@ -580,16 +586,13 @@ void AMCompleteEngine::ConsumeAsyncResults_(const AMCompletionContext &ctx,
     }
 
     auto &bucket = it->second;
-    auto keep_it = bucket.begin();
-    for (auto iter = bucket.begin(); iter != bucket.end(); ++iter) {
-      if (HasTarget_(ctx, iter->target)) {
-        consumed.push_back(std::move(*iter));
-      } else {
-        *keep_it = std::move(*iter);
-        ++keep_it;
+    std::erase_if(bucket, [&](AMCompletionAsyncResult &entry) {
+      if (!HasTarget_(ctx, entry.target)) {
+        return false;
       }
-    }
-    bucket.erase(keep_it, bucket.end());
+      consumed.push_back(std::move(entry));
+      return true;
+    });
     if (bucket.empty()) {
       async_results_.erase(it);
     }
@@ -623,16 +626,18 @@ void AMCompleteEngine::ConsumeAsyncResults_(const AMCompletionContext &ctx,
 /**
  * @brief Async worker loop body.
  */
-void AMCompleteEngine::AsyncWorkerLoop_() {
+void AMCompleteEngine::AsyncWorkerLoop_(std::stop_token stop_token) {
   while (true) {
     AMCompletionAsyncTask request;
     {
       std::unique_lock<std::mutex> lock(async_queue_mtx_);
-      async_queue_cv_.wait(lock, [this]() {
-        return async_stop_.load(std::memory_order_relaxed) ||
+      async_queue_cv_.wait(lock, [this, &stop_token]() {
+        return stop_token.stop_requested() ||
+               async_stop_.load(std::memory_order_relaxed) ||
                !async_queue_.empty();
       });
-      if (async_stop_.load(std::memory_order_relaxed)) {
+      if (stop_token.stop_requested() ||
+          async_stop_.load(std::memory_order_relaxed)) {
         return;
       }
 

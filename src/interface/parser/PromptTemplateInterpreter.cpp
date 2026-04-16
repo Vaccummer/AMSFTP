@@ -412,7 +412,7 @@ public:
         msg += name;
         first = false;
       }
-      return {std::string{}, Err(EC::InvalidArg, __func__, "", msg)};
+      return {std::string{}, Err(EC::InvalidArg, "", "", msg)};
     }
     return {out, OK};
   }
@@ -467,7 +467,7 @@ PromptTemplateInterpreter::Parse(const std::string &input) const {
                        : std::min(diag.offset, input.size() - 1));
     const std::string msg = AMStr::fmt("{} at {} of {}", diag.message, index,
                                        HighlightErrorAt_(input, index));
-    return {std::move(result), Err(EC::InvalidArg, __func__, "", msg)};
+    return {std::move(result), Err(EC::InvalidArg, "", "", msg)};
   }
   return {std::move(result), OK};
 }
@@ -480,4 +480,5 @@ PromptTemplateInterpreter::Render(const PromptTemplateContext &context,
 }
 
 } // namespace AMInterface::prompt
+
 

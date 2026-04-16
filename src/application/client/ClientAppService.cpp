@@ -453,7 +453,7 @@ ClientAppService::CreateClient(const HostConfig &config,
     return {nullptr, create_rcm};
   }
   if (!client) {
-    return {nullptr, Err(EC::InvalidHandle, __func__, "",
+    return {nullptr, Err(EC::InvalidHandle, "", "",
                          "CreateClient returned null client")};
   }
   ApplyCallbacksToClient_(client, callbacks);
@@ -1129,3 +1129,4 @@ ECMData<CheckResult> ClientAppService::CheckClientInternal_(
 }
 
 } // namespace AMApplication::client
+

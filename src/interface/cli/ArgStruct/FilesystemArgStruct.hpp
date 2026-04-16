@@ -19,12 +19,12 @@ inline ECM ResolveTransferEndpoint(const CLIServices &managers,
                                    const std::string &raw,
                                    PathTarget *out_endpoint) {
   if (!out_endpoint) {
-    return Err(EC::InvalidArg, __func__, "", "null transfer endpoint output");
+    return Err(EC::InvalidArg, "", "", "null transfer endpoint output");
   }
 
   const std::string token = AMStr::Strip(raw);
   if (token.empty()) {
-    return Err(EC::InvalidArg, __func__, "", "Transfer path is empty");
+    return Err(EC::InvalidArg, "", "", "Transfer path is empty");
   }
 
   auto split_result =
@@ -58,7 +58,7 @@ inline TransferCliBuildResult BuildTransferArgsFromCli(
 
   if (src_tokens.empty()) {
     out.rcm =
-        Err(EC::InvalidArg, __func__, "", "cp requires at least one source");
+        Err(EC::InvalidArg, "", "", "cp requires at least one source");
     return out;
   }
 
@@ -76,7 +76,7 @@ inline TransferCliBuildResult BuildTransferArgsFromCli(
       normalized_dst_token = src_tokens.back();
     } else {
       out.rcm =
-          Err(EC::InvalidArg, __func__, "",
+          Err(EC::InvalidArg, "", "",
               "cp with 3+ paths requires --output to specify destination");
       return out;
     }
@@ -337,7 +337,7 @@ struct MoveArgs : BaseArgStruct {
 
     src_token = AMStr::Strip(src_token);
     if (src_token.empty()) {
-      return Err(EC::InvalidArg, __func__, "src",
+      return Err(EC::InvalidArg, "", "src",
                  "move requires one source path");
     }
 
@@ -368,7 +368,7 @@ struct CloneArgs : BaseArgStruct {
     const std::string suffix = AMStr::Strip(async_suffix);
     if (!suffix.empty()) {
       if (suffix != "&") {
-        return Err(EC::InvalidArg, __func__, "",
+        return Err(EC::InvalidArg, "", "",
                    "clone async suffix must be '&'");
       }
       raw_srcs.push_back(suffix);
@@ -421,7 +421,7 @@ struct WgetArgs : BaseArgStruct {
     AMInterface::transfer::HttpGetArg arg = {};
     arg.src_url = AMStr::Strip(src_token);
     if (arg.src_url.empty()) {
-      return Err(EC::InvalidArg, __func__, "", "wget requires one source URL");
+      return Err(EC::InvalidArg, "", "", "wget requires one source URL");
     }
 
     dst_token = AMStr::Strip(dst_token);
@@ -480,7 +480,7 @@ struct SftpArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.empty() || targets.size() > 2) {
-      return Err(EC::InvalidArg, __func__, "",
+      return Err(EC::InvalidArg, "", "",
                  "sftp requires user@host or nickname user@host");
     }
     auto req = request;
@@ -514,7 +514,7 @@ struct FtpArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.empty() || targets.size() > 2) {
-      return Err(EC::InvalidArg, __func__, "",
+      return Err(EC::InvalidArg, "", "",
                  "ftp requires user@host or nickname user@host");
     }
 
@@ -545,7 +545,7 @@ struct LocalArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.size() > 1) {
-      return Err(EC::InvalidArg, __func__, "",
+      return Err(EC::InvalidArg, "", "",
                  "local accepts at most one nickname");
     }
     auto req = request;
@@ -599,10 +599,10 @@ struct CmdArgs : BaseArgStruct {
     (void)ctx;
     const std::string command = AMStr::Strip(request.cmd);
     if (command.empty()) {
-      return Err(EC::InvalidArg, __func__, "", "cmd cannot be empty");
+      return Err(EC::InvalidArg, "", "", "cmd cannot be empty");
     }
     if (timeout_ms == 0) {
-      return Err(EC::InvalidArg, __func__, "", "timeout_ms cannot be 0");
+      return Err(EC::InvalidArg, "", "", "timeout_ms cannot be 0");
     }
     auto arg = request;
     arg.cmd = command;
@@ -740,3 +740,4 @@ struct ExitArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
+

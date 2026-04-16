@@ -1691,8 +1691,7 @@ public:
     if (global_shortcut.is_object()) {
       auto shortcut_map = codec_common::ReadStringMap_(global_shortcut, true);
       for (auto &[key, value] : shortcut_map) {
-        if (typed->style.cli_prompt.shortcut.find(key) ==
-            typed->style.cli_prompt.shortcut.end()) {
+        if (!typed->style.cli_prompt.shortcut.contains(key)) {
           typed->style.cli_prompt.shortcut[key] = std::move(value);
         }
       }
@@ -1821,3 +1820,4 @@ BuildCodecMap() {
   return map;
 }
 } // namespace AMInfra::config
+

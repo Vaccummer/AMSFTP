@@ -33,7 +33,7 @@ bool LoggerAppService::SetLogger(AMDomain::log::LoggerType logger_type,
   }
   std::lock_guard<std::mutex> lock(mtx_);
   logger_map_[logger_type] = std::move(writer);
-  if (trace_levels_.find(logger_type) == trace_levels_.end()) {
+  if (!trace_levels_.contains(logger_type)) {
     trace_levels_[logger_type] = kDefaultTraceLevel;
   }
   return true;
@@ -48,7 +48,7 @@ bool LoggerAppService::RemoveLogger(AMDomain::log::LoggerType logger_type) {
 
 bool LoggerAppService::HasLogger(AMDomain::log::LoggerType logger_type) const {
   std::lock_guard<std::mutex> lock(mtx_);
-  return logger_map_.find(logger_type) != logger_map_.end();
+  return logger_map_.contains(logger_type);
 }
 
 void LoggerAppService::ClearLoggers() {
@@ -90,7 +90,7 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
     std::lock_guard<std::mutex> lock(mtx_);
     auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
-      return Err(EC::InvalidArg, __func__, "", AMStr::fmt("Logger writer {} is not registered", logger_type));
+      return Err(EC::InvalidArg, "", "", AMStr::fmt("Logger writer {} is not registered", logger_type));
     }
     writer = writer_iter->second;
     scheduler = scheduler_;
@@ -143,7 +143,7 @@ ECM LoggerAppService::WriteLine(AMDomain::log::LoggerType logger_type,
     std::lock_guard<std::mutex> lock(mtx_);
     auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
-      return Err(EC::InvalidArg, __func__, "", "Logger writer is not registered");
+      return Err(EC::InvalidArg, "", "", "Logger writer is not registered");
     }
     writer = writer_iter->second;
     scheduler = scheduler_;
@@ -243,4 +243,5 @@ void LoggerAppService::ReportError_(const ErrorReporter &reporter,
 }
 
 } // namespace AMApplication::log
+
 

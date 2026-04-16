@@ -31,11 +31,11 @@ PromptProfileArg PromptProfileManager::GetInitArg() const {
 ECM PromptProfileManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, __func__, "",
+    return Err(EC::InvalidArg, "", "",
                "config service is null");
   }
   if (!config_service->Write<PromptProfileArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, __func__, "",
+    return Err(EC::ConfigDumpFailed, "", "",
                "failed to flush prompt profile config");
   }
   return OK;
@@ -84,4 +84,5 @@ PromptProfileManager::GetZoneProfile(const std::string &zone) const {
   return out;
 }
 } // namespace AMApplication::prompt
+
 

@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <stop_token>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -711,7 +712,8 @@ public:
     DrainSignal();
 #endif
 
-    reader_thread_ = std::thread([this]() { ReaderLoop_(); });
+    reader_thread_ = std::jthread(
+        [this](std::stop_token stop_token) { ReaderLoop_(stop_token); });
     running_ = true;
     return OK;
   }
@@ -735,6 +737,7 @@ public:
     SignalKey_();
 #endif
     if (reader_thread_.joinable()) {
+      reader_thread_.request_stop();
       reader_thread_.join();
     }
     running_ = false;
@@ -931,7 +934,7 @@ private:
 #endif
   }
 
-  void ReaderLoop_() {
+  void ReaderLoop_(std::stop_token stop_token) {
 #ifdef _WIN32
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
     if (input == INVALID_HANDLE_VALUE || input == nullptr) {
@@ -941,7 +944,8 @@ private:
       return;
     }
 
-    while (!stop_requested_.load(std::memory_order_acquire)) {
+    while (!stop_requested_.load(std::memory_order_acquire) &&
+           !stop_token.stop_requested()) {
       if (!capture_enabled_.load(std::memory_order_acquire)) {
         std::array<HANDLE, 2> inactive_wait = {stop_event_, activate_event_};
         const DWORD rc =
@@ -996,7 +1000,8 @@ private:
       SignalKey_();
     }
 #else
-    while (!stop_requested_.load(std::memory_order_acquire)) {
+    while (!stop_requested_.load(std::memory_order_acquire) &&
+           !stop_token.stop_requested()) {
       std::string input = {};
       std::string input_error = {};
       const auto status = PollLocalTerminalInput_(&input, &input_error);
@@ -1029,7 +1034,7 @@ private:
   std::atomic<bool> closed_ = false;
   std::atomic<bool> capture_enabled_ = false;
   bool running_ = false;
-  std::thread reader_thread_ = {};
+  std::jthread reader_thread_ = {};
   AMAtomic<std::vector<char>> key_cache_ = {};
   mutable std::mutex fatal_mutex_ = {};
   std::string fatal_error_ = {};
@@ -1084,13 +1089,13 @@ ECM TerminalInterfaceService::ShellRun(
     const {
   const std::string command = AMStr::Strip(arg.cmd);
   if (command.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "cmd cannot be empty");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "cmd cannot be empty");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (arg.max_time_s < -1) {
     const ECM rcm =
-        Err(EC::InvalidArg, __func__, "", "max_time_s must be >= -1");
+        Err(EC::InvalidArg, "", "", "max_time_s must be >= -1");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1136,7 +1141,7 @@ ECM TerminalInterfaceService::ShellRun(
 
   auto client_result = filesystem_service_.GetClient(nickname, run_control);
   if (!(client_result.rcm) || !client_result.data) {
-    const ECM rcm = (client_result.rcm) ? Err(EC::InvalidHandle, __func__, "",
+    const ECM rcm = (client_result.rcm) ? Err(EC::InvalidHandle, "", "",
                                               "Resolved client is null")
                                         : client_result.rcm;
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1186,7 +1191,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     shared_keyboard_monitor_ = std::make_shared<SharedKeyboardMonitor_>();
   }
   if (!shared_keyboard_monitor_) {
-    const ECM rcm = Err(EC::InvalidHandle, __func__, target.nickname,
+    const ECM rcm = Err(EC::InvalidHandle, "", target.nickname,
                         "Failed to initialize shared keyboard monitor");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1204,7 +1209,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
   if (managed_terminal_result.rcm && managed_terminal_result.data) {
     terminal_handle = managed_terminal_result.data;
   } else if (managed_terminal_result.rcm && !managed_terminal_result.data) {
-    const ECM rcm = Err(EC::InvalidHandle, __func__, target.nickname,
+    const ECM rcm = Err(EC::InvalidHandle, "", target.nickname,
                         "Managed terminal handle is null");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1213,7 +1218,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
         client_service_.CreateClient(target.nickname, control, false, false);
     if (!temp_client_result.rcm || !temp_client_result.data) {
       const ECM rcm = temp_client_result.rcm
-                          ? Err(EC::InvalidHandle, __func__, target.nickname,
+                          ? Err(EC::InvalidHandle, "", target.nickname,
                                 "Temporary client is null")
                           : temp_client_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1237,7 +1242,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
 
   if (!terminal_handle) {
-    const ECM rcm = Err(EC::InvalidHandle, __func__, target.nickname,
+    const ECM rcm = Err(EC::InvalidHandle, "", target.nickname,
                         "Resolved terminal handle is null");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1245,7 +1250,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
   if (terminal_handle->GetRequest().protocol !=
       AMDomain::host::ClientProtocol::SFTP) {
-    const ECM rcm = Err(EC::OperationUnsupported, __func__, target.nickname,
+    const ECM rcm = Err(EC::OperationUnsupported, "", target.nickname,
                         "Windows realtime terminal launch currently supports "
                         "SSH channels only");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1282,7 +1287,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
       }
     } else {
       if (!check_result.data.exists || !check_result.data.is_open) {
-        const ECM rcm = Err(EC::NoConnection, __func__, requested_channel,
+        const ECM rcm = Err(EC::NoConnection, "", requested_channel,
                             "Target channel is not available");
         prompt_io_manager_.ErrorFormat(rcm);
         return rcm;
@@ -1294,7 +1299,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
         terminal_handle->ActiveChannel({requested_channel}, control);
     if (!(active_result.rcm) || !active_result.data.activated) {
       const ECM rcm = active_result.rcm
-                          ? Err(EC::CommonFailure, __func__, requested_channel,
+                          ? Err(EC::CommonFailure, "", requested_channel,
                                 "Failed to activate target channel")
                           : active_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1305,7 +1310,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const std::string current_channel =
         AMStr::Strip(status_result.data.current_channel);
     if (current_channel.empty()) {
-      const ECM rcm = Err(EC::InvalidArg, __func__, target.nickname,
+      const ECM rcm = Err(EC::InvalidArg, "", target.nickname,
                           "No active channel in terminal");
       prompt_io_manager_.ErrorFormat(rcm);
       return rcm;
@@ -1317,7 +1322,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
       return check_result.rcm;
     }
     if (!check_result.data.exists || !check_result.data.is_open) {
-      const ECM rcm = Err(EC::NoConnection, __func__, current_channel,
+      const ECM rcm = Err(EC::NoConnection, "", current_channel,
                           "Current channel is not available");
       prompt_io_manager_.ErrorFormat(rcm);
       return rcm;
@@ -1333,7 +1338,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
       target.nickname, channel_name, control);
   if (!(channel_port_result.rcm) || !channel_port_result.data) {
     const ECM rcm = channel_port_result.rcm
-                        ? Err(EC::InvalidHandle, __func__, channel_name,
+                        ? Err(EC::InvalidHandle, "", channel_name,
                               "Channel port handle is null")
                         : channel_port_result.rcm;
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1434,7 +1439,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     prompt_io_manager_.Print("");
     const ECM rcm = (bind_result.data.last_error)
                         ? bind_result.data.last_error
-                        : Err(EC::NoConnection, __func__, channel_name,
+                        : Err(EC::NoConnection, "", channel_name,
                               "Channel is already closed");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1470,7 +1475,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
 #ifdef _WIN32
     if (loop_state.state_wait_handle <= 0) {
-      wait_rcm = Err(EC::CommonFailure, __func__, channel_name,
+      wait_rcm = Err(EC::CommonFailure, "", channel_name,
                      "Channel loop wait handle is invalid");
       break;
     }
@@ -1486,7 +1491,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
         WaitForMultipleObjects(wait_count, waiters.data(), FALSE, INFINITE);
     if (wait_rc == WAIT_FAILED) {
       wait_rcm =
-          Err(EC::CommonFailure, __func__, channel_name,
+          Err(EC::CommonFailure, "", channel_name,
               AMStr::fmt("WaitForMultipleObjects failed: {}", GetLastError()));
       break;
     }
@@ -1519,15 +1524,19 @@ ECM TerminalInterfaceService::LaunchTerminal(
     render_tracker.SetAlternateScreen(false);
   }
 
+  size_t cleared_rows = 0U;
   {
     std::lock_guard<std::mutex> guard(render_mutex);
+    cleared_rows = render_tracker.RenderedRows();
     render_tracker.ClearRenderedRowsInTerminal();
   }
 
   raw_terminal.Restore();
   RestoreCliPromptStateAfterTerminalExit_();
   prompt_cache_guard.Disable();
-  prompt_io_manager_.Print("");
+  if (cleared_rows == 0U) {
+    prompt_io_manager_.Print("");
+  }
 
   (void)channel_port->UnbindForeground();
 
@@ -1552,7 +1561,7 @@ ECM TerminalInterfaceService::AddTerminal(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const auto nicknames = NormalizeTerminalNicknames_(arg.nicknames);
   if (nicknames.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "<targets>",
+    const ECM rcm = Err(EC::InvalidArg, "", "<targets>",
                         "term add requires at least one target nickname");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1561,13 +1570,13 @@ ECM TerminalInterfaceService::AddTerminal(
   ECM status = OK;
   for (const auto &nickname : nicknames) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, nickname, "Interrupted by user");
+      return Err(EC::Terminate, "", nickname, "Interrupted by user");
     }
 
     auto existing = terminal_service_.GetTerminalByNickname(nickname, false);
     if (existing.rcm && existing.data) {
       if (!arg.force) {
-        const ECM rcm = Err(EC::TargetAlreadyExists, __func__, nickname,
+        const ECM rcm = Err(EC::TargetAlreadyExists, "", nickname,
                             "Terminal already exists");
         prompt_io_manager_.ErrorFormat(rcm);
         if ((status)) {
@@ -1594,7 +1603,7 @@ ECM TerminalInterfaceService::AddTerminal(
     auto client_result = client_service_.CreateClient(nickname, control, false);
     if (!(client_result.rcm) || !client_result.data) {
       const ECM rcm = (client_result.rcm)
-                          ? Err(EC::InvalidHandle, __func__, nickname,
+                          ? Err(EC::InvalidHandle, "", nickname,
                                 "Created client is null")
                           : client_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1649,7 +1658,7 @@ ECM TerminalInterfaceService::RemoveTerminal(
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   if (arg.nicknames.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "<targets>",
+    const ECM rcm = Err(EC::InvalidArg, "", "<targets>",
                         "term rm requires at least one target nickname");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1663,16 +1672,16 @@ ECM TerminalInterfaceService::RemoveTerminal(
   ECM status = OK;
   for (const auto &raw_nickname : arg.nicknames) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     const std::string stripped = AMStr::Strip(raw_nickname);
     if (stripped.empty()) {
       const ECM rcm =
-          Err(EC::InvalidArg, __func__, "", "invalid empty terminal nickname");
+          Err(EC::InvalidArg, "", "", "invalid empty terminal nickname");
       prompt_io_manager_.ErrorFormat(rcm);
       if ((status)) {
         status = rcm;
@@ -1686,7 +1695,7 @@ ECM TerminalInterfaceService::RemoveTerminal(
         (!AMDomain::host::HostService::IsLocalNickname(normalized) &&
          !AMDomain::host::HostService::ValidateNickname(normalized))) {
       const ECM rcm =
-          Err(EC::InvalidArg, __func__, "",
+          Err(EC::InvalidArg, "", "",
               AMStr::fmt("invalid terminal nickname literal: {}", stripped));
       prompt_io_manager_.ErrorFormat(rcm);
       if ((status)) {
@@ -1703,7 +1712,7 @@ ECM TerminalInterfaceService::RemoveTerminal(
         terminal_service_.GetTerminalByNickname(normalized, true);
     if (!(terminal_result.rcm) || !terminal_result.data) {
       const ECM rcm = terminal_result.rcm
-                          ? Err(EC::ClientNotFound, __func__, normalized,
+                          ? Err(EC::ClientNotFound, "", normalized,
                                 "terminal not found")
                           : terminal_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1739,10 +1748,10 @@ ECM TerminalInterfaceService::RemoveTerminal(
 
   for (const auto &nickname : valid_targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, nickname, "Interrupted by user");
+      return Err(EC::Terminate, "", nickname, "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, nickname,
+      return Err(EC::OperationTimeout, "", nickname,
                  "Operation timed out");
     }
 
@@ -1780,7 +1789,7 @@ ECM TerminalInterfaceService::AddChannel(
       target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
   if (channel_name.empty()) {
     const ECM rcm =
-        Err(EC::InvalidArg, __func__, arg.target, "Channel name is required");
+        Err(EC::InvalidArg, "", arg.target, "Channel name is required");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1789,7 +1798,7 @@ ECM TerminalInterfaceService::AddChannel(
       terminal_service_.GetTerminalByNickname(target.nickname, false);
   if (!(terminal_result.rcm) || !terminal_result.data) {
     const ECM rcm = terminal_result.rcm
-                        ? Err(EC::InvalidHandle, __func__, target.nickname,
+                        ? Err(EC::InvalidHandle, "", target.nickname,
                               "Terminal handle is null")
                         : terminal_result.rcm;
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1797,7 +1806,7 @@ ECM TerminalInterfaceService::AddChannel(
   }
   if (terminal_result.data->GetSessionState().status !=
       AMDomain::client::ClientStatus::OK) {
-    const ECM rcm = Err(EC::NoConnection, __func__, target.nickname,
+    const ECM rcm = Err(EC::NoConnection, "", target.nickname,
                         "Terminal session is disconnected");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1831,7 +1840,7 @@ ECM TerminalInterfaceService::ListChannels(
       terminal_service_.GetTerminalByNickname(nickname, false);
   if (!(terminal_result.rcm) || !terminal_result.data) {
     const ECM rcm = terminal_result.rcm
-                        ? Err(EC::InvalidHandle, __func__, nickname,
+                        ? Err(EC::InvalidHandle, "", nickname,
                               "Terminal handle is null")
                         : terminal_result.rcm;
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1869,7 +1878,7 @@ ECM TerminalInterfaceService::RemoveChannel(
       target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
   if (channel_name.empty()) {
     const ECM rcm =
-        Err(EC::InvalidArg, __func__, arg.target, "Channel name is required");
+        Err(EC::InvalidArg, "", arg.target, "Channel name is required");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1878,7 +1887,7 @@ ECM TerminalInterfaceService::RemoveChannel(
       terminal_service_.GetTerminalByNickname(target.nickname, false);
   if (!(terminal_result.rcm) || !terminal_result.data) {
     const ECM rcm = terminal_result.rcm
-                        ? Err(EC::InvalidHandle, __func__, target.nickname,
+                        ? Err(EC::InvalidHandle, "", target.nickname,
                               "Terminal handle is null")
                         : terminal_result.rcm;
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1886,7 +1895,7 @@ ECM TerminalInterfaceService::RemoveChannel(
   }
   if (terminal_result.data->GetSessionState().status !=
       AMDomain::client::ClientStatus::OK) {
-    const ECM rcm = Err(EC::NoConnection, __func__, target.nickname,
+    const ECM rcm = Err(EC::NoConnection, "", target.nickname,
                         "Terminal session is disconnected");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1940,13 +1949,13 @@ ECM TerminalInterfaceService::RenameChannel(
                                       ? AMStr::Strip(*dst_target.channel_name)
                                       : "";
   if (src_channel.empty() || dst_channel.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "channel_name",
+    const ECM rcm = Err(EC::InvalidArg, "", "channel_name",
                         "Both source and destination channels are required");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (src_target.nickname != dst_target.nickname) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, arg.dst,
+    const ECM rcm = Err(EC::InvalidArg, "", arg.dst,
                         "Channel rename must stay in the same terminal scope");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1956,7 +1965,7 @@ ECM TerminalInterfaceService::RenameChannel(
       terminal_service_.GetTerminalByNickname(src_target.nickname, false);
   if (!(terminal_result.rcm) || !terminal_result.data) {
     const ECM rcm = terminal_result.rcm
-                        ? Err(EC::InvalidHandle, __func__, src_target.nickname,
+                        ? Err(EC::InvalidHandle, "", src_target.nickname,
                               "Terminal handle is null")
                         : terminal_result.rcm;
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1964,7 +1973,7 @@ ECM TerminalInterfaceService::RenameChannel(
   }
   if (terminal_result.data->GetSessionState().status !=
       AMDomain::client::ClientStatus::OK) {
-    const ECM rcm = Err(EC::NoConnection, __func__, src_target.nickname,
+    const ECM rcm = Err(EC::NoConnection, "", src_target.nickname,
                         "Terminal session is disconnected");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -1989,3 +1998,4 @@ ECM TerminalInterfaceService::RenameChannel(
 }
 
 } // namespace AMInterface::terminal
+

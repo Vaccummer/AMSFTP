@@ -186,7 +186,7 @@ public:
                     "Invalid channel_name literal");
       return out;
     }
-    if (channels_.find(channel_name) != channels_.end()) {
+    if (channels_.contains(channel_name)) {
       out.rcm = Err(EC::TargetAlreadyExists, "terminal.open", channel_name,
                     "Channel name already exists");
       return out;
@@ -374,7 +374,7 @@ public:
                     "Source channel does not exist");
       return out;
     }
-    if (channels_.find(dst_name) != channels_.end()) {
+    if (channels_.contains(dst_name)) {
       out.rcm = Err(EC::TargetAlreadyExists, "terminal.rename", dst_name,
                     "Target channel already exists");
       return out;
@@ -519,3 +519,4 @@ public:
 };
 
 } // namespace AMInfra::terminal::SFTP
+

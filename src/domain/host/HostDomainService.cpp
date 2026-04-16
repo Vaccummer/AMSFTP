@@ -138,7 +138,7 @@ bool NicknameExists(const HostConfigMap &host_configs,
   if (key.empty()) {
     return false;
   }
-  if (host_configs.find(key) != host_configs.end()) {
+  if (host_configs.contains(key)) {
     return true;
   }
   if (!IsLocalNickname(key)) {
@@ -265,14 +265,14 @@ GetConfigByNickname(const HostConfigMap &host_configs,
                     const HostConfig *local_config) {
   const std::string key = AMStr::Strip(nickname);
   if (key.empty()) {
-    return {Err(EC::HostConfigNotFound, __func__, "",
+    return {Err(EC::HostConfigNotFound, "", "",
                 "host config not found: empty nickname"),
             {}};
   }
 
   if (IsLocalNickname(key)) {
     if (!local_config || local_config->request.nickname.empty()) {
-      return {Err(EC::HostConfigNotFound, __func__, "",
+      return {Err(EC::HostConfigNotFound, "", "",
                   "local host config not found"),
               {}};
     }
@@ -281,7 +281,7 @@ GetConfigByNickname(const HostConfigMap &host_configs,
 
   auto it = host_configs.find(key);
   if (it == host_configs.end()) {
-    return {Err(EC::HostConfigNotFound, __func__, "",
+    return {Err(EC::HostConfigNotFound, "", "",
                 AMStr::fmt("host config not found: {}", key)),
             {}};
   }
@@ -300,3 +300,4 @@ ECM ValidateConfig(const KnownHostQuery &request) {
 }
 } // namespace KnownHostRules
 } // namespace AMDomain::host
+

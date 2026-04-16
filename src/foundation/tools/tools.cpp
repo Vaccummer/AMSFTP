@@ -504,7 +504,7 @@ std::pair<bool, int> endswith(const std::string &str,
     return std::make_pair(false, 0);
   }
   return std::make_pair(
-      str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0,
+      str.ends_with(suffix),
       static_cast<int>(str.size() - suffix.size()));
 }
 
@@ -904,7 +904,7 @@ std::optional<std::string> HexToAnsi(const std::string &value) {
   if (token.empty()) {
     return std::nullopt;
   }
-  if (token.rfind("#", 0) == 0) {
+  if (token.starts_with("#")) {
     token.erase(0, 1);
   }
   if (token.size() != 6) {
@@ -947,7 +947,7 @@ void SecureZero(std::string &value) {
 }
 
 bool IsEncrypted(const std::string &value) {
-  return value.rfind(std::string(kEncryptedPrefix), 0) == 0;
+  return value.starts_with(std::string(kEncryptedPrefix));
 }
 
 std::string HexEncode(const std::string &bytes) {
@@ -1257,3 +1257,4 @@ ECM fecm(const std::error_code &ec) {
   return {fec(ec), "filesystem.error", ec.category().name(), ec.message(),
           RawError{RawErrorSource::Filesystem, ec.value()}};
 }
+

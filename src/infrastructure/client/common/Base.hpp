@@ -126,7 +126,7 @@ private:
       return;
     }
     std::string sign;
-    if (trace_level_str.find(trace_info.level) != trace_level_str.end()) {
+    if (trace_level_str.contains(trace_info.level)) {
       sign = trace_level_str[trace_info.level];
     } else {
       sign = "ℹ️";
@@ -1554,19 +1554,19 @@ public:
       auto wakeups = wakeups_.lock();
       (*wakeups)[id] = std::move(wake_cb);
     }
-    if (IsInterrupted()) {
-      std::function<void()> callback;
-      {
-        auto wakeups = wakeups_.lock();
-        auto it = wakeups->find(id);
-        if (it != wakeups->end()) {
-          callback = it->second;
-        }
-      }
-      if (callback) {
-        callback();
-      }
-    }
+    // if (IsInterrupted()) {
+    //   std::function<void()> callback;
+    //   {
+    //     auto wakeups = wakeups_.lock();
+    //     auto it = wakeups->find(id);
+    //     if (it != wakeups->end()) {
+    //       callback = it->second;
+    //     }
+    //   }
+    //   if (callback) {
+    //     callback();
+    //   }
+    // }
     return id;
   }
 
@@ -1835,6 +1835,6 @@ public:
   [[nodiscard]] const AMDomain::client::IClientIOPort &IOPort() const override {
     return *io_port_;
   }
-
 };
 } // namespace AMInfra::client
+

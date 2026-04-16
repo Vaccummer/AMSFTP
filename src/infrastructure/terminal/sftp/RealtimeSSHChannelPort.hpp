@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <thread>
 #include <type_traits>
 
@@ -256,7 +257,8 @@ public:
     stop_requested_.store(false, std::memory_order_release);
     (void)ResetEvent(stop_event_);
     (void)ResetEvent(wake_event_);
-    loop_thread_ = std::thread([this]() { RunLoop_(); });
+    loop_thread_ = std::jthread(
+        [this](std::stop_token stop_token) { RunLoop_(stop_token); });
     loop_started_.store(true, std::memory_order_release);
     NotifyState_();
     return OK;
@@ -803,6 +805,9 @@ private:
 
   void RequestStop_() {
     stop_requested_.store(true, std::memory_order_release);
+    if (loop_thread_.joinable()) {
+      loop_thread_.request_stop();
+    }
     if (stop_event_ != nullptr) {
       (void)SetEvent(stop_event_);
     }
@@ -817,11 +822,12 @@ private:
     loop_started_.store(false, std::memory_order_release);
   }
 
-  void RunLoop_() {
+  void RunLoop_(std::stop_token stop_token) {
     loop_running_.store(true, std::memory_order_release);
     NotifyState_();
 
-    while (!stop_requested_.load(std::memory_order_acquire)) {
+    while (!stop_requested_.load(std::memory_order_acquire) &&
+           !stop_token.stop_requested()) {
       bool fg = false;
       std::intptr_t key_handle = -1;
       AMAtomic<std::vector<char>> *key_cache = nullptr;
@@ -1105,7 +1111,7 @@ private:
 
   mutable std::mutex mutex_ = {};
 
-  std::thread loop_thread_ = {};
+  std::jthread loop_thread_ = {};
   std::atomic<bool> loop_started_ = false;
   std::atomic<bool> loop_running_ = false;
   std::atomic<bool> stop_requested_ = false;

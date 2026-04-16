@@ -229,7 +229,7 @@ bool CompletionRuntimeAdapter::HasVarDomain(const std::string &zone) const {
   if (!(all_vars.rcm)) {
     return false;
   }
-  return all_vars.data.find(zone) != all_vars.data.end();
+  return all_vars.data.contains(zone);
 }
 
 std::string CompletionRuntimeAdapter::CurrentVarDomain() const {
@@ -334,4 +334,5 @@ CompletionRuntimeAdapter::FormatPath(const std::string &segment,
 }
 
 } // namespace AMInterface::completion
+
 

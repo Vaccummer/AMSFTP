@@ -241,7 +241,7 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
   }
   for (const auto &candidate_item : *ctx->candidates) {
     const std::string &candidate = candidate_item.first;
-    if (!token_prefix.empty() && candidate.rfind(token_prefix, 0) != 0) {
+    if (!token_prefix.empty() && !candidate.starts_with(token_prefix)) {
       continue;
     }
     const char *help =
@@ -1118,4 +1118,5 @@ PromptIOManager::SecurePrompt(const std::string &prompt) {
 }
 
 } // namespace AMInterface::prompt
+
 

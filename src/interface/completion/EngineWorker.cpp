@@ -358,7 +358,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       return state;
     }
 
-    if (node && node->subcommands.find(text) != node->subcommands.end()) {
+    if (node && node->subcommands.contains(text)) {
       state.command_path += " " + text;
       state.cmd = state.command_path;
       state.has_cmd = true;
@@ -419,8 +419,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       const size_t eq_pos = token.find('=');
       const std::string option_name =
           eq_pos == std::string::npos ? token : token.substr(0, eq_pos);
-      const bool option_exists = node && node->long_options.find(option_name) !=
-                                             node->long_options.end();
+      const bool option_exists = node && node->long_options.contains(option_name);
       if (!option_exists) {
         state.args.push_back(token);
         ++state.arg_index;
@@ -457,7 +456,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       bool all_known = true;
       bool any_value_rule = false;
       for (char c : body) {
-        if (!node || node->short_options.find(c) == node->short_options.end()) {
+        if (!node || !node->short_options.contains(c)) {
           all_known = false;
           break;
         }
@@ -725,7 +724,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     } else if (state.has_module && !state.has_cmd) {
       const auto *node = command_tree->FindNode(state.command_path);
       if (node &&
-          node->subcommands.find(current_prefix) != node->subcommands.end()) {
+          node->subcommands.contains(current_prefix)) {
         state.command_path += " " + current_prefix;
         state.cmd = state.command_path;
         state.has_cmd = true;
@@ -791,8 +790,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
                            ? ctx.token_prefix
                            : ctx.token_prefix.substr(0, eq_pos);
     cursor_valid_long_option =
-        cmd_node && cmd_node->long_options.find(cursor_long_name) !=
-                        cmd_node->long_options.end();
+        cmd_node && cmd_node->long_options.contains(cursor_long_name);
     if (cursor_valid_long_option) {
       cursor_long_value_rule = command_tree->ResolveOptionValueRule(
           state.command_path, cursor_long_name, '\0', 0);
@@ -809,14 +807,13 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     } else if (body.size() == 1) {
       cursor_short_name = body[0];
       cursor_valid_short_option =
-          cmd_node && cmd_node->short_options.find(cursor_short_name) !=
-                          cmd_node->short_options.end();
+          cmd_node && cmd_node->short_options.contains(cursor_short_name);
     } else {
       bool all_known = true;
       bool any_value_rule = false;
       for (char c : body) {
         if (!cmd_node ||
-            cmd_node->short_options.find(c) == cmd_node->short_options.end()) {
+            !cmd_node->short_options.contains(c)) {
           all_known = false;
           break;
         }
@@ -1229,3 +1226,4 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
 }
 
 } // namespace AMInterface::completer
+

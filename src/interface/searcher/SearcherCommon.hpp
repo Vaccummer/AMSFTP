@@ -248,7 +248,7 @@ BuildGeneralMatch(const std::vector<std::string> &keys,
 
   // Case-sensitive: prefix-starts-with first.
   out = collect_if(
-      [&](const std::string &key) { return key.rfind(prefix, 0) == 0; }, 0);
+      [&](const std::string &key) { return key.starts_with(prefix); }, 0);
   if (!out.empty()) {
     return out;
   }
@@ -269,7 +269,7 @@ BuildGeneralMatch(const std::vector<std::string> &keys,
   const std::string lower_prefix = AMStr::lowercase(prefix);
   out = collect_if(
       [&](const std::string &key) {
-        return AMStr::lowercase(key).rfind(lower_prefix, 0) == 0;
+        return AMStr::lowercase(key).starts_with(lower_prefix);
       },
       20);
   if (!out.empty()) {
@@ -416,3 +416,4 @@ inline bool IsPathSemanticState(const AMCompletionContext &ctx,
 }
 
 } // namespace AMInterface::searcher::detail
+

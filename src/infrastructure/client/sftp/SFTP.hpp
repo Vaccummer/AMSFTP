@@ -19,6 +19,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1007,7 +1008,7 @@ public:
     StoreInitContext_(std::move(is_interrupted_cb), timeout_ms, start_time);
     if (!session) {
       is_init = false;
-      return {EC::NoSession, __func__, "", "Session is null"};
+      return {EC::NoSession, "", "", "Session is null"};
     }
     if (channel) {
       if (!closed) {
@@ -1142,7 +1143,7 @@ protected:
 
   struct KeepaliveRuntime final {
     std::mutex lifecycle_mtx = {};
-    std::thread worker = {};
+    std::jthread worker = {};
     std::mutex wait_mtx = {};
     std::condition_variable cv = {};
     std::atomic<bool> shutdown{false};
@@ -1155,6 +1156,9 @@ protected:
       {
         std::lock_guard<std::mutex> lock(lifecycle_mtx);
         shutdown.store(true, std::memory_order_release);
+      }
+      if (worker.joinable()) {
+        worker.request_stop();
       }
       cv.notify_all();
       if (worker.joinable()) {
@@ -1234,7 +1238,8 @@ protected:
       return;
     }
     keepalive_.shutdown.store(false, std::memory_order_release);
-    keepalive_.worker = std::thread(&SFTPSessionBase::KeepaliveLoop_, this);
+    keepalive_.worker = std::jthread(
+        [this](std::stop_token stop_token) { KeepaliveLoop_(stop_token); });
   }
 
   [[nodiscard]] bool ShouldRunKeepalive_() const {
@@ -1274,9 +1279,10 @@ protected:
     return OK;
   }
 
-  void KeepaliveLoop_() {
+  void KeepaliveLoop_(std::stop_token stop_token) {
     while (true) {
-      if (keepalive_.shutdown.load(std::memory_order_acquire)) {
+      if (keepalive_.shutdown.load(std::memory_order_acquire) ||
+          stop_token.stop_requested()) {
         return;
       }
 
@@ -1286,8 +1292,10 @@ protected:
           keepalive_.wake_seq.load(std::memory_order_acquire);
       std::unique_lock<std::mutex> wait_lock(keepalive_.wait_mtx);
       (void)keepalive_.cv.wait_for(
-          wait_lock, std::chrono::seconds(interval_s), [this, wake_seq]() {
-            if (keepalive_.shutdown.load(std::memory_order_acquire)) {
+          wait_lock, std::chrono::seconds(interval_s),
+          [this, wake_seq, &stop_token]() {
+            if (keepalive_.shutdown.load(std::memory_order_acquire) ||
+                stop_token.stop_requested()) {
               return true;
             }
             return keepalive_.wake_seq.load(std::memory_order_acquire) !=
@@ -1295,7 +1303,8 @@ protected:
           });
       wait_lock.unlock();
 
-      if (keepalive_.shutdown.load(std::memory_order_acquire)) {
+      if (keepalive_.shutdown.load(std::memory_order_acquire) ||
+          stop_token.stop_requested()) {
         return;
       }
       if (!ShouldRunKeepalive_()) {
@@ -1495,7 +1504,7 @@ private:
     }
     ECMData<AMDomain::filesystem::CheckResult> res;
     res.data = AMDomain::filesystem::CheckResult{};
-    res.rcm = {EC::NoConnection, __func__, "", "Connection closed"};
+    res.rcm = {EC::NoConnection, "", "", "Connection closed"};
     res.data.status = AMDomain::client::ClientStatus::NoConnection;
     state_atomic_.lock().store(res);
   }
@@ -1835,10 +1844,10 @@ public:
                   const AMDomain::client::ClientControlComponent &control) {
     EnsureKeepaliveWorkerStarted_();
     if (control.IsTimeout()) {
-      return {EC::OperationTimeout, __func__, "", "Operation timed out"};
+      return {EC::OperationTimeout, "", "", "Operation timed out"};
     }
     if (control.IsInterrupted()) {
-      return {EC::Terminate, __func__, "", "Interrupted by user"};
+      return {EC::Terminate, "", "", "Interrupted by user"};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     ConRequest request = request_atomic_.lock().load();
@@ -1890,17 +1899,17 @@ public:
     sock = connector.sock;
 
     if (control.IsInterrupted()) {
-      return {EC::Terminate, __func__, "", "Connection interrupted"};
+      return {EC::Terminate, "", "", "Connection interrupted"};
     }
     if (control.IsTimeout()) {
-      return {EC::OperationTimeout, __func__, "", "Connection timed out"};
+      return {EC::OperationTimeout, "", "", "Connection timed out"};
     }
 
     session = libssh2_session_init();
     if (!session) {
       trace(TraceLevel::Critical, EC::SessionCreateFailed, "",
             "libssh2_session_init", "Session initialization failed");
-      return {EC::SessionCreateFailed, __func__, "",
+      return {EC::SessionCreateFailed, "", "",
               "Libssh2 Session initialization failed"};
     }
     libssh2_session_set_blocking(session, 0);
@@ -1924,16 +1933,16 @@ public:
         Disconnect();
         switch (wr) {
         case WaitResult::Timeout:
-          return {EC::OperationTimeout, __func__, "",
+          return {EC::OperationTimeout, "", "",
                   "Connection timed out during handshake"};
         case WaitResult::Interrupted:
-          return {EC::Terminate, __func__, "",
+          return {EC::Terminate, "", "",
                   "Connection interrupted during handshake"};
         case WaitResult::Error:
-          return {EC::SocketRecvError, __func__, "",
+          return {EC::SocketRecvError, "", "",
                   "Socket error during handshake"};
         default:
-          return {EC::UnknownError, __func__, "",
+          return {EC::UnknownError, "", "",
                   "Connection interrupted during handshake"};
         }
       }
@@ -1972,7 +1981,7 @@ public:
     }
     auth_list = auth_list_res.value;
     if (auth_list == nullptr) {
-      rcm = {EC::AuthFailed, __func__, "",
+      rcm = {EC::AuthFailed, "", "",
              "Failed to query supported auth methods"};
       trace(TraceLevel::Critical, rcm.code, request.username,
             "libssh2_userauth_list", rcm.error);
@@ -1990,7 +1999,7 @@ public:
       trace_connect_state(detail::BuildPrivateKeyStateInfo_(request.keyfile),
                           request.username);
       if (control.IsInterrupted()) {
-        return {EC::Terminate, __func__, "", "Authentication interrupted"};
+        return {EC::Terminate, "", "", "Authentication interrupted"};
       }
       auto auth_res = nb_call(death_clock, [&]() {
         return libssh2_userauth_publickey_fromfile(
@@ -2020,7 +2029,7 @@ public:
     if (!stored_password_enc.empty() && password_auth) {
       trace_connect_state("authorize with password", request.username);
       if (control.IsInterrupted()) {
-        return {EC::Terminate, __func__, "", "Authentication interrupted"};
+        return {EC::Terminate, "", "", "Authentication interrupted"};
       }
       std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
       auto auth_res = nb_call(death_clock, [&]() {
@@ -2052,7 +2061,7 @@ public:
     if (!private_keys.empty()) {
       for (const auto &private_key : private_keys) {
         if (control.IsInterrupted()) {
-          return {EC::Terminate, __func__, "", "Authentication interrupted"};
+          return {EC::Terminate, "", "", "Authentication interrupted"};
         }
         if (private_key == request.keyfile) {
           continue;
@@ -2093,7 +2102,7 @@ public:
       int trial_times = 0;
       while (trial_times < 2) {
         if (control.IsInterrupted()) {
-          return {EC::Terminate, __func__, "", "Authentication interrupted"};
+          return {EC::Terminate, "", "", "Authentication interrupted"};
         }
         auto [password_opt, cb_ecm] =
             CallCallbackSafeRet<std::optional<std::string>>(
@@ -2520,7 +2529,7 @@ public:
 
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, "", "", "SFTP not initialized"}};
     }
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     NBResult<int> stat_res;
@@ -2557,7 +2566,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, "", "", "SFTP not initialized"}};
     }
 
     LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -2650,7 +2659,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, "", "", "SFTP not initialized"}};
     }
 
     LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
@@ -2735,7 +2744,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, "", "", "SFTP not initialized"}};
     }
     detail::DeathClockProtocol death_clock(control);
     auto nb_res = nb_call(death_clock, [&] {
@@ -2829,7 +2838,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, "", "", "SFTP not initialized"}};
     }
     detail::DeathClockProtocol death_clock(control);
     auto nb_res = nb_call(death_clock, [&] {
@@ -2855,7 +2864,7 @@ public:
 
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!sftp) {
-      return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, "", "", "SFTP not initialized"}};
     }
     detail::DeathClockProtocol death_clock(control);
     auto nb_res = nb_call(death_clock, [&] {
@@ -2891,7 +2900,7 @@ public:
       }
     }
     if (!sftp) {
-      return {ECM{EC::NoConnection, __func__, "", "SFTP not initialized"}};
+      return {ECM{EC::NoConnection, "", "", "SFTP not initialized"}};
     }
     detail::DeathClockProtocol death_clock(control);
     auto nb_res = nb_call(death_clock, [&] {
@@ -3110,7 +3119,7 @@ public:
   }
 
   std::string StrUid(const long &uid) {
-    if (user_id_map.find(uid) != user_id_map.end()) {
+    if (user_id_map.contains(uid)) {
       return user_id_map[uid];
     }
 
@@ -3159,3 +3168,4 @@ public:
   }
 };
 } // namespace AMInfra::client::SFTP
+

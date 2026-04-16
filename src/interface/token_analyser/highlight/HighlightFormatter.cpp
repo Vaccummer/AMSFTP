@@ -292,19 +292,19 @@ bool IsValidOptionToken_(const std::string &token, const CommandNode *node) {
   if (!node || token.size() < 2 || token[0] != '-') {
     return false;
   }
-  if (token.rfind("--", 0) == 0) {
+  if (token.starts_with("--")) {
     std::string name = token;
     const size_t eq = token.find('=');
     if (eq != std::string::npos) {
       name = token.substr(0, eq);
     }
-    return node->long_options.find(name) != node->long_options.end();
+    return node->long_options.contains(name);
   }
   if (token.size() < 2) {
     return false;
   }
   for (size_t i = 1; i < token.size(); ++i) {
-    if (node->short_options.find(token[i]) == node->short_options.end()) {
+    if (!node->short_options.contains(token[i])) {
       return false;
     }
   }
@@ -606,7 +606,7 @@ public:
           }
           continue;
         }
-        if (node && node->subcommands.find(text) != node->subcommands.end()) {
+        if (node && node->subcommands.contains(text)) {
           apply_range(token.start, token.end, AMTokenType::Command);
           path += " " + text;
           node = command_tree_->FindNode(path);
@@ -750,4 +750,5 @@ void FormatHighlightedInput(
 }
 
 } // namespace AMInterface::parser::highlight
+
 

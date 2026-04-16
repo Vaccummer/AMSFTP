@@ -12,7 +12,7 @@ namespace task_arg_detail {
 inline ECM UnsupportedCommand(AMInterface::prompt::AMPromptIOManager &prompt,
                               const std::string &message) {
   (void)prompt;
-  const ECM rcm = Err(EC::OperationUnsupported, __func__, "", message);
+  const ECM rcm = Err(EC::OperationUnsupported, "", "", message);
   return rcm;
 }
 
@@ -96,7 +96,7 @@ struct TaskThreadArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     if (!managers.domain.transfer_pool.IsReady()) {
-      return Err(EC::InvalidHandle, __func__, "transfer_pool",
+      return Err(EC::InvalidHandle, "", "transfer_pool",
                  "Transfer pool is not initialized");
     }
 
@@ -110,7 +110,7 @@ struct TaskThreadArgs : BaseArgStruct {
     }
 
     if (num <= 0) {
-      return Err(EC::InvalidArg, __func__, std::to_string(num),
+      return Err(EC::InvalidArg, "", std::to_string(num),
                  "Thread num must be > 0");
     }
 
@@ -160,7 +160,7 @@ struct TaskControlArgs : BaseArgStruct {
     case TaskControlArgs::Action::Resume:
       return managers.interfaces.transfer_service->TaskResume(arg);
     default:
-      return Err(EC::InvalidArg, __func__, "", "Unknown task control action");
+      return Err(EC::InvalidArg, "", "", "Unknown task control action");
     }
   }
   void reset() override { ids.clear(); }
@@ -194,3 +194,4 @@ struct TaskRetryArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
+

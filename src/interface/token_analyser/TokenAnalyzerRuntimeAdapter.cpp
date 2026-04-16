@@ -200,7 +200,7 @@ bool TokenAnalyzerRuntimeAdapter::HasVarDomain(const std::string &zone) const {
   if (!(all_vars.rcm)) {
     return false;
   }
-  return all_vars.data.find(zone) != all_vars.data.end();
+  return all_vars.data.contains(zone);
 }
 
 std::string TokenAnalyzerRuntimeAdapter::CurrentVarDomain() const {
@@ -256,7 +256,7 @@ TokenAnalyzerRuntimeAdapter::StatPath(AMDomain::client::ClientHandle client,
                                       const std::string &abs_path,
                                       int timeout_ms) const {
   if (!client) {
-    return {PathInfo{}, Err(EC::InvalidHandle, __func__, "", "client is null")};
+    return {PathInfo{}, Err(EC::InvalidHandle, "", "", "client is null")};
   }
   auto control = AMDomain::client::ClientControlComponent(nullptr, timeout_ms);
   auto stat_result = client->IOPort().stat({abs_path, false}, control);
@@ -369,3 +369,4 @@ std::string TokenAnalyzerRuntimeAdapter::ResolvePathHighlightStyle(
 }
 
 } // namespace AMInterface::parser
+

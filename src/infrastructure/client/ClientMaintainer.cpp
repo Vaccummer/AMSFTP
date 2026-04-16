@@ -229,8 +229,8 @@ void ClientMaintainer::StartHeartbeat() {
     heartbeat_thread_.join();
   }
   heartbeat_state_.store(HeartbeatState::Running, std::memory_order_release);
-  heartbeat_thread_ =
-      std::jthread([this](std::stop_token stop_token) { HeartbeatLoop_(stop_token); });
+  heartbeat_thread_ = std::jthread(
+      [this](std::stop_token stop_token) { HeartbeatLoop_(stop_token); });
 }
 
 void ClientMaintainer::HeartbeatLoop_(std::stop_token stop_token) {

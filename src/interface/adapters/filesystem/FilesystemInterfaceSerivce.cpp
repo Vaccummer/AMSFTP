@@ -441,14 +441,14 @@ FilesystemInterfaceSerivce::MatchOne(const PathTarget &path) const {
   }
   if (matched_count > 1) {
     return {PathTarget{},
-            Err(EC::InvalidArg, __func__, "",
+            Err(EC::InvalidArg, "", "",
                 AMStr::fmt("Wildcard path must match exactly one target: {}@{}",
                            path.nickname, path.path))};
   }
   if (!find_result.rcm) {
     return {PathTarget{}, find_result.rcm};
   }
-  return {PathTarget{}, Err(EC::InvalidArg, __func__, "",
+  return {PathTarget{}, Err(EC::InvalidArg, "", "",
                             AMStr::fmt("Wildcard path matched no target: {}@{}",
                                        path.nickname, path.path))};
 }
@@ -458,7 +458,7 @@ ECM FilesystemInterfaceSerivce::Stat(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.raw_paths.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "No path is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -470,7 +470,7 @@ ECM FilesystemInterfaceSerivce::Stat(
   ECM status = OK;
   for (const auto &raw_path : arg.raw_paths) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     auto split_result = SplitRawTarget(raw_path);
     if (!(split_result.rcm)) {
@@ -487,7 +487,7 @@ ECM FilesystemInterfaceSerivce::Stat(
 
   for (const auto &path : valid_paths) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
 
     auto stat_result = filesystem_service_.Stat(path, control, arg.trace_link);
@@ -507,7 +507,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.raw_paths.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "No path is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -519,7 +519,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
   ECM status = OK;
   for (const auto &raw_path : arg.raw_paths) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     auto split_result = SplitRawTarget(raw_path);
     if (!(split_result.rcm)) {
@@ -536,10 +536,10 @@ ECM FilesystemInterfaceSerivce::GetSize(
 
   for (const auto &path : valid_paths) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     PathTarget target = path;
@@ -689,7 +689,7 @@ ECM FilesystemInterfaceSerivce::Realpath(
   if (!(client_result.rcm) || !client_result.data) {
     const ECM rcm = !(client_result.rcm)
                         ? client_result.rcm
-                        : Err(EC::ClientNotFound, __func__,
+                        : Err(EC::ClientNotFound, "",
                               split_result.data.nickname, "Client not found");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -750,10 +750,10 @@ ECM FilesystemInterfaceSerivce::Tree(
   };
   const auto stop_error = [&control]() -> ECM {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
     return OK;
   };
@@ -780,7 +780,7 @@ ECM FilesystemInterfaceSerivce::Tree(
     return root_stat.rcm;
   }
   if (arg.only_dir && root_stat.data.type != PathType::DIR) {
-    const ECM rcm = Err(EC::NotADirectory, __func__, "",
+    const ECM rcm = Err(EC::NotADirectory, "", "",
                         AMStr::fmt("Not a directory: {}",
                                    interface_print::BuildPathLabel(target)));
     print_error(interface_print::BuildPathLabel(target), rcm);
@@ -892,7 +892,7 @@ ECM FilesystemInterfaceSerivce::TestRTT(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.times <= 0) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "times must be > 0");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "times must be > 0");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -939,7 +939,7 @@ ECM FilesystemInterfaceSerivce::Rename(
   }
   PathTarget dst = std::move(dst_split.data);
   if (AMDomain::filesystem::services::HasWildcard(dst.path)) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "",
+    const ECM rcm = Err(EC::InvalidArg, "", "",
                         "Destination wildcard is not supported");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
@@ -962,7 +962,7 @@ ECM FilesystemInterfaceSerivce::Rename(
     const bool approved = prompt_io_manager_.PromptYesNo(prompt, &canceled);
     if (!approved) {
       const ECM cancel_rcm =
-          Err(EC::ConfigCanceled, __func__, "", "Rename canceled");
+          Err(EC::ConfigCanceled, "", "", "Rename canceled");
       prompt_io_manager_.ErrorFormat(cancel_rcm);
       return cancel_rcm;
     }
@@ -1206,7 +1206,7 @@ ECM FilesystemInterfaceSerivce::Saferm(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.targets.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "No target is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1217,10 +1217,10 @@ ECM FilesystemInterfaceSerivce::Saferm(
   ECM status = OK;
   for (const auto &token : arg.targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     auto split_result = SplitRawTarget(token);
@@ -1244,7 +1244,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.targets.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "No target is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1257,10 +1257,10 @@ ECM FilesystemInterfaceSerivce::Rmfile(
 
   for (const auto &token : arg.targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     auto split_result = SplitRawTarget(token);
@@ -1310,7 +1310,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
   const bool confirmed = prompt_io_manager_.PromptYesNo(
       "Are you sure to remove these file paths? (y/n): ", &canceled);
   if (canceled || !confirmed) {
-    return Err(EC::ConfigCanceled, __func__, "", "rmfile canceled");
+    return Err(EC::ConfigCanceled, "", "", "rmfile canceled");
   }
 
   auto execute_result = filesystem_service_.ExecuteRmfile(
@@ -1325,7 +1325,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.targets.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "No target is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1338,10 +1338,10 @@ ECM FilesystemInterfaceSerivce::Rmdir(
 
   for (const auto &token : arg.targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     auto split_result = SplitRawTarget(token);
@@ -1381,7 +1381,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.targets.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "No target is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     if (!arg.quiet) {
       prompt_io_manager_.ErrorFormat(rcm);
     }
@@ -1395,10 +1395,10 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
 
   for (const auto &token : arg.targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, __func__, "", "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, __func__, "", "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     auto split_result = SplitRawTarget(token);
@@ -1437,7 +1437,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
   const bool confirmed = prompt_io_manager_.PromptYesNo(
       "Are you sure to permanantly remove these paths? (y/n): ", &canceled);
   if (canceled || !confirmed) {
-    return Err(EC::ConfigCanceled, __func__, "", "permanent remove canceled");
+    return Err(EC::ConfigCanceled, "", "", "permanent remove canceled");
   }
 
   bool cursor_hidden = false;
@@ -1638,7 +1638,7 @@ ECM FilesystemInterfaceSerivce::Mkdirs(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.raw_paths.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, __func__, "", "No path is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1650,7 +1650,7 @@ ECM FilesystemInterfaceSerivce::Mkdirs(
   ECM status = OK;
   for (const auto &raw_path : arg.raw_paths) {
     if (control.IsInterrupted()) {
-      return {EC::Terminate, __func__, "", "Interrupted by user"};
+      return {EC::Terminate, "", "", "Interrupted by user"};
     }
     auto split_result = SplitRawTarget(raw_path);
     if (!(split_result.rcm)) {
@@ -1667,7 +1667,7 @@ ECM FilesystemInterfaceSerivce::Mkdirs(
 
   for (const auto &path : valid_paths) {
     if (control.IsInterrupted()) {
-      return {EC::Terminate, __func__, "", "Interrupted by user"};
+      return {EC::Terminate, "", "", "Interrupted by user"};
     }
     ECM rcm = filesystem_service_.Mkdirs(path, control);
     if (!(rcm)) {
@@ -1678,3 +1678,4 @@ ECM FilesystemInterfaceSerivce::Mkdirs(
   return status;
 }
 } // namespace AMInterface::filesystem
+

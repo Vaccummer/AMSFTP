@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <stop_token>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -404,7 +405,7 @@ private:
   /**
    * @brief Async worker loop body.
    */
-  void AsyncWorkerLoop_();
+  void AsyncWorkerLoop_(std::stop_token stop_token);
 
   /**
    * @brief Push an async task into the worker queue.
@@ -470,7 +471,7 @@ private:
   std::mutex async_queue_mtx_;
   std::condition_variable async_queue_cv_;
   std::deque<AMCompletionAsyncTask> async_queue_;
-  std::vector<std::thread> async_workers_;
+  std::vector<std::jthread> async_workers_;
 
   const AMInterface::parser::CommandNode *command_tree_ = nullptr;
   AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer_ = nullptr;
