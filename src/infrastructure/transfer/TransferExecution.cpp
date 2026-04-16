@@ -1260,31 +1260,32 @@ namespace AMInfra::transfer {
 TransferExecutionEngine::TransferExecutionEngine(
     const TransferBufferPolicy &buffer_policy)
     : buffer_policy_(buffer_policy) {
-  read_thread_ = std::thread([this]() { ReadLoop_(); });
+  read_thread_ =
+      std::jthread([this](std::stop_token stop_token) { ReadLoop_(stop_token); });
 }
 
 /**
  * @brief Destroy one transfer execution engine.
  */
 TransferExecutionEngine::~TransferExecutionEngine() {
-  read_running_.store(false, std::memory_order_release);
+  if (read_thread_.joinable()) {
+    read_thread_.request_stop();
+  }
   read_queue_cv_.notify_all();
   if (read_thread_.joinable()) {
     read_thread_.join();
   }
 }
 
-void TransferExecutionEngine::ReadLoop_() {
+void TransferExecutionEngine::ReadLoop_(std::stop_token stop_token) {
   while (true) {
     ReadJob job = {};
     {
       std::unique_lock<std::mutex> lock(read_queue_mtx_);
-      read_queue_cv_.wait(lock, [this]() {
-        return !read_running_.load(std::memory_order_acquire) ||
-               !read_queue_.empty();
+      read_queue_cv_.wait(lock, [this, &stop_token]() {
+        return stop_token.stop_requested() || !read_queue_.empty();
       });
-      if (!read_running_.load(std::memory_order_acquire) &&
-          read_queue_.empty()) {
+      if (stop_token.stop_requested() && read_queue_.empty()) {
         return;
       }
       job = std::move(read_queue_.front());
@@ -1860,10 +1861,14 @@ void TransferExecutionPool::RegisterTask(const TaskHandle &task_info,
   (*task_registry)[task_info->id] = task_info;
 }
 std::optional<std::pair<TaskId, TaskHandle>>
-TransferExecutionPool::DequeueTask(size_t thread_index) {
+TransferExecutionPool::DequeueTask(std::stop_token stop_token,
+                                   size_t thread_index) {
   while (true) {
     std::unique_lock<std::mutex> lock(queue_mtx_);
-    queue_cv_.wait(lock, [this, thread_index]() {
+    queue_cv_.wait(lock, [this, &stop_token, thread_index]() {
+      if (stop_token.stop_requested()) {
+        return true;
+      }
       if (!running_.load(std::memory_order_acquire)) {
         return true;
       }
@@ -1879,6 +1884,10 @@ TransferExecutionPool::DequeueTask(size_t thread_index) {
       }
       return HasPendingTasksUnsafe_();
     });
+
+    if (stop_token.stop_requested()) {
+      return std::nullopt;
+    }
 
     if (!running_.load(std::memory_order_relaxed) &&
         !HasPendingTasksUnsafe_()) {
@@ -1966,9 +1975,11 @@ void TransferExecutionPool::ClearConducting(size_t thread_index) {
   }
   RecomputeDesiredThreadCount_();
 }
-void TransferExecutionPool::WorkerLoop(size_t thread_index) {
-  while (running_.load(std::memory_order_relaxed)) {
-    auto task_opt = DequeueTask(thread_index);
+void TransferExecutionPool::WorkerLoop(std::stop_token stop_token,
+                                       size_t thread_index) {
+  while (running_.load(std::memory_order_relaxed) &&
+         !stop_token.stop_requested()) {
+    auto task_opt = DequeueTask(stop_token, thread_index);
     if (!task_opt.has_value()) {
       break;
     }
@@ -2198,7 +2209,8 @@ void TransferExecutionPool::EnsureWorkerCapacity_(size_t worker_count) {
 
   const size_t begin = worker_threads_.size();
   for (size_t idx = begin; idx < worker_count; ++idx) {
-    worker_threads_.emplace_back([this, idx]() { WorkerLoop(idx); });
+    worker_threads_.emplace_back(
+        [this, idx](std::stop_token stop_token) { WorkerLoop(stop_token, idx); });
   }
 }
 
@@ -2217,31 +2229,40 @@ void TransferExecutionPool::StartHeartbeat_() {
   if (heartbeat_running_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
-  heartbeat_thread_ = std::thread([this]() { HeartbeatLoop_(); });
+  heartbeat_thread_ = std::jthread(
+      [this](std::stop_token stop_token) { HeartbeatLoop_(stop_token); });
 }
 
 void TransferExecutionPool::StopHeartbeat_() {
   heartbeat_running_.store(false, std::memory_order_release);
+  if (heartbeat_thread_.joinable()) {
+    heartbeat_thread_.request_stop();
+  }
   heartbeat_cv_.notify_all();
   if (heartbeat_thread_.joinable()) {
     heartbeat_thread_.join();
   }
 }
 
-void TransferExecutionPool::HeartbeatLoop_() {
+void TransferExecutionPool::HeartbeatLoop_(std::stop_token stop_token) {
   while (running_.load(std::memory_order_acquire) &&
-         heartbeat_running_.load(std::memory_order_acquire)) {
+         heartbeat_running_.load(std::memory_order_acquire) &&
+         !stop_token.stop_requested()) {
     const int interval_s =
         std::max(1, heartbeat_interval_s_.load(std::memory_order_relaxed));
     std::unique_lock<std::mutex> lock(heartbeat_wait_mtx_);
     (void)heartbeat_cv_.wait_for(
-        lock, std::chrono::seconds(interval_s), [this]() {
+        lock, std::chrono::seconds(interval_s), [this, &stop_token]() {
+          if (stop_token.stop_requested()) {
+            return true;
+          }
           return !running_.load(std::memory_order_acquire) ||
                  !heartbeat_running_.load(std::memory_order_acquire);
         });
     lock.unlock();
     if (!running_.load(std::memory_order_acquire) ||
-        !heartbeat_running_.load(std::memory_order_acquire)) {
+        !heartbeat_running_.load(std::memory_order_acquire) ||
+        stop_token.stop_requested()) {
       break;
     }
     HeartbeatTick_();

@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -35,13 +36,13 @@ private:
   std::condition_variable heartbeat_cv_;
 
   std::mutex heartbeat_thread_mtx_;
-  std::thread heartbeat_thread_;
+  std::jthread heartbeat_thread_;
 
   std::atomic<HeartbeatState> heartbeat_state_{HeartbeatState::Stopped};
   std::atomic<int> heartbeat_interval_s_{60};
   std::atomic<int> check_timeout_ms_{100};
 
-  void HeartbeatLoop_();
+  void HeartbeatLoop_(std::stop_token stop_token);
 
 public:
   ClientMaintainer(int heartbeat_interval_s = 60, int check_timeout_ms = 100,

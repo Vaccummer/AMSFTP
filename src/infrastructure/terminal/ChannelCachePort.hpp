@@ -348,8 +348,7 @@ public:
 private:
   [[nodiscard]] static bool StartsWith_(std::string_view full,
                                         std::string_view prefix) {
-    return full.size() >= prefix.size() &&
-           full.compare(0, prefix.size(), prefix.data(), prefix.size()) == 0;
+    return full.starts_with(prefix);
   }
 
   [[nodiscard]] static ScreenToggleMatch_
@@ -371,7 +370,7 @@ private:
     for (auto const &entry : kScreenToggles) {
       std::string_view const seq = entry.first;
       if (remain.size() >= seq.size()) {
-        if (remain.compare(0, seq.size(), seq.data(), seq.size()) == 0) {
+        if (remain.starts_with(seq)) {
           out.matched = true;
           out.to_alternate = entry.second;
           out.length = seq.size();

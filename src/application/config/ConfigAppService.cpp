@@ -11,17 +11,11 @@ using DocumentKind = AMDomain::config::DocumentKind;
 using ConfigBackupSet = AMDomain::config::ConfigBackupSet;
 
 bool EndsWith_(const std::string &text, const std::string &suffix) {
-  if (text.size() < suffix.size()) {
-    return false;
-  }
-  return text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+  return text.ends_with(suffix);
 }
 
 bool StartsWith_(const std::string &text, const std::string &prefix) {
-  if (text.size() < prefix.size()) {
-    return false;
-  }
-  return text.compare(0, prefix.size(), prefix) == 0;
+  return text.starts_with(prefix);
 }
 
 bool IsLegacyBackupFileName_(const std::string &name) {
@@ -318,15 +312,13 @@ ConfigAppService::RegisterSyncPort(IConfigSyncPort *port) {
 
 ECM ConfigAppService::UnregisterSyncPort(SyncParticipantId participant_id) {
   std::lock_guard<std::mutex> lock(sync_participants_mtx_);
-  const auto it =
-      std::remove_if(sync_participants_.begin(), sync_participants_.end(),
-                     [participant_id](const SyncParticipant &participant) {
-                       return participant.id == participant_id;
-                     });
-  if (it == sync_participants_.end()) {
+  const auto erased = std::erase_if(
+      sync_participants_, [participant_id](const SyncParticipant &participant) {
+        return participant.id == participant_id;
+      });
+  if (erased == 0) {
     return Err(EC::InvalidArg, __func__, "", "sync port not found");
   }
-  sync_participants_.erase(it, sync_participants_.end());
   return OK;
 }
 
@@ -521,4 +513,3 @@ ConfigAppService::ResolveBackupPath_(const BackupTargets &targets,
   return {};
 }
 } // namespace AMApplication::config
-

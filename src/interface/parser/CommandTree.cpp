@@ -167,7 +167,7 @@ CommandNode *CommandNode::CreateNode(const CommandPath &path,
  * @brief Return true when name is top-level command.
  */
 bool CommandNode::IsTopCommand(const std::string &command) const {
-  return subcommands.find(command) != subcommands.end();
+  return subcommands.contains(command);
 }
 
 /**

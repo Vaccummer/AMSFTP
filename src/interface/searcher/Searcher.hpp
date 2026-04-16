@@ -172,9 +172,7 @@ private:
     /**
      * @brief Compare cache keys.
      */
-    bool operator==(const CacheKey &other) const {
-      return nickname == other.nickname && dir == other.dir;
-    }
+    bool operator==(const CacheKey &other) const = default;
   };
 
   /**

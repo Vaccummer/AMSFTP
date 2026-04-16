@@ -199,6 +199,9 @@ void ClientMaintainer::TerminateHeartbeat() {
   heartbeat_state_.store(HeartbeatState::Terminated, std::memory_order_release);
   heartbeat_cv_.notify_all();
   if (heartbeat_thread_.joinable()) {
+    heartbeat_thread_.request_stop();
+  }
+  if (heartbeat_thread_.joinable()) {
     heartbeat_thread_.join();
   }
 }
@@ -222,14 +225,19 @@ void ClientMaintainer::StartHeartbeat() {
     return;
   }
   if (heartbeat_thread_.joinable()) {
+    heartbeat_thread_.request_stop();
     heartbeat_thread_.join();
   }
   heartbeat_state_.store(HeartbeatState::Running, std::memory_order_release);
-  heartbeat_thread_ = std::thread([this]() { HeartbeatLoop_(); });
+  heartbeat_thread_ =
+      std::jthread([this](std::stop_token stop_token) { HeartbeatLoop_(stop_token); });
 }
 
-void ClientMaintainer::HeartbeatLoop_() {
+void ClientMaintainer::HeartbeatLoop_(std::stop_token stop_token) {
   while (true) {
+    if (stop_token.stop_requested()) {
+      return;
+    }
     const HeartbeatState state =
         heartbeat_state_.load(std::memory_order_acquire);
     if (state == HeartbeatState::Terminated) {
@@ -237,11 +245,17 @@ void ClientMaintainer::HeartbeatLoop_() {
     }
     if (state == HeartbeatState::Paused) {
       std::unique_lock<std::mutex> wait_lock(heartbeat_wait_mtx_);
-      (void)heartbeat_cv_.wait(wait_lock, [this]() {
+      (void)heartbeat_cv_.wait(wait_lock, [this, &stop_token]() {
+        if (stop_token.stop_requested()) {
+          return true;
+        }
         const HeartbeatState s =
             heartbeat_state_.load(std::memory_order_acquire);
         return s != HeartbeatState::Paused;
       });
+      if (stop_token.stop_requested()) {
+        return;
+      }
       continue;
     }
     if (state != HeartbeatState::Running) {
@@ -252,6 +266,9 @@ void ClientMaintainer::HeartbeatLoop_() {
     const auto callback = disconnect_cb_.lock().load();
     const int timeout_ms = check_timeout_ms_.load(std::memory_order_acquire);
     for (const auto &entry : clients_snapshot) {
+      if (stop_token.stop_requested()) {
+        return;
+      }
       if (heartbeat_state_.load(std::memory_order_acquire) !=
           HeartbeatState::Running) {
         break;
@@ -276,10 +293,16 @@ void ClientMaintainer::HeartbeatLoop_() {
         heartbeat_interval_s_.load(std::memory_order_acquire));
     std::unique_lock<std::mutex> wait_lock(heartbeat_wait_mtx_);
     (void)heartbeat_cv_.wait_for(
-        wait_lock, std::chrono::seconds(interval_s), [this]() {
+        wait_lock, std::chrono::seconds(interval_s), [this, &stop_token]() {
+          if (stop_token.stop_requested()) {
+            return true;
+          }
           return heartbeat_state_.load(std::memory_order_acquire) !=
                  HeartbeatState::Running;
         });
+    if (stop_token.stop_requested()) {
+      return;
+    }
   }
 }
 } // namespace AMInfra::client::maintainer

@@ -4,24 +4,25 @@
  * @brief Start worker thread when not already running.
  */
 void AMInfraAsyncWriter::Start() {
-  if (running_.load(std::memory_order_relaxed)) {
+  if (running_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
-  shutdown_requested_.store(false, std::memory_order_relaxed);
-  running_.store(true, std::memory_order_relaxed);
-  worker_ = std::thread([this]() { Loop_(); });
+  worker_ = std::jthread(
+      [this](std::stop_token stop_token) { Loop_(stop_token); });
 }
 
 /**
  * @brief Stop worker thread and wait for completion.
  */
 void AMInfraAsyncWriter::Stop() {
-  shutdown_requested_.store(true, std::memory_order_relaxed);
+  running_.store(false, std::memory_order_release);
+  if (worker_.joinable()) {
+    worker_.request_stop();
+  }
   cv_.notify_all();
   if (worker_.joinable()) {
     worker_.join();
   }
-  running_.store(false, std::memory_order_relaxed);
   WaitIdle();
 }
 
@@ -61,17 +62,15 @@ void AMInfraAsyncWriter::WaitIdle() {
 /**
  * @brief Worker loop that drains queued tasks.
  */
-void AMInfraAsyncWriter::Loop_() {
+void AMInfraAsyncWriter::Loop_(std::stop_token stop_token) {
   while (true) {
     Task task;
     {
       std::unique_lock<std::mutex> lock(mtx_);
-      cv_.wait(lock, [this]() {
-        return shutdown_requested_.load(std::memory_order_relaxed) ||
-               !queue_.empty();
+      cv_.wait(lock, [this, &stop_token]() {
+        return stop_token.stop_requested() || !queue_.empty();
       });
-      if (shutdown_requested_.load(std::memory_order_relaxed) &&
-          queue_.empty()) {
+      if (stop_token.stop_requested() && queue_.empty()) {
         break;
       }
       task = std::move(queue_.front());
@@ -97,5 +96,5 @@ void AMInfraAsyncWriter::Loop_() {
       idle_cv_.notify_all();
     }
   }
-  running_.store(false, std::memory_order_relaxed);
+  running_.store(false, std::memory_order_release);
 }

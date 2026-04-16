@@ -34,7 +34,8 @@ void SignalMonitorImpl::Start() {
   if (running_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
-  worker_ = std::thread([this]() { Run_(); });
+  worker_ =
+      std::jthread([this](std::stop_token stop_token) { Run_(stop_token); });
 }
 
 ECM SignalMonitorImpl::Init() {
@@ -45,6 +46,9 @@ ECM SignalMonitorImpl::Init() {
 
 void SignalMonitorImpl::Stop() {
   running_.store(false, std::memory_order_release);
+  if (worker_.joinable()) {
+    worker_.request_stop();
+  }
   if (worker_.joinable()) {
     worker_.join();
   }
@@ -60,7 +64,7 @@ bool SignalMonitorImpl::RegisterHook(const std::string &name,
     return false;
   }
   std::lock_guard<std::mutex> lock(hooks_mtx_);
-  if (hooks_.find(name) != hooks_.end()) {
+  if (hooks_.contains(name)) {
     return false;
   }
   hooks_[name] = hook;
@@ -140,8 +144,9 @@ void SignalMonitorImpl::SignalHandler(int signal_num) {
 
 SignalMonitorImpl::SignalMonitorImpl() = default;
 
-void SignalMonitorImpl::Run_() {
-  while (running_.load(std::memory_order_acquire)) {
+void SignalMonitorImpl::Run_(std::stop_token stop_token) {
+  while (running_.load(std::memory_order_acquire) &&
+         !stop_token.stop_requested()) {
     const int signum = GlobalSignalInt.exchange(0);
     if (signum != 0) {
       last_handled_signal_.store(signum, std::memory_order_relaxed);
