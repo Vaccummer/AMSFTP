@@ -19,10 +19,10 @@ TransferAppService::TransferAppService(
 
 ECM TransferAppService::Submit(const TaskHandle &task_info) {
   if (!task_info) {
-    return Err(EC::InvalidArg, __func__, "", "TaskInfo is null");
+    return Err(EC::InvalidArg, "", "", "TaskInfo is null");
   }
   if (task_info->id == 0) {
-    return Err(EC::InvalidArg, __func__, "", "Task ID must be > 0");
+    return Err(EC::InvalidArg, "", "", "Task ID must be > 0");
   }
 
   {
@@ -48,12 +48,12 @@ ECM TransferAppService::Submit(const TaskHandle &task_info) {
 
 ECM TransferAppService::Pause(TaskId id, int timeout_ms) {
   if (id == 0) {
-    return Err(EC::InvalidArg, __func__, "", "Task ID must be > 0");
+    return Err(EC::InvalidArg, "", "", "Task ID must be > 0");
   }
 
   {
     auto paused = paused_tasks_.lock();
-    if (paused->find(id) != paused->end()) {
+    if (paused->contains(id)) {
       return OK;
     }
   }
@@ -65,7 +65,7 @@ ECM TransferAppService::Pause(TaskId id, int timeout_ms) {
       if (final_rcm.code == EC::Terminate) {
         return final_rcm;
       }
-      return Err(EC::OperationUnsupported, __func__, AMStr::ToString(id),
+      return Err(EC::OperationUnsupported, "", AMStr::ToString(id),
                  "Task is already finished");
     }
   }
@@ -76,7 +76,7 @@ ECM TransferAppService::Pause(TaskId id, int timeout_ms) {
     return rcm;
   }
   if (!task_info) {
-    return Err(EC::InvalidHandle, __func__, AMStr::ToString(id),
+    return Err(EC::InvalidHandle, "", AMStr::ToString(id),
                "Pause returned null task");
   }
 
@@ -87,7 +87,7 @@ ECM TransferAppService::Pause(TaskId id, int timeout_ms) {
 ECM TransferAppService::Resume(TaskId id, int timeout_ms) {
   (void)timeout_ms;
   if (id == 0) {
-    return Err(EC::InvalidArg, __func__, "", "Task ID must be > 0");
+    return Err(EC::InvalidArg, "", "", "Task ID must be > 0");
   }
 
   TaskHandle task_info = nullptr;
@@ -95,7 +95,7 @@ ECM TransferAppService::Resume(TaskId id, int timeout_ms) {
     auto paused = paused_tasks_.lock();
     auto it = paused->find(id);
     if (it == paused->end()) {
-      return Err(EC::TaskNotFound, __func__, AMStr::ToString(id),
+      return Err(EC::TaskNotFound, "", AMStr::ToString(id),
                  AMStr::fmt("Paused task not found: {}", id));
     }
     task_info = it->second;
@@ -134,7 +134,7 @@ ECM TransferAppService::Resume(TaskId id, int timeout_ms) {
 std::pair<TransferAppService::TaskHandle, ECM>
 TransferAppService::Terminate(TaskId id, int timeout_ms) {
   if (id == 0) {
-    return {nullptr, Err(EC::InvalidArg, __func__, "", "Task ID must be > 0")};
+    return {nullptr, Err(EC::InvalidArg, "", "", "Task ID must be > 0")};
   }
 
   {
@@ -142,7 +142,7 @@ TransferAppService::Terminate(TaskId id, int timeout_ms) {
     auto it = finished->find(id);
     if (it != finished->end()) {
       return {it->second,
-              Err(EC::OperationUnsupported, __func__, AMStr::ToString(id),
+              Err(EC::OperationUnsupported, "", AMStr::ToString(id),
                   "Task already finished")};
     }
   }
@@ -154,7 +154,7 @@ TransferAppService::Terminate(TaskId id, int timeout_ms) {
       TaskHandle task_info = it->second;
       paused->erase(it);
       const ECM terminate_rcm =
-          Err(EC::Terminate, __func__, AMStr::ToString(id), "Task terminated");
+          Err(EC::Terminate, "", AMStr::ToString(id), "Task terminated");
       MarkUnfinishedEntries_(task_info, terminate_rcm);
       task_info->SetResult(terminate_rcm);
       task_info->SetStatus(TaskStatus::Finished);
@@ -382,3 +382,4 @@ void TransferAppService::StoreFinished_(const TaskHandle &task_info) {
 }
 
 } // namespace AMApplication::transfer
+

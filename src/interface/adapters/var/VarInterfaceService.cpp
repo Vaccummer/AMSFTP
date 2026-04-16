@@ -98,7 +98,7 @@ ECMData<ParsedVarToken>
 VarInterfaceService::ParseVarTokenExpression(const std::string &expr) const {
   const std::string trimmed = AMStr::Strip(expr);
   if (trimmed.empty()) {
-    return {{}, Err(EC::InvalidArg, __func__, "", "variable token is empty")};
+    return {{}, Err(EC::InvalidArg, "", "", "variable token is empty")};
   }
 
   size_t end = 0;
@@ -106,7 +106,7 @@ VarInterfaceService::ParseVarTokenExpression(const std::string &expr) const {
   if (!AMDomain::var::ParseVarRefAt(trimmed, 0, trimmed.size(), false, false,
                                     &end, &parsed) ||
       end != trimmed.size() || !parsed.valid || parsed.varname.empty()) {
-    return {{}, Err(EC::InvalidArg, __func__, "", "invalid variable token")};
+    return {{}, Err(EC::InvalidArg, "", "", "invalid variable token")};
   }
   return {parsed, OK};
 }
@@ -134,12 +134,12 @@ VarInterfaceService::ResolveLookupToken(const std::string &token_expr) const {
     const auto zone_it = all_vars.data.find(parsed.data.domain);
     if (zone_it == all_vars.data.end()) {
       return {{},
-              Err(EC::InvalidArg, __func__, "", "target variable zone not found")};
+              Err(EC::InvalidArg, "", "", "target variable zone not found")};
     }
     const auto var_it = zone_it->second.find(parsed.data.varname);
     if (var_it == zone_it->second.end()) {
       return {{},
-              Err(EC::InvalidArg, __func__, "", "variable not found in target zone")};
+              Err(EC::InvalidArg, "", "", "variable not found in target zone")};
     }
     return {var_it->second, OK};
   }
@@ -156,7 +156,7 @@ VarInterfaceService::ResolveDefineTarget(bool global,
   }
   if (global && parsed.data.explicit_domain) {
     return {{},
-            Err(EC::InvalidArg, __func__, "",
+            Err(EC::InvalidArg, "", "",
                 "cannot combine --global with explicit zone")};
   }
 
@@ -193,7 +193,7 @@ ECM VarInterfaceService::DefineVar(bool global, const std::string &token_expr,
 ECM VarInterfaceService::DeleteVar(
     bool all, const std::vector<std::string> &tokens) const {
   if (tokens.empty() || tokens.size() > 2) {
-    return Err(EC::InvalidArg, __func__, "",
+    return Err(EC::InvalidArg, "", "",
                "var del requires one var token or [zone token]");
   }
 
@@ -217,7 +217,7 @@ ECM VarInterfaceService::DeleteVar(
     ECM last = OK;
     bool removed_any = false;
     for (const auto &[zone_name, zone_vars] : all_vars.data) {
-      if (zone_vars.find(parsed.data.varname) == zone_vars.end()) {
+      if (!zone_vars.contains(parsed.data.varname)) {
         continue;
       }
       ECM del_rcm = var_service_.DelVar(zone_name, parsed.data.varname);
@@ -228,7 +228,7 @@ ECM VarInterfaceService::DeleteVar(
       removed_any = true;
     }
     if (!removed_any) {
-      return Err(EC::InvalidArg, __func__, "", "variable not found");
+      return Err(EC::InvalidArg, "", "", "variable not found");
     }
     return last;
   }
@@ -301,7 +301,7 @@ VarInterfaceService::LookupVarValue_(const ParsedVarToken &token,
   if (token.explicit_domain) {
     auto explicit_value = lookup_zone(token.domain);
     if (!explicit_value.has_value()) {
-      return {"", Err(EC::InvalidArg, __func__, "", "variable not found")};
+      return {"", Err(EC::InvalidArg, "", "", "variable not found")};
     }
     return {explicit_value.value(), OK};
   }
@@ -310,7 +310,7 @@ VarInterfaceService::LookupVarValue_(const ParsedVarToken &token,
   if (current_value.has_value()) {
     return {current_value.value(), OK};
   }
-  return {"", Err(EC::InvalidArg, __func__, "", "variable not found")};
+  return {"", Err(EC::InvalidArg, "", "", "variable not found")};
 }
 
 std::string VarInterfaceService::SubstitutePathLikeWithSnapshot_(
@@ -467,4 +467,5 @@ bool VarInterfaceService::RewriteVarShortcutTokens(
   return false;
 }
 } // namespace AMInterface::var
+
 

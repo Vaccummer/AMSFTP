@@ -44,10 +44,10 @@ void CompleterConfigManager::SetInitArg(CompleterArg arg) {
 ECM CompleterConfigManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (!config_service) {
-    return Err(EC::InvalidArg, __func__, "", "config service is null");
+    return Err(EC::InvalidArg, "", "", "config service is null");
   }
   if (!config_service->Write<CompleterArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, __func__, "",
+    return Err(EC::ConfigDumpFailed, "", "",
                "failed to flush completer config");
   }
   return OK;
@@ -58,3 +58,4 @@ CompleterArg CompleterConfigManager::ExportConfigSnapshot() const {
 }
 
 } // namespace AMApplication::completion
+

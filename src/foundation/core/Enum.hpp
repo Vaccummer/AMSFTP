@@ -3,6 +3,7 @@
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
 #include <optional>
+#include <source_location>
 #include <string>
 #include <utility>
 
@@ -289,59 +290,43 @@ struct AMError {
   std::string error = "";
   std::optional<RawError> raw_error = std::nullopt;
 
+private:
+  static std::string ResolveOperation_(EC ec, std::string op,
+                                       const std::source_location &loc) {
+    if (ec != EC::Success && op.empty()) {
+      return std::string(loc.function_name());
+    }
+    return op;
+  }
+
+public:
   AMError() = default;
 
-  AMError(EC ec, std::string err)
-      : code(ec), operation(""), target(""), error(std::move(err)) {
-    if (code != EC::Success) {
-      if (operation.empty()) {
-        operation = "";
-      }
-      if (target.empty()) {
-        target = "";
-      }
-    }
-  }
+  AMError(EC ec, std::string err,
+          const std::source_location &loc = std::source_location::current())
+      : code(ec), operation(ResolveOperation_(ec, "", loc)), target(""),
+        error(std::move(err)) {}
 
-  AMError(EC ec, std::string op, std::string tgt, std::string err)
-      : code(ec), operation(std::move(op)), target(std::move(tgt)),
-        error(std::move(err)) {
-    if (code != EC::Success) {
-      if (operation.empty()) {
-        operation = "";
-      }
-      if (target.empty()) {
-        target = "";
-      }
-    }
-  }
-
-  AMError(EC ec, std::string err, RawError raw)
-      : code(ec), operation(""), target(""), error(std::move(err)),
-        raw_error(raw) {
-    if (code != EC::Success) {
-      if (operation.empty()) {
-        operation = "";
-      }
-      if (target.empty()) {
-        target = "";
-      }
-    }
-  }
+  AMError(EC ec, std::string target, std::string err,
+          const std::source_location &loc = std::source_location::current())
+      : code(ec), operation(ResolveOperation_(ec, "", loc)),
+        target(std::move(target)), error(std::move(err)) {}
 
   AMError(EC ec, std::string op, std::string tgt, std::string err,
-          std::optional<RawError> raw)
-      : code(ec), operation(std::move(op)), target(std::move(tgt)),
-        error(std::move(err)), raw_error(raw) {
-    if (code != EC::Success) {
-      if (operation.empty()) {
-        operation = "";
-      }
-      if (target.empty()) {
-        target = "";
-      }
-    }
-  }
+          const std::source_location &loc = std::source_location::current())
+      : code(ec), operation(ResolveOperation_(ec, std::move(op), loc)),
+        target(std::move(tgt)), error(std::move(err)) {}
+
+  AMError(EC ec, std::string err, RawError raw,
+          const std::source_location &loc = std::source_location::current())
+      : code(ec), operation(ResolveOperation_(ec, "", loc)), target(""),
+        error(std::move(err)), raw_error(raw) {}
+
+  AMError(EC ec, std::string op, std::string tgt, std::string err,
+          std::optional<RawError> raw,
+          const std::source_location &loc = std::source_location::current())
+      : code(ec), operation(ResolveOperation_(ec, std::move(op), loc)),
+        target(std::move(tgt)), error(std::move(err)), raw_error(raw) {}
 
   operator bool() const { return code == EC::Success; }
 

@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -83,17 +84,24 @@ public:
   size_t writable() const { return capacity_ - available(); }
 
   /**
-   * @brief Get the write pointer and maximum contiguous writable length.
+   * @brief Get the writable contiguous region.
    */
-  std::pair<char *, size_t> get_write_ptr() {
+  std::span<char> get_write_span() {
     size_t t = tail_.load(std::memory_order_relaxed);
     size_t h = head_.load(std::memory_order_acquire);
     size_t pos = t % capacity_;
     size_t used = t - h;
     size_t free_space = capacity_ - used;
-    // Contiguous writable = min(distance to end, free space)
     size_t contig = capacity_ - pos > free_space ? free_space : capacity_ - pos;
-    return {buffer_.data() + pos, contig};
+    return std::span<char>(buffer_.data() + pos, contig);
+  }
+
+  /**
+   * @brief Backward-compatible writable pointer view.
+   */
+  std::pair<char *, size_t> get_write_ptr() {
+    auto span = get_write_span();
+    return {span.data(), span.size()};
   }
 
   /**
@@ -105,16 +113,23 @@ public:
   }
 
   /**
-   * @brief Get the read pointer and maximum contiguous readable length.
+   * @brief Get the readable contiguous region.
    */
-  std::pair<char *, size_t> get_read_ptr() {
+  std::span<char> get_read_span() {
     size_t h = head_.load(std::memory_order_relaxed);
     size_t t = tail_.load(std::memory_order_acquire);
     size_t pos = h % capacity_;
     size_t avail = t - h;
-    // Contiguous readable = min(distance to end, available data)
     size_t contig = capacity_ - pos > avail ? avail : capacity_ - pos;
-    return {buffer_.data() + pos, contig};
+    return std::span<char>(buffer_.data() + pos, contig);
+  }
+
+  /**
+   * @brief Backward-compatible readable pointer view.
+   */
+  std::pair<char *, size_t> get_read_ptr() {
+    auto span = get_read_span();
+    return {span.data(), span.size()};
   }
 
   /**

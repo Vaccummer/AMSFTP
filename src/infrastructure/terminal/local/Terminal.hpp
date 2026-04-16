@@ -591,7 +591,7 @@ inline ECMData<AMT::ChannelOpenResult> LocalTerminalPort::OpenChannel(
                   "Invalid channel_name literal");
     return out;
   }
-  if (channel_runtimes_.find(channel_name) != channel_runtimes_.end()) {
+  if (channel_runtimes_.contains(channel_name)) {
     out.rcm = Err(EC::TargetAlreadyExists, "terminal.open", channel_name,
                   "Channel name already exists");
     return out;
@@ -1002,7 +1002,7 @@ inline ECMData<AMT::ChannelCloseResult> LocalTerminalPort::CloseChannel(
     current_channel_ = std::nullopt;
   }
   out.data.closed =
-      channel_runtimes_.find(target_name) == channel_runtimes_.end();
+      !channel_runtimes_.contains(target_name);
   out.rcm = OK;
   return out;
 }
@@ -1042,7 +1042,7 @@ inline ECMData<AMT::ChannelRenameResult> LocalTerminalPort::RenameChannel(
                   "Source channel does not exist");
     return out;
   }
-  if (channel_runtimes_.find(dst_name) != channel_runtimes_.end()) {
+  if (channel_runtimes_.contains(dst_name)) {
     out.rcm = Err(EC::TargetAlreadyExists, "terminal.rename", dst_name,
                   "Target channel already exists");
     return out;
@@ -1720,3 +1720,4 @@ inline void LocalTerminalPort::CloseChannelRuntime_(ChannelRuntime_ *ctx,
 }
 
 } // namespace AMInfra::client::LOCAL::terminal
+

@@ -20,12 +20,12 @@ struct ProfileEditArgs : BaseArgStruct {
     const std::string literal = AMStr::Strip(nickname);
     if (literal.empty()) {
       const ECM rcm =
-          Err(EC::InvalidArg, __func__, "", "empty profile nickname");
+          Err(EC::InvalidArg, "", "", "empty profile nickname");
       managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
       return rcm;
     }
     if (!AMDomain::host::HostService::ValidateNickname(literal)) {
-      const ECM rcm = Err(EC::InvalidArg, __func__, literal,
+      const ECM rcm = Err(EC::InvalidArg, "", literal,
                           "invalid profile nickname literal");
       managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
       return rcm;
@@ -36,7 +36,7 @@ struct ProfileEditArgs : BaseArgStruct {
         target, true);
     if (!(host_query)) {
       const ECM rcm =
-          Err(EC::HostConfigNotFound, __func__, target, "Host not found");
+          Err(EC::HostConfigNotFound, "", target, "Host not found");
       managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
       return rcm;
     }
@@ -59,7 +59,7 @@ struct ProfileGetArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)ctx;
     if (nicknames.empty()) {
-      const ECM rcm = Err(EC::InvalidArg, __func__, "",
+      const ECM rcm = Err(EC::InvalidArg, "", "",
                           "profile get requires at least one nickname");
       managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
       return rcm;
@@ -72,12 +72,12 @@ struct ProfileGetArgs : BaseArgStruct {
       const std::string literal = AMStr::Strip(nickname);
       if (literal.empty()) {
         const ECM rcm =
-            Err(EC::InvalidArg, __func__, "", "empty profile nickname");
+            Err(EC::InvalidArg, "", "", "empty profile nickname");
         managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
         return rcm;
       }
       if (!AMDomain::host::HostService::ValidateNickname(literal)) {
-        const ECM rcm = Err(EC::InvalidArg, __func__, literal,
+        const ECM rcm = Err(EC::InvalidArg, "", literal,
                             "invalid profile nickname literal");
         managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
         return rcm;
@@ -89,7 +89,7 @@ struct ProfileGetArgs : BaseArgStruct {
           target, true);
       if (!(host_query)) {
         const ECM rcm =
-            Err(EC::HostConfigNotFound, __func__, target, "Host not found");
+            Err(EC::HostConfigNotFound, "", target, "Host not found");
         managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
         return rcm;
       }
@@ -109,5 +109,6 @@ struct ProfileGetArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
+
 
 

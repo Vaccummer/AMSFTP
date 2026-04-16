@@ -15,10 +15,10 @@ ClientServiceArg ClientAppServiceBase::GetInitArg() const {
 ECM ClientAppServiceBase::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, __func__, "", "config service is null");
+    return Err(EC::InvalidArg, "", "", "config service is null");
   }
   if (!config_service->Write<ClientServiceArg>(GetInitArg())) {
-    return Err(EC::ConfigDumpFailed, __func__, "", "failed to flush client config");
+    return Err(EC::ConfigDumpFailed, "", "", "failed to flush client config");
   }
   return OK;
 }
@@ -129,3 +129,4 @@ ClientAppServiceBase::GetPublicCallbacks() const {
   return public_callbacks_.lock().load();
 }
 } // namespace AMApplication::client
+

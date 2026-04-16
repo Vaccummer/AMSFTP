@@ -491,7 +491,7 @@ std::string CommandNode::NormalizeLongName_(const std::string &long_name) {
   if (long_name.empty()) {
     return "";
   }
-  if (long_name.rfind("--", 0) == 0) {
+  if (long_name.starts_with("--")) {
     return long_name;
   }
   if (long_name.size() >= 2 && long_name[0] == '-' && long_name[1] != '-') {
@@ -566,3 +566,4 @@ CommandNode *CommandNode::FindChild_(const std::string &child) {
 }
 
 } // namespace AMInterface::parser
+

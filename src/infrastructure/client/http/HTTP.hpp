@@ -59,7 +59,7 @@ inline static size_t ProbeHeaderWk_(char *buffer, size_t size, size_t nitems,
   std::string line(buffer, total);
   const std::string lower = AMStr::lowercase(line);
   const auto pick_value = [&](const std::string &prefix) -> std::string {
-    if (lower.rfind(prefix, 0) != 0) {
+    if (!lower.starts_with(prefix)) {
       return "";
     }
     return AMStr::Strip(line.substr(prefix.size()));
@@ -882,3 +882,4 @@ CreateTransientHttpSourceClient(const std::string &url,
   return {OK, client};
 }
 } // namespace AMInfra::client::HTTP
+

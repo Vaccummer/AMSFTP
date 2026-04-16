@@ -55,7 +55,7 @@ CreateClient(const ConRequest &request,
     UID = ClientService::GenerateID(ClientProtocol::LOCAL);
     break;
   default:
-    return {{EC::InvalidArg, __func__, "", "Unsupported client protocol"},
+    return {{EC::InvalidArg, "", "", "Unsupported client protocol"},
             nullptr};
   }
 
@@ -126,3 +126,4 @@ ECMData<TerminalHandle> CreateTerminalPort(const ClientHandle &client) {
 }
 
 } // namespace AMDomain::terminal
+

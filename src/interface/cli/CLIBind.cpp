@@ -1124,14 +1124,14 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   if (!cli_commands.args) {
     const std::string msg = "CLI args pool is not initialized";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::UnknownError, __func__, "", msg};
+    ctx.rcm = {EC::UnknownError, "", "", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     return;
   }
   if (!ctx.task_control_token) {
     const std::string msg = "CLI session task control token is not initialized";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, __func__, "", msg};
+    ctx.rcm = {EC::InvalidArg, "", "", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     if (cli_commands.args) {
       cli_commands.args->ClearActive();
@@ -1153,7 +1153,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   if (!any_parsed) {
     std::string msg = "No valid command provided";
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, __func__, "", msg};
+    ctx.rcm = {EC::InvalidArg, "", "", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     args.ClearActive();
     return;
@@ -1173,7 +1173,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
       msg = "Invalid pool command";
     }
     std::cerr << msg << std::endl;
-    ctx.rcm = {EC::InvalidArg, __func__, "", msg};
+    ctx.rcm = {EC::InvalidArg, "", "", msg};
     store_exit_code(static_cast<int>(ctx.rcm.code));
     args.ClearActive();
     return;
@@ -1195,3 +1195,4 @@ void DispatchCliCommands(const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
+

@@ -89,10 +89,10 @@ void PromptIOManager::PrintTaskResult(
 ECM PromptIOManager::Edit(const std::string &nickname) {
   const std::string target = NormalizeProfileNickname_(nickname);
   if (target.empty()) {
-    return Err(EC::InvalidArg, __func__, "", "empty profile nickname");
+    return Err(EC::InvalidArg, "", "", "empty profile nickname");
   }
   if (target == AMDomain::prompt::kPromptProfileDefault) {
-    return Err(EC::InvalidArg, __func__, "",
+    return Err(EC::InvalidArg, "", "",
                "profile nickname must be a host nickname");
   }
   return EditProfile_(target);
@@ -100,7 +100,7 @@ ECM PromptIOManager::Edit(const std::string &nickname) {
 
 ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
   if (nicknames.empty()) {
-    return Err(EC::InvalidArg, __func__, "",
+    return Err(EC::InvalidArg, "", "",
                "profile get requires at least one nickname");
   }
 
@@ -110,10 +110,10 @@ ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
   for (const auto &name : nicknames) {
     const std::string target = NormalizeProfileNickname_(name);
     if (target.empty()) {
-      return Err(EC::InvalidArg, __func__, "", "empty profile nickname");
+      return Err(EC::InvalidArg, "", "", "empty profile nickname");
     }
     if (target == AMDomain::prompt::kPromptProfileDefault) {
-      return Err(EC::InvalidArg, __func__, "",
+      return Err(EC::InvalidArg, "", "",
                  "profile nickname must be a host nickname");
     }
     if (seen.insert(target).second) {
@@ -140,7 +140,7 @@ ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
 ECM PromptIOManager::EditProfile_(const std::string &nickname) {
   const std::string target = NormalizeProfileNickname_(nickname);
   if (target.empty()) {
-    return Err(EC::InvalidArg, __func__, "", "empty profile nickname");
+    return Err(EC::InvalidArg, "", "", "empty profile nickname");
   }
 
   PromptProfileSettings working =
@@ -181,7 +181,7 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
         *value = parsed;
         return true;
       }
-      ErrorFormat(Err(EC::InvalidArg, __func__, "", "value must be true or false"));
+      ErrorFormat(Err(EC::InvalidArg, "", "", "value must be true or false"));
     }
   };
 
@@ -214,12 +214,12 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
       }
       int64_t parsed = *value;
       if (!TryParseInt64Strict_(trimmed, &parsed)) {
-        ErrorFormat(Err(EC::InvalidArg, __func__, "", "invalid integer value"));
+        ErrorFormat(Err(EC::InvalidArg, "", "", "invalid integer value"));
         continue;
       }
       if (parsed < min_value || parsed > max_value) {
         ErrorFormat(Err(
-            EC::InvalidArg, __func__, "",
+            EC::InvalidArg, "", "",
             AMStr::fmt("value out of range [{}, {}]", min_value, max_value)));
         continue;
       }
@@ -231,22 +231,22 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
   if (!prompt_string("Prompt.marker: ", &working.prompt.marker) ||
       !prompt_string("Prompt.continuation_marker: ",
                      &working.prompt.continuation_marker)) {
-    return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+    return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
   }
   if (!prompt_bool("Prompt.enable_multiline(true/false): ",
                    &working.prompt.enable_multiline) ||
       !prompt_bool("History.enable(true/false): ", &working.history.enable)) {
-    return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+    return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
   }
 
   if (working.history.enable) {
     if (!prompt_bool("History.enable_duplicates(true/false): ",
                      &working.history.enable_duplicates)) {
-      return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+      return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
     }
     int64_t history_max = static_cast<int64_t>(working.history.max_count);
     if (!prompt_int64("History.max_count: ", 1, 200, &history_max)) {
-      return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+      return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
     }
     working.history.max_count = static_cast<int>(history_max);
   } else {
@@ -256,38 +256,38 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
 
   if (!prompt_bool("InlineHint.enable(true/false): ",
                    &working.inline_hint.enable)) {
-    return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+    return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
   }
   if (working.inline_hint.enable) {
     int64_t render_delay =
         static_cast<int64_t>(working.inline_hint.render_delay_ms);
     if (!prompt_int64("InlineHint.render_delay_ms: ", 0, 5000, &render_delay)) {
-      return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+      return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
     }
     working.inline_hint.render_delay_ms = static_cast<int>(render_delay);
 
     int64_t search_delay =
         static_cast<int64_t>(working.inline_hint.search_delay_ms);
     if (!prompt_int64("InlineHint.search_delay_ms: ", 0, 5000, &search_delay)) {
-      return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+      return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
     }
     working.inline_hint.search_delay_ms = static_cast<int>(search_delay);
 
     if (!prompt_bool("InlineHint.Path.enable(true/false): ",
                      &working.inline_hint.path.enable)) {
-      return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+      return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
     }
     if (working.inline_hint.path.enable) {
       if (!prompt_bool("InlineHint.Path.use_async(true/false): ",
                        &working.inline_hint.path.use_async)) {
-        return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+        return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
       }
       if (working.inline_hint.path.use_async) {
         int64_t timeout =
             static_cast<int64_t>(working.inline_hint.path.timeout_ms);
         if (!prompt_int64("InlineHint.Path.timeout_ms: ", 1, 300000,
                           &timeout)) {
-          return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+          return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
         }
         working.inline_hint.path.timeout_ms = static_cast<size_t>(timeout);
       } else {
@@ -303,13 +303,13 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
 
   if (!prompt_bool("Complete.Searcher.Path.use_async(true/false): ",
                    &working.complete.path.use_async)) {
-    return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+    return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
   }
   if (working.complete.path.use_async) {
     int64_t timeout = static_cast<int64_t>(working.complete.path.timeout_ms);
     if (!prompt_int64("Complete.Searcher.Path.timeout_ms: ", 1, 300000,
                       &timeout)) {
-      return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+      return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
     }
     working.complete.path.timeout_ms = static_cast<size_t>(timeout);
   } else {
@@ -320,13 +320,13 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
   if (!prompt_int64("Highlight.delay_ms: ", 0, 5000, &highlight_delay) ||
       !prompt_bool("Highlight.Path.enable(true/false): ",
                    &working.highlight.path.enable)) {
-    return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+    return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
   }
   working.highlight.delay_ms = static_cast<int>(highlight_delay);
   if (working.highlight.path.enable) {
     int64_t timeout = static_cast<int64_t>(working.highlight.path.timeout_ms);
     if (!prompt_int64("Highlight.Path.timeout_ms: ", 1, 300000, &timeout)) {
-      return Err(EC::ConfigCanceled, __func__, "", "profile edit canceled");
+      return Err(EC::ConfigCanceled, "", "", "profile edit canceled");
     }
     working.highlight.path.timeout_ms = static_cast<size_t>(timeout);
   } else {
@@ -349,3 +349,4 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
 }
 
 } // namespace AMInterface::prompt
+
