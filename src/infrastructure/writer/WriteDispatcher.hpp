@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <queue>
+#include <stop_token>
 #include <thread>
 
 /**
@@ -51,15 +52,14 @@ private:
   /**
    * @brief Worker loop that drains queued tasks.
    */
-  void Loop_();
+  void Loop_(std::stop_token stop_token);
 
   mutable std::mutex mtx_;
   std::condition_variable cv_;
   std::condition_variable idle_cv_;
   std::queue<Task> queue_;
-  std::thread worker_;
+  std::jthread worker_;
   std::atomic<bool> running_{false};
-  std::atomic<bool> shutdown_requested_{false};
   size_t active_tasks_ = 0;
 };
 

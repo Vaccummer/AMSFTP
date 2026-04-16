@@ -8,6 +8,7 @@
 #include <signal.h>
 #endif
 #include <mutex>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -93,10 +94,10 @@ private:
   /**
    * @brief Worker loop that consumes recorded signals.
    */
-  void Run_();
+  void Run_(std::stop_token stop_token);
   std::atomic<bool> running_{false};
   std::atomic<int> last_handled_signal_{0};
-  std::thread worker_;
+  std::jthread worker_;
   mutable std::mutex hooks_mtx_;
   std::unordered_map<std::string, AMDomain::signal::SignalHook> hooks_;
 };

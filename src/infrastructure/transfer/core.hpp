@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -202,7 +203,7 @@ private:
     std::promise<ECM> promise = {};
   };
 
-  void ReadLoop_();
+  void ReadLoop_(std::stop_token stop_token);
   std::future<ECM> EnqueueReadJob_(ClientHandle src_client,
                                    const TaskHandle &task_info,
                                    TransferRuntimeProgress *runtime_progress);
@@ -214,8 +215,7 @@ private:
   mutable std::mutex read_queue_mtx_ = {};
   std::condition_variable read_queue_cv_ = {};
   std::deque<ReadJob> read_queue_ = {};
-  std::thread read_thread_ = {};
-  std::atomic<bool> read_running_{true};
+  std::jthread read_thread_ = {};
 };
 
 class TransferExecutionPool final
@@ -270,7 +270,8 @@ private:
   void RegisterTask(const TaskHandle &task_info, TaskAssignType assign_type,
                     int affinity_thread);
 
-  std::optional<std::pair<TaskId, TaskHandle>> DequeueTask(size_t thread_index);
+  std::optional<std::pair<TaskId, TaskHandle>>
+  DequeueTask(std::stop_token stop_token, size_t thread_index);
 
   void HandleCompletedTask(const TaskHandle &task_info);
 
@@ -279,7 +280,7 @@ private:
 
   void ClearConducting(size_t thread_index);
 
-  void WorkerLoop(size_t thread_index);
+  void WorkerLoop(std::stop_token stop_token, size_t thread_index);
 
   size_t ClampMaxThreads_(size_t value) const;
   size_t ComputeDesiredThreadCount_() const;
@@ -289,7 +290,7 @@ private:
 
   void StartHeartbeat_();
   void StopHeartbeat_();
-  void HeartbeatLoop_();
+  void HeartbeatLoop_(std::stop_token stop_token);
   void HeartbeatTick_();
 
   std::unordered_map<TaskId, TaskHandle> GetRegistryCopy() const;
@@ -298,9 +299,9 @@ private:
   std::atomic<size_t> desired_thread_count_{0};
   std::atomic<size_t> max_thread_count_{1};
 
-  std::vector<std::thread> worker_threads_;
+  std::vector<std::jthread> worker_threads_;
   mutable std::mutex worker_mtx_ = {};
-  std::thread heartbeat_thread_ = {};
+  std::jthread heartbeat_thread_ = {};
   std::atomic<bool> heartbeat_running_{false};
   std::atomic<int> heartbeat_interval_s_{0};
   std::atomic<int> heartbeat_timeout_ms_{100};

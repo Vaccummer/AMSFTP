@@ -9,7 +9,7 @@ set(AMSFTP_LINK_MODE "dynamic" CACHE STRING
 set_property(CACHE AMSFTP_LINK_MODE PROPERTY STRINGS dynamic static)
 
 # ========= C++ Standard =========
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ========= vcpkg Packages (MSVC / x64-windows) =========

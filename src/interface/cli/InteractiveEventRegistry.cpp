@@ -31,19 +31,17 @@ bool InteractiveEventRegistry::Unregister(InteractiveEventCategory category,
   }
 
   auto guard = registry_.lock();
-  auto map_it = guard->find(category);
-  if (map_it == guard->end()) {
+  if (!guard->contains(category)) {
     return false;
   }
+  auto map_it = guard->find(category);
 
   auto &callbacks = map_it->second;
   const auto old_size = callbacks.size();
-  callbacks.erase(std::remove_if(callbacks.begin(), callbacks.end(),
-                                 [id](const CallbackEntry &entry) {
-                                   return entry.id == id;
-                                 }),
-                  callbacks.end());
-  if (callbacks.size() == old_size) {
+  const auto erased = std::erase_if(callbacks, [id](const CallbackEntry &entry) {
+    return entry.id == id;
+  });
+  if (old_size == callbacks.size() || erased == 0) {
     return false;
   }
   return true;
@@ -57,10 +55,10 @@ void InteractiveEventRegistry::Run(InteractiveEventCategory category) {
     snapshot = *guard;
   }
 
-  auto map_it = snapshot.find(category);
-  if (map_it == snapshot.end()) {
+  if (!snapshot.contains(category)) {
     return;
   }
+  auto map_it = snapshot.find(category);
 
   for (auto &entry : map_it->second) {
     auto &fn = entry.fn;

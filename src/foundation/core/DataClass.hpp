@@ -1,6 +1,7 @@
 #pragma once
 // standard library
 #include <algorithm>
+#include <concepts>
 #include <csignal>
 #include <memory>
 #include <mutex>
@@ -92,8 +93,8 @@ public:
 
   AMAtomic() = default;
 
-  template <class... Args,
-            class = std::enable_if_t<std::is_constructible_v<T, Args...>>>
+  template <class... Args>
+    requires std::constructible_from<T, Args...>
   explicit AMAtomic(Args &&...args) : value_(std::forward<Args>(args)...) {}
 
   AMAtomic(const AMAtomic &) = delete;
@@ -222,12 +223,10 @@ public:
   NonCopyableNonMovable() = default;
 };
 
-template <typename T, typename = void>
-struct HasECMMemberRcm : std::false_type {};
-
 template <typename T>
-struct HasECMMemberRcm<T, std::void_t<decltype(std::declval<T>().rcm)>>
-    : std::is_same<std::decay_t<decltype(std::declval<T>().rcm)>, ECM> {};
+concept HasECMMemberRcm =
+    requires { std::declval<T>().rcm; } &&
+    std::same_as<std::decay_t<decltype(std::declval<T>().rcm)>, ECM>;
 
 template <typename T> struct ECMData {
   T data;
@@ -237,7 +236,7 @@ template <typename T> struct ECMData {
   ECMData(ECM result, T data) : data(std::move(data)), rcm(std::move(result)) {}
   ECMData(T data, ECM result = {})
       : data(std::move(data)), rcm(std::move(result)) {
-    if constexpr (HasECMMemberRcm<T>::value) {
+    if constexpr (HasECMMemberRcm<T>) {
       if (rcm.code == EC::Success && this->data.rcm.code != EC::Success) {
         rcm = this->data.rcm;
       }

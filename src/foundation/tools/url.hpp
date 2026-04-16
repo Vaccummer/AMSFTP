@@ -23,12 +23,12 @@ inline std::string StripQueryAndFragment(const std::string &url) {
 
 inline bool IsHttpUrl(const std::string &url) {
   const std::string lower = AMStr::lowercase(AMStr::Strip(url));
-  return lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0;
+  return lower.starts_with("http://") || lower.starts_with("https://");
 }
 
 inline bool IsHttpsUrl(const std::string &url) {
   const std::string lower = AMStr::lowercase(AMStr::Strip(url));
-  return lower.rfind("https://", 0) == 0;
+  return lower.starts_with("https://");
 }
 
 inline bool IsDirectoryUrl(const std::string &url) {
@@ -104,4 +104,3 @@ inline std::string ExtractUsername(const std::string &url) {
 }
 
 } // namespace AMUrl
-

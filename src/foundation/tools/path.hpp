@@ -1,6 +1,8 @@
 #pragma once
 // standard library
+#include <concepts>
 #include <regex>
+#include <type_traits>
 #include <variant>
 #ifdef _WIN32
 #define _WINSOCKAPI_
@@ -268,7 +270,7 @@ inline std::string NormalizeJoinedPath(const std::string &path,
        (normalized[0] >= 'a' && normalized[0] <= 'z')) &&
       normalized[1] == ':' && (normalized[2] == '/' || normalized[2] == '\\');
   const bool unc_root =
-      normalized.rfind("//", 0) == 0 || normalized.rfind("\\\\", 0) == 0;
+      normalized.starts_with("//") || normalized.starts_with("\\\\");
 
   std::vector<std::string> parts = split(normalized);
   if (parts.empty()) {
@@ -369,35 +371,48 @@ inline std::string NormalizeJoinedPath(const std::string &path,
   return result;
 }
 
-template <typename... Args> std::string join(Args &&...args) {
+template <typename T> using JoinArgDecayT_ = std::decay_t<T>;
+
+template <typename T>
+concept JoinArg_ =
+    std::same_as<JoinArgDecayT_<T>, std::filesystem::path> ||
+    std::same_as<JoinArgDecayT_<T>, std::string> ||
+    std::same_as<JoinArgDecayT_<T>, std::vector<std::string>> ||
+    std::same_as<JoinArgDecayT_<T>, std::wstring> ||
+    std::same_as<JoinArgDecayT_<T>, const char *> ||
+    std::same_as<JoinArgDecayT_<T>, char *> ||
+    std::same_as<JoinArgDecayT_<T>, const wchar_t *> ||
+    std::same_as<JoinArgDecayT_<T>, wchar_t *> ||
+    std::same_as<JoinArgDecayT_<T>, SepType>;
+
+template <typename... Args>
+  requires(JoinArg_<Args> && ...)
+std::string join(Args &&...args) {
   std::vector<std::string> segments;
   std::string ori_str;
   fs::path combined;
   std::string sep = "";
 
   auto process_arg = [&](auto &&arg) {
-    using T = std::decay_t<decltype(arg)>;
+    using T = JoinArgDecayT_<decltype(arg)>;
     if constexpr (std::is_same_v<T, std::filesystem::path>) {
       if (!arg.empty()) {
         segments.push_back(arg.string());
         ori_str += arg.string();
       }
-    } else if constexpr (std::is_same_v<T, std::string> ||
-                         std::is_same_v<T, const std::string>) {
+    } else if constexpr (std::is_same_v<T, std::string>) {
       if (!arg.empty()) {
         segments.push_back(arg);
         ori_str += arg;
       }
-    } else if constexpr (std::is_same_v<T, std::vector<std::string>> ||
-                         std::is_same_v<T, const std::vector<std::string>>) {
+    } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
       for (auto &seg : arg) {
         if (!seg.empty()) {
           segments.push_back(seg);
           ori_str += seg;
         }
       }
-    } else if constexpr (std::is_same_v<T, std::wstring> ||
-                         std::is_same_v<T, const std::wstring>) {
+    } else if constexpr (std::is_same_v<T, std::wstring>) {
       std::string s = AMStr::wstr(arg);
       if (!s.empty()) {
         segments.push_back(s);
@@ -652,7 +667,7 @@ inline std::string abspath(const std::string &path,
       return false;
     }
     const std::string &first = parts_vec[0];
-    return first.rfind("//", 0) == 0 || first.rfind("\\\\", 0) == 0;
+    return first.starts_with("//") || first.starts_with("\\\\");
   };
   std::vector<std::string> new_parts{};
   std::string tmp_part;
@@ -848,4 +863,3 @@ listdir(const std::string &path, int timeout_ms = -1,
   return {OK, result};
 }
 } // namespace AMPath
-

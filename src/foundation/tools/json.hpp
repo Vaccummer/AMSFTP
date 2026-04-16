@@ -3,6 +3,7 @@
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
+#include <concepts>
 #include <filesystem>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -16,16 +17,19 @@ using JsonValue =
     std::variant<Json, int64_t, uint64_t, double, bool, std::string>;
 namespace AMJson {
 template <class T>
-inline constexpr bool kValueTypeSupported =
+concept JsonValueSupported =
     std::is_arithmetic_v<std::decay_t<T>> ||
     std::is_same_v<std::decay_t<T>, std::string> ||
     std::is_same_v<std::decay_t<T>, std::vector<std::string>> ||
     std::is_same_v<std::decay_t<T>, Json>;
 
 template <typename T>
+inline constexpr bool kValueTypeSupported = JsonValueSupported<T>;
+
+template <typename T>
+  requires JsonValueSupported<T>
 inline bool QueryKey(const Json &root, const std::vector<std::string> &path,
                      T *value) {
-  static_assert(kValueTypeSupported<T>, "T is not supported");
   if (!value) {
     return false;
   }
@@ -40,7 +44,7 @@ inline bool QueryKey(const Json &root, const std::vector<std::string> &path,
     }
     node = &(*it);
   }
-  if constexpr (std::is_same_v<T, bool>) {
+  if constexpr (std::is_same_v<std::decay_t<T>, bool>) {
     if (!node->is_boolean()) {
       if (node->is_number_integer()) {
         *value = node->get<int64_t>() != 0;
@@ -67,7 +71,7 @@ inline bool QueryKey(const Json &root, const std::vector<std::string> &path,
     }
     *value = node->get<bool>();
     return true;
-  } else if constexpr (std::is_same_v<T, std::string>) {
+  } else if constexpr (std::is_same_v<std::decay_t<T>, std::string>) {
     if (node->is_string()) {
       *value = node->get<std::string>();
       return true;
@@ -89,7 +93,7 @@ inline bool QueryKey(const Json &root, const std::vector<std::string> &path,
       return true;
     }
     return false;
-  } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+  } else if constexpr (std::is_same_v<std::decay_t<T>, std::vector<std::string>>) {
     if (!node->is_array()) {
       return false;
     }
@@ -120,7 +124,7 @@ inline bool QueryKey(const Json &root, const std::vector<std::string> &path,
     }
     *value = std::move(out);
     return true;
-  } else if constexpr (std::is_same_v<T, Json>) {
+  } else if constexpr (std::is_same_v<std::decay_t<T>, Json>) {
     *value = *node;
     return true;
   } else if constexpr (std::is_floating_point_v<T>) {
@@ -175,8 +179,8 @@ inline bool QueryKey(const Json &root, const std::vector<std::string> &path,
 }
 
 template <typename T>
+  requires JsonValueSupported<T>
 inline bool SetKey(Json &root, const std::vector<std::string> &path, T value) {
-  static_assert(kValueTypeSupported<T>, "T is not supported");
   if (path.empty()) {
     root = value;
     return true;
@@ -214,8 +218,9 @@ Json ToJson(const JsonValue &value);
 /**
  * @brief Convert one boxed JsonValue into typed output.
  */
-template <typename T> bool JsonValueTo(const JsonValue &value, T *out) {
-  static_assert(kValueTypeSupported<T>, "T is not supported");
+template <typename T>
+  requires JsonValueSupported<T>
+bool JsonValueTo(const JsonValue &value, T *out) {
   if (!out) {
     return false;
   }
@@ -228,8 +233,9 @@ template <typename T> bool JsonValueTo(const JsonValue &value, T *out) {
 /**
  * @brief Convert one typed value into boxed JsonValue.
  */
-template <typename T> bool ToJsonValue(const T &value, JsonValue *out) {
-  static_assert(kValueTypeSupported<T>, "T is not supported");
+template <typename T>
+  requires JsonValueSupported<T>
+bool ToJsonValue(const T &value, JsonValue *out) {
   if (!out) {
     return false;
   }
@@ -258,12 +264,12 @@ template <typename T> bool ToJsonValue(const T &value, JsonValue *out) {
 std::string ReadSchemaData(const std::filesystem::path &schema_path,
                            std::string *error = nullptr);
 
-template <typename T> bool StrValueParse(const std::string &input, T *out) {
-  static_assert(std::is_arithmetic_v<std::decay_t<T>> ||
-                    std::is_same_v<std::decay_t<T>, std::string> ||
-                    std::is_same_v<T, bool>,
-                "T is not supported");
-  if constexpr (std::is_same_v<T, bool>) {
+template <typename T>
+  requires(std::is_arithmetic_v<std::decay_t<T>> ||
+           std::is_same_v<std::decay_t<T>, std::string> ||
+           std::is_same_v<std::decay_t<T>, bool>)
+bool StrValueParse(const std::string &input, T *out) {
+  if constexpr (std::is_same_v<std::decay_t<T>, bool>) {
     const std::string token = AMStr::lowercase(input);
     if (token == "true") {
       *out = true;
@@ -274,7 +280,7 @@ template <typename T> bool StrValueParse(const std::string &input, T *out) {
       return true;
     }
   }
-  if constexpr (std::is_same_v<T, std::string>) {
+  if constexpr (std::is_same_v<std::decay_t<T>, std::string>) {
     *out = input;
     return true;
   }

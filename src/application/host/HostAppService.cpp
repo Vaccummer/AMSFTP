@@ -44,7 +44,7 @@ ECM HostAppService::Init(const HostConfigArg &host_config_arg) {
   } else {
     local_config_ = std::move(local_candidate);
   }
-  if (host_configs_.find(AMDomain::host::klocalname) == host_configs_.end()) {
+  if (!host_configs_.contains(AMDomain::host::klocalname)) {
     host_configs_[AMDomain::host::klocalname] = local_config_;
   }
 
@@ -142,7 +142,7 @@ bool HostAppService::HostExists(const std::string &nickname) const {
   if (IsLocalNickname(key)) {
     return true;
   }
-  return host_configs_.find(key) != host_configs_.end();
+  return host_configs_.contains(key);
 }
 
 ECMData<std::string>
@@ -154,7 +154,7 @@ HostAppService::CheckNicknameAvailable(const std::string &nickname) const {
   if (IsLocalNickname(normalized)) {
     return {"", Err(EC::InvalidArg, __func__, "", "Nickname 'local' is reserved")};
   }
-  if (host_configs_.find(normalized) != host_configs_.end()) {
+  if (host_configs_.contains(normalized)) {
     return {"", Err(EC::KeyAlreadyExists, __func__, "", AMStr::fmt("host already exists: {}", normalized))};
   }
   return {normalized, OK};
@@ -267,7 +267,7 @@ ECM KnownHostsAppService::UpsertKnownHost(const KnownHostQuery &query,
     return validate_rcm;
   }
   const auto key = AMDomain::host::KnownHostRules::BuildKnownHostKey(query);
-  if (!overwrite && known_hosts_.find(key) != known_hosts_.end()) {
+  if (!overwrite && known_hosts_.contains(key)) {
     return Err(EC::KeyAlreadyExists, __func__, "", "known host entry already exists");
   }
   known_hosts_[key] = query;

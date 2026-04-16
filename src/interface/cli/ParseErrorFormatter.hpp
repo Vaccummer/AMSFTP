@@ -24,10 +24,10 @@ inline std::string ExtractExtrasArgText_(const std::string &raw_message) {
   static const std::string kMultiPrefix =
       "The following arguments were not expected: ";
 
-  if (raw_message.rfind(kSinglePrefix, 0) == 0) {
+  if (raw_message.starts_with(kSinglePrefix)) {
     return AMStr::Strip(raw_message.substr(kSinglePrefix.size()));
   }
-  if (raw_message.rfind(kMultiPrefix, 0) == 0) {
+  if (raw_message.starts_with(kMultiPrefix)) {
     return AMStr::Strip(raw_message.substr(kMultiPrefix.size()));
   }
   return AMStr::Strip(raw_message);
@@ -44,4 +44,3 @@ inline std::string FormatCliParseErrorMessage(const CLI::ParseError &error) {
 }
 
 } // namespace AMInterface::cli
-
