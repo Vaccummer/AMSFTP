@@ -3,12 +3,14 @@
 #include "CLI/CLI.hpp"
 #include "bootstrap/BootstrapServices.hpp"
 #include "interface/cli/CLIBind.hpp"
+#include "interface/cli/CliCommandValidation.hpp"
 #include "interface/cli/InteractiveLoop.hpp"
 #include "interface/cli/ParseErrorFormatter.hpp"
 #include "interface/parser/CommandTree.hpp"
 #include <atomic>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace AMBootstrap {
 inline bool HasParsedCommand(const CLI::App &app) {
@@ -29,6 +31,21 @@ inline int RunCLI(BootstrapServices &runtime, int argc, char **argv) {
   runtime.cli_args_pool = {};
   runtime.cli_commands = AMInterface::cli::BindCliOptions(
       *runtime.cli_app, runtime.cli_args_pool, runtime.command_tree);
+
+  if (argc > 1 && runtime.managers.interfaces.style_service.IsReady()) {
+    std::vector<std::string> argv_tokens = {};
+    argv_tokens.reserve(static_cast<size_t>(argc - 1));
+    for (int i = 1; i < argc; ++i) {
+      argv_tokens.emplace_back(argv[i] ? argv[i] : "");
+    }
+    if (const auto invalid_command_error = AMInterface::cli::BuildUnknownCommandError(
+            argv_tokens, runtime.command_tree,
+            runtime.managers.interfaces.style_service.Get());
+        invalid_command_error.has_value()) {
+      std::cout << *invalid_command_error << std::endl;
+      return static_cast<int>(EC::InvalidArg);
+    }
+  }
 
   try {
     runtime.cli_app->parse(argc, argv);

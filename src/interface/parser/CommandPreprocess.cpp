@@ -1,12 +1,21 @@
 #include "interface/parser/CommandPreprocess.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
+#include "interface/parser/CommandTree.hpp"
 #include "interface/token_analyser/TokenTypeAnalyzer.hpp"
+
+#include <optional>
 
 using EC = ErrorCode;
 
 namespace AMInterface::parser {
 namespace {
+
+struct CliTokenWithMeta_ {
+  std::string text = {};
+  bool quoted = false;
+};
+
 /**
  * @brief Restore backtick escapes and strip syntactic quote delimiters.
  *
@@ -86,15 +95,23 @@ size_t FindFirstUnescapedChar_(const std::string &text, char target) {
   return std::string::npos;
 }
 
-} // namespace
+bool StartsWithLongOption_(const std::string &text) {
+  return text.size() > 2 && text[0] == '-' && text[1] == '-';
+}
 
-/**
- * @brief Split interactive command text into CLI11 argument tokens.
- */
-std::vector<std::string>
-AMInputPreprocess::SplitCliTokens(const std::string &input) const {
-  std::vector<std::string> out;
-  const auto split = token_type_analyzer_.SplitToken(input);
+bool StartsWithShortOption_(const std::string &text) {
+  return text.size() >= 2 && text[0] == '-' && text[1] != '-';
+}
+
+bool StartsWithDashLiteral_(const std::string &text) {
+  return text.size() >= 2 && text[0] == '-';
+}
+
+std::vector<CliTokenWithMeta_>
+SplitCliTokensWithMeta_(const std::string &input,
+                        const TokenTypeAnalyzer &analyzer) {
+  std::vector<CliTokenWithMeta_> out = {};
+  const auto split = analyzer.SplitToken(input);
   out.reserve(split.size());
   for (const auto &token : split) {
     if (token.content_end < token.content_start ||
@@ -104,8 +121,194 @@ AMInputPreprocess::SplitCliTokens(const std::string &input) const {
     const std::string raw = input.substr(
         token.content_start, token.content_end - token.content_start);
     const std::string normalized = UnescapeCliToken_(raw);
-    if (!normalized.empty()) {
-      out.push_back(normalized);
+    if (normalized.empty()) {
+      continue;
+    }
+    out.push_back({normalized, token.quoted});
+  }
+  return out;
+}
+
+void ConsumePendingOptionValue_(std::optional<CommandNode::OptionValueRule> *rule,
+                                size_t *value_index) {
+  if (!rule || !value_index || !rule->has_value()) {
+    return;
+  }
+  ++(*value_index);
+  if (!rule->value().repeat_tail &&
+      *value_index >= rule->value().value_count) {
+    rule->reset();
+    *value_index = 0;
+  }
+}
+
+void SetPendingOptionValueByToken_(
+    const std::string &token, const std::string &command_path,
+    const CommandNode *command_tree,
+    std::optional<CommandNode::OptionValueRule> *pending_rule,
+    size_t *pending_value_index) {
+  if (!command_tree || !pending_rule || !pending_value_index ||
+      command_path.empty()) {
+    return;
+  }
+
+  if (StartsWithLongOption_(token)) {
+    const size_t eq_pos = token.find('=');
+    const std::string option_name =
+        (eq_pos == std::string::npos) ? token : token.substr(0, eq_pos);
+    const auto rule =
+        command_tree->ResolveOptionValueRule(command_path, option_name, '\0', 0);
+    if (!rule.has_value()) {
+      return;
+    }
+    if (eq_pos == std::string::npos || eq_pos + 1 >= token.size()) {
+      *pending_rule = rule;
+      *pending_value_index = 0;
+      return;
+    }
+    if (rule->repeat_tail || rule->value_count > 1) {
+      *pending_rule = rule;
+      *pending_value_index = 1;
+      if (!pending_rule->value().repeat_tail &&
+          *pending_value_index >= pending_rule->value().value_count) {
+        pending_rule->reset();
+        *pending_value_index = 0;
+      }
+    }
+    return;
+  }
+
+  if (!StartsWithShortOption_(token)) {
+    return;
+  }
+
+  const std::string body = token.substr(1);
+  for (size_t cidx = 0; cidx < body.size(); ++cidx) {
+    const auto rule =
+        command_tree->ResolveOptionValueRule(command_path, "", body[cidx], 0);
+    if (!rule.has_value()) {
+      continue;
+    }
+    if (cidx + 1 < body.size()) {
+      *pending_rule = rule;
+      *pending_value_index = 1;
+      if (!pending_rule->value().repeat_tail &&
+          *pending_value_index >= pending_rule->value().value_count) {
+        pending_rule->reset();
+        *pending_value_index = 0;
+      }
+    } else {
+      *pending_rule = rule;
+      *pending_value_index = 0;
+    }
+    return;
+  }
+}
+
+void ProtectQuotedDashLiterals_(std::vector<CliTokenWithMeta_> *tokens,
+                                const CommandNode *command_tree) {
+  if (!tokens || tokens->empty() || !command_tree) {
+    return;
+  }
+
+  const auto &src = *tokens;
+  const CommandNode *node = nullptr;
+  std::string command_path = {};
+  size_t command_tokens = 0;
+
+  for (size_t idx = 0; idx < src.size(); ++idx) {
+    const auto &token = src[idx];
+    const std::string &text = token.text;
+    if (text.empty() || token.quoted) {
+      continue;
+    }
+    if (command_path.empty()) {
+      if (text == "--" || StartsWithLongOption_(text) ||
+          StartsWithShortOption_(text)) {
+        return;
+      }
+      if (command_tree->IsTopCommand(text)) {
+        node = command_tree->Find(text);
+        command_path = text;
+        command_tokens = idx + 1;
+        continue;
+      }
+      return;
+    }
+    if (node && node->subcommands.contains(text)) {
+      command_path += " " + text;
+      node = command_tree->Find(command_path);
+      command_tokens = idx + 1;
+      continue;
+    }
+    break;
+  }
+  if (!node || command_path.empty()) {
+    return;
+  }
+
+  std::vector<CliTokenWithMeta_> rewritten = {};
+  rewritten.reserve(src.size() + 1);
+  std::optional<CommandNode::OptionValueRule> pending_value_rule = std::nullopt;
+  size_t pending_value_index = 0;
+  bool options_ended = false;
+
+  for (size_t idx = 0; idx < src.size(); ++idx) {
+    const auto &token = src[idx];
+    const std::string &text = token.text;
+    if (idx < command_tokens || text.empty()) {
+      rewritten.push_back(token);
+      continue;
+    }
+    if (options_ended) {
+      rewritten.push_back(token);
+      continue;
+    }
+    if (!token.quoted && text == "--") {
+      rewritten.push_back(token);
+      options_ended = true;
+      pending_value_rule.reset();
+      pending_value_index = 0;
+      continue;
+    }
+    if (pending_value_rule.has_value()) {
+      ConsumePendingOptionValue_(&pending_value_rule, &pending_value_index);
+      rewritten.push_back(token);
+      continue;
+    }
+    if (!token.quoted &&
+        (StartsWithLongOption_(text) || StartsWithShortOption_(text))) {
+      SetPendingOptionValueByToken_(text, command_path, command_tree,
+                                    &pending_value_rule, &pending_value_index);
+      rewritten.push_back(token);
+      continue;
+    }
+
+    // Quoted tokens starting with '-' should stay positional literals.
+    if (token.quoted && StartsWithDashLiteral_(text)) {
+      if (rewritten.empty() || rewritten.back().text != "--") {
+        rewritten.push_back({"--", false});
+      }
+      options_ended = true;
+    }
+    rewritten.push_back(token);
+  }
+  *tokens = std::move(rewritten);
+}
+
+} // namespace
+
+/**
+ * @brief Split interactive command text into CLI11 argument tokens.
+ */
+std::vector<std::string>
+AMInputPreprocess::SplitCliTokens(const std::string &input) const {
+  const auto split = SplitCliTokensWithMeta_(input, token_type_analyzer_);
+  std::vector<std::string> out;
+  out.reserve(split.size());
+  for (const auto &token : split) {
+    if (!token.text.empty()) {
+      out.push_back(token.text);
     }
   }
   return out;
@@ -140,7 +343,16 @@ AMInputPreprocess::Preprocess(const std::string &input) const {
   }
 
   // Branch 3: normal token split.
-  return {SplitCliTokens(input), OK};
+  auto split = SplitCliTokensWithMeta_(input, token_type_analyzer_);
+  ProtectQuotedDashLiterals_(&split, token_type_analyzer_.CommandTree());
+  std::vector<std::string> out = {};
+  out.reserve(split.size());
+  for (const auto &token : split) {
+    if (!token.text.empty()) {
+      out.push_back(token.text);
+    }
+  }
+  return {std::move(out), OK};
 }
 
 bool AMInputPreprocess::RewriteVarShortcutTokens(
