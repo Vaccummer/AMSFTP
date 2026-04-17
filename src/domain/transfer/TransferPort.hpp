@@ -41,10 +41,11 @@ public:
 
   virtual std::pair<std::shared_ptr<TaskInfo>, ECM>
   StopActive(const TaskInfo::ID &id, ActiveStopReason reason,
-             int timeout_ms = 5000) = 0;
+             int timeout_ms = 5000, int grace_period_ms = 1500) = 0;
 
   virtual std::pair<std::shared_ptr<TaskInfo>, ECM>
-  Terminate(const TaskInfo::ID &id, int timeout_ms = 5000) = 0;
+  Terminate(const TaskInfo::ID &id, int timeout_ms = 5000,
+            int grace_period_ms = 1500) = 0;
 };
 
 std::unique_ptr<ITransferPoolPort>

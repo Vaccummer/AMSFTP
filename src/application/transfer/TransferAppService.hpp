@@ -24,9 +24,11 @@ public:
 
   ECM Submit(const TaskHandle &task_info);
 
-  ECM Pause(TaskId id, int timeout_ms = 5000);
+  ECM Pause(TaskId id, int timeout_ms = 5000,
+            int grace_period_ms = 1500);
   ECM Resume(TaskId id, int timeout_ms = 5000);
-  std::pair<TaskHandle, ECM> Terminate(TaskId id, int timeout_ms = 5000);
+  std::pair<TaskHandle, ECM> Terminate(TaskId id, int timeout_ms = 5000,
+                                       int grace_period_ms = 1500);
 
   [[nodiscard]] std::optional<TaskStatus> GetStatus(TaskId id) const;
   [[nodiscard]] TaskHandle FindTask(TaskId id) const;

@@ -314,7 +314,7 @@ struct TaskSize {
 struct TaskCoreData {
   AMAtomic<TASKS> dir_tasks = AMAtomic<TASKS>(TASKS());
   AMAtomic<TASKS> file_tasks = AMAtomic<TASKS>(TASKS());
-  AMDomain::client::ClientControlComponent control = {};
+  AMDomain::client::ControlComponent control = {};
   AMAtomic<TransferTask *> cur_task = AMAtomic<TransferTask *>(nullptr);
   TransferClientContainer clients;
   std::vector<std::string> nicknames;
@@ -438,11 +438,11 @@ struct TaskInfo {
     return GetIntent() == ControlIntent::Terminate;
   }
 
-  void RequestInterrupt() {
+  void RequestInterrupt(size_t grace_period_ms = 0) {
     State.intent.store(ControlIntent::Terminate, std::memory_order_relaxed);
     const auto &token = Core.control.ControlToken();
     if (token) {
-      token->RequestInterrupt();
+      token->RequestInterrupt(grace_period_ms);
     }
   }
 
@@ -465,14 +465,14 @@ struct TaskInfo {
            Core.control.IsInterrupted();
   }
 
-  void RequestPause() {
+  void RequestPause(size_t grace_period_ms = 0) {
     if (IsTerminateRequested()) {
       return;
     }
     State.intent.store(ControlIntent::Pause, std::memory_order_relaxed);
     const auto &token = Core.control.ControlToken();
     if (token) {
-      token->RequestInterrupt();
+      token->RequestInterrupt(grace_period_ms);
     }
   }
 

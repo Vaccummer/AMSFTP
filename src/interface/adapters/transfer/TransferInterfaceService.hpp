@@ -25,7 +25,7 @@ struct TransferRunArg {
   std::vector<AMDomain::transfer::UserTransferSet> transfer_sets = {};
   bool quiet = false;
   bool run_async = false;
-  int timeout_ms = -1;
+  int timeout_ms = 0;
   TransferConfirmPolicy confirm_policy = TransferConfirmPolicy::RequireConfirm;
 };
 
@@ -41,7 +41,7 @@ struct HttpGetArg {
   bool overwrite = false;
   bool quiet = false;
   bool run_async = false;
-  int timeout_ms = -1;
+  int timeout_ms = 0;
   TransferConfirmPolicy confirm_policy = TransferConfirmPolicy::RequireConfirm;
 };
 
@@ -59,6 +59,7 @@ struct TransferTaskShowArg {
 struct TransferTaskControlArg {
   std::vector<AMDomain::transfer::TaskInfo::ID> ids = {};
   int timeout_ms = 5000;
+  int grace_period_ms = 1500;
 };
 
 struct TransferTaskInspectArg {
@@ -79,7 +80,7 @@ public:
       AMApplication::transfer::TransferAppService &transfer_service,
       AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
       std::function<
-          AMDomain::client::ClientControlComponent(AMDomain::client::amf)>
+          AMDomain::client::ControlComponent(AMDomain::client::amf)>
           control_component_factory = {},
       AMInterface::style::AMStyleService *style_service = nullptr,
       int transfer_bar_refresh_interval_ms = 0);
@@ -90,11 +91,11 @@ public:
 
   ECM Transfer(
       const TransferRunArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent> &component =
+      const std::optional<AMDomain::client::ControlComponent> &component =
           std::nullopt) const;
   ECM HttpGet(
       const HttpGetArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent> &component =
+      const std::optional<AMDomain::client::ControlComponent> &component =
           std::nullopt) const;
   ECM TaskList(const TransferTaskListArg &arg) const;
   ECM TaskShow(const TransferTaskShowArg &arg) const;
@@ -122,23 +123,23 @@ private:
       const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info) const;
   void PrintTaskSets_(
       const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info) const;
-  [[nodiscard]] AMDomain::client::ClientControlComponent
+  [[nodiscard]] AMDomain::client::ControlComponent
   ResolveControl_(
-      const std::optional<AMDomain::client::ClientControlComponent> &component,
+      const std::optional<AMDomain::client::ControlComponent> &component,
       int timeout_ms) const;
   [[nodiscard]] ECM
   ConfirmWildcard_(const std::vector<WildcardConfirmRequest> &requests,
                    TransferConfirmPolicy policy) const;
   [[nodiscard]] ECM
   BuildTaskInfo_(const TransferRunArg &arg,
-                 const AMDomain::client::ClientControlComponent &control,
+                 const AMDomain::client::ControlComponent &control,
                  std::shared_ptr<AMDomain::transfer::TaskInfo> *out_task_info,
                  std::vector<ECM> *warnings,
                  const std::function<void(const std::string &)> &stage_reporter =
                      {}) const;
   [[nodiscard]] ECM
   WaitTask_(const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info,
-            const AMDomain::client::ClientControlComponent &control) const;
+            const AMDomain::client::ControlComponent &control) const;
   [[nodiscard]] std::shared_ptr<AMDomain::transfer::TaskInfo>
   FindTask_(AMDomain::transfer::TaskInfo::ID task_id) const;
 

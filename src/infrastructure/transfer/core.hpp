@@ -273,10 +273,11 @@ public:
 
   std::pair<TaskHandle, ECM> StopActive(
       const TaskId &id, AMDomain::transfer::ActiveStopReason reason,
-      int timeout_ms = 5000) override;
+      int timeout_ms = 5000, int grace_period_ms = 1500) override;
 
   std::pair<TaskHandle, ECM> Terminate(const TaskId &id,
-                                       int timeout_ms = 5000) override;
+                                       int timeout_ms = 5000,
+                                       int grace_period_ms = 1500) override;
 
 private:
   void CancelPendingTasksOnExit_(

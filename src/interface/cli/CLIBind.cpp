@@ -1016,6 +1016,9 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args,
         ->expected(1, -1);
   }
   if (task_terminate_node) {
+    task_terminate_node->AddOption(
+        "-g", "--grace-period", args.task.terminate.grace_period_ms, 1, 1,
+        Sem::None, "Grace period in milliseconds before hard terminate");
     task_terminate_node->AddPositionalRule(0, Sem::TaskId, true);
   }
 
@@ -1027,6 +1030,9 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args,
         ->expected(1, -1);
   }
   if (task_pause_node) {
+    task_pause_node->AddOption(
+        "-g", "--grace-period", args.task.pause.grace_period_ms, 1, 1,
+        Sem::None, "Grace period in milliseconds before pausing active IO");
     task_pause_node->AddPositionalRule(0, Sem::TaskId, true);
   }
 
