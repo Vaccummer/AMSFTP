@@ -1,4 +1,5 @@
 #include "domain/client/ClientModel.hpp"
+#include "domain/transfer/TransferDomainModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
@@ -28,6 +29,8 @@
 
 // TransferRuntimeProgress
 namespace AMInfra::transfer {
+
+using AMDomain::transfer::TransferControl;
 
 TransferRuntimeProgress::TransferRuntimeProgress(TaskHandle task)
     : task_info(std::move(task)) {}
@@ -119,17 +122,22 @@ using TaskInfo = AMDomain::transfer::TaskInfo;
 using TaskHandle = AMInfra::transfer::TaskHandle;
 using ClientProtocol = AMDomain::client::ClientProtocol;
 using AMSFTPIOCore = AMInfra::client::SFTP::AMSFTPIOCore;
-using SocketWaitType = AMInfra::client::SFTP::detail::SocketWaitType;
-using DeathClockProtocol = AMInfra::client::SFTP::detail::DeathClockProtocol;
 using AMFTPIOCore = AMInfra::client::FTP::AMFTPIOCore;
 using AMHTTPIOCore = AMInfra::client::HTTP::AMHTTPIOCore;
 using TransferTask = AMDomain::transfer::TransferTask;
 using TaskStatus = AMDomain::transfer::TaskStatus;
-using TaskId = TaskInfo::ID;
-using TaskRegistry = AMAtomic<std::unordered_map<TaskId, TaskHandle>>;
+using AMDomain::transfer::TaskID;
+using TaskRegistry = AMAtomic<std::unordered_map<TaskID, TaskHandle>>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TransferBufferPolicy = AMInfra::transfer::TransferBufferPolicy;
 constexpr const char *kHttpUserAgent = "amsftp-wget/1.0";
+
+[[nodiscard]] ECM ContextualizeTransferRCM_(ECM rcm, std::string operation,
+                                            const std::string &target) {
+  rcm.operation = std::move(operation);
+  rcm.target = target;
+  return rcm;
+}
 
 [[nodiscard]] ECM EnsureTransferClientReady_(const ClientHandle &client,
                                              const char *operation) {
@@ -187,9 +195,9 @@ void SignalTaskIoAbort_(RuntimeProgress &pd) {
   }
 }
 
-bool IsTaskIdUsedHelper(const TaskId &task_id, TaskRegistry &task_registry,
+bool IsTaskIDUsedHelper(const TaskID &task_id, TaskRegistry &task_registry,
                         std::mutex &conducting_mtx,
-                        const std::unordered_set<TaskId> &conducting_tasks) {
+                        const std::unordered_set<TaskID> &conducting_tasks) {
   {
     auto registry = task_registry.lock();
     if (registry->contains(task_id)) {
@@ -275,7 +283,7 @@ public:
   LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
   AMSFTPIOCore *client = nullptr;
   RuntimeProgress *pd = nullptr;
-  AMDomain::client::ControlComponent control = {};
+  ControlComponent control = {};
 
   // Common members
   std::string path;
@@ -291,9 +299,7 @@ public:
       if (sftp_handle) {
         if (client) {
           std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
-          DeathClockProtocol close_death_clock(
-              control, AMDomain::client::kHandleCloseGraceWaitMs);
-          (void)client->nb_call(close_death_clock, [&]() {
+          (void)client->NBPerform(control, [&]() {
             return libssh2_sftp_close_handle(sftp_handle);
           });
         }
@@ -332,37 +338,41 @@ public:
 
     if (is_sftp) {
       // SFTP file
+      auto *sftp = client->SFTPHandle();
+      if (sftp == nullptr) {
+        return Err(EC::NoConnection, "transfer.file.open", path,
+                   "SFTP session not initialized");
+      }
       std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
-      libssh2_session_set_blocking(client->session, 0);
-      NBResult<LIBSSH2_SFTP_HANDLE *> nb_res{nullptr, WaitResult::Ready};
-      DeathClockProtocol death_clock(
-          control, AMDomain::client::kTransferInterruptGraceWaitMs);
+      auto open_sftp = [&](int flags, long mode) {
+        return client->NBPerform(control, [&]() {
+          return libssh2_sftp_open(sftp, path.c_str(), flags, mode);
+        });
+      };
 
       if (is_write) {
         int flags = LIBSSH2_FXF_WRITE;
         if (truncate) {
           flags |= LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_CREAT;
         }
-        nb_res = client->nb_call(death_clock, [&]() {
-          return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
-        });
+        auto nb_res = open_sftp(flags, 0744);
+        if (!nb_res) {
+          return ContextualizeTransferRCM_(nb_res.rcm, "transfer.file.open",
+                                           path);
+        }
         sftp_handle = nb_res.value;
       } else {
-        nb_res = client->nb_call(death_clock, [&]() {
-          return libssh2_sftp_open(client->sftp, path.c_str(), LIBSSH2_FXF_READ,
-                                   0400);
-        });
+        auto nb_res = open_sftp(LIBSSH2_FXF_READ, 0400);
+        if (!nb_res) {
+          return ContextualizeTransferRCM_(nb_res.rcm, "transfer.file.open",
+                                           path);
+        }
         sftp_handle = nb_res.value;
       }
-      if (nb_res.status == WaitResult::Interrupted) {
-        if (pd) {
-          return {EC::Terminate, "", "", "Task terminated by user"};
-        }
-      }
       if (!sftp_handle) {
-        EC rc = client->GetLastEC();
-        std::string msg = client->GetLastErrorMsg();
-        return {rc, AMStr::fmt("Open sftp file \"{}\" failed: {}", path, msg)};
+        return Err(client->GetLastEC(), "transfer.file.open", path,
+                   AMStr::fmt("Open sftp file \"{}\" failed: {}", path,
+                              client->GetLastErrorMsg()));
       }
     } else {
       // Local file
@@ -462,12 +472,10 @@ public:
 
   std::pair<ssize_t, ECM> Read() {
     if (!IsValid()) {
-      return {-1,
-              {EC::LocalFileOpenError, "", "", "File not initialized"}};
+      return {-1, {EC::LocalFileOpenError, "", "", "File not initialized"}};
     }
     if (!pd || !pd->ring_buffer) {
-      return {-1,
-              {EC::InvalidArg, "", "", "Progress data not initialized"}};
+      return {-1, {EC::InvalidArg, "", "", "Progress data not initialized"}};
     }
 
     auto write_span = pd->ring_buffer->get_write_span();
@@ -479,41 +487,25 @@ public:
       if (is_sftp) {
         // SFTP read (non-blocking)
         std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
-        while (true) {
-          if (IsTaskInterrupted_(*pd)) {
-            return {-1,
-                    {EC::Terminate, "", "", "Task terminated by user"}};
-          }
-          bytes_read = libssh2_sftp_read(sftp_handle, write_ptr, to_read);
-          if (bytes_read > 0) {
-            pd->ring_buffer->commit_write(bytes_read);
-            offset += bytes_read;
-            return {bytes_read, OK};
-          }
-          if (bytes_read == 0) {
-            return {0, {EC::EndOfFile, "", "", "End of file"}};
-          }
-          if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr = client->wait_for_socket(
-                SocketWaitType::Read, control,
-                AMDomain::client::kTransferInterruptGraceWaitMs);
-            if (wr == WaitResult::Error) {
-              return {
-                  -1,
-                  {wait_result_to_error_code(wr), "SFTP read socket error"}};
-            }
-            if (wr == WaitResult::Interrupted) {
-              return {
-                  static_cast<ssize_t>(EC::Terminate),
-                  ECM{EC::Terminate, "", "", "Task terminated by user"}};
-            }
-            continue;
-          }
-          return {bytes_read,
-                  {client->GetLastEC(),
-                   AMStr::fmt("Read sftp file \"{}\" failed: {}", path,
-                              client->GetLastErrorMsg())}};
+        auto nb_res = client->NBPerform(control, [&]() {
+          return libssh2_sftp_read(sftp_handle, write_ptr, to_read);
+        });
+        if (!nb_res) {
+          return {-1, ContextualizeTransferRCM_(nb_res.rcm,
+                                                "transfer.file.read", path)};
         }
+        bytes_read = nb_res.value;
+        if (bytes_read > 0) {
+          pd->ring_buffer->commit_write(bytes_read);
+          offset += bytes_read;
+          return {bytes_read, OK};
+        }
+        if (bytes_read == 0) {
+          return {0, {EC::EndOfFile, "", "", "End of file"}};
+        }
+        return {bytes_read, Err(client->GetLastEC(), "transfer.file.read", path,
+                                AMStr::fmt("Read sftp file \"{}\" failed: {}",
+                                           path, client->GetLastErrorMsg()))};
       } else {
         // Local file read
 #ifdef _WIN32
@@ -556,12 +548,10 @@ public:
 
   std::pair<ssize_t, ECM> Write() {
     if (!IsValid()) {
-      return {-1,
-              {EC::LocalFileOpenError, "", "", "File not initialized"}};
+      return {-1, {EC::LocalFileOpenError, "", "", "File not initialized"}};
     }
     if (!pd || !pd->ring_buffer) {
-      return {-1,
-              {EC::InvalidArg, "", "", "Progress data not initialized"}};
+      return {-1, {EC::InvalidArg, "", "", "Progress data not initialized"}};
     }
 
     auto read_span = pd->ring_buffer->get_read_span();
@@ -572,47 +562,29 @@ public:
     if (to_write > 0) {
       if (is_sftp) {
         // SFTP write (non-blocking)
-        while (true) {
-          if (IsTaskInterrupted_(*pd)) {
-            return {-1,
-                    {EC::Terminate, "", "", "Task terminated by user"}};
-          }
-          {
-            std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
-            bytes_written = libssh2_sftp_write(sftp_handle, read_ptr, to_write);
-          }
-          if (bytes_written > 0) {
-            pd->ring_buffer->commit_read(bytes_written);
-            offset += bytes_written;
-            pd->UpdateSize(static_cast<size_t>(bytes_written));
-            pd->CallInnerCallback(false);
-            return {bytes_written, OK};
-          }
-          if (bytes_written == 0) {
-            return {0, {EC::EndOfFile, "", "", "End of file"}};
-          }
-          if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr = client->wait_for_socket(
-                SocketWaitType::Write, control,
-                AMDomain::client::kTransferInterruptGraceWaitMs);
-            if (wr == WaitResult::Error) {
-              return {
-                  LIBSSH2_ERROR_EAGAIN,
-                  {wait_result_to_error_code(wr), "SFTP write socket error"}};
-            }
-            if (wr == WaitResult::Interrupted) {
-              return {
-                  static_cast<ssize_t>(EC::Terminate),
-                  ECM{EC::Terminate, "", "", "Task terminated by user"}};
-            }
-            continue;
-          }
-          EC rc = client->GetLastEC();
-          std::string msg = client->GetLastErrorMsg();
-          return {
-              bytes_written,
-              {rc, AMStr::fmt("Write sftp file \"{}\" failed: {}", path, msg)}};
+        std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
+        auto nb_res = client->NBPerform(control, [&]() {
+          return libssh2_sftp_write(sftp_handle, read_ptr, to_write);
+        });
+        if (!nb_res) {
+          return {-1, ContextualizeTransferRCM_(nb_res.rcm,
+                                                "transfer.file.write", path)};
         }
+        bytes_written = nb_res.value;
+        if (bytes_written > 0) {
+          pd->ring_buffer->commit_read(bytes_written);
+          offset += bytes_written;
+          pd->UpdateSize(static_cast<size_t>(bytes_written));
+          pd->CallInnerCallback(false);
+          return {bytes_written, OK};
+        }
+        if (bytes_written == 0) {
+          return {0, {EC::EndOfFile, "", "", "End of file"}};
+        }
+        return {bytes_written,
+                Err(client->GetLastEC(), "transfer.file.write", path,
+                    AMStr::fmt("Write sftp file \"{}\" failed: {}", path,
+                               client->GetLastErrorMsg()))};
       } else {
         // Local file write
 #ifdef _WIN32
@@ -801,7 +773,6 @@ private:
       }
     }
     std::lock_guard<std::recursive_mutex> lock(client_sftp->TransferMutex());
-    libssh2_session_set_blocking(client_sftp->session, 0);
     while (file_handle.offset < file_handle.file_size &&
            !IsTaskInterrupted_(pd)) {
       if (!WaitWritableUntilReady_(pd, file_handle)) {
@@ -873,7 +844,6 @@ private:
         return;
       }
     }
-    libssh2_session_set_blocking(client_sftp->session, 0);
     while (file_handle.offset < file_handle.file_size &&
            !IsTaskInterrupted_(pd)) {
       if (!WaitReadableUntilReady_(pd)) {
@@ -1289,8 +1259,8 @@ namespace AMInfra::transfer {
 TransferExecutionEngine::TransferExecutionEngine(
     const TransferBufferPolicy &buffer_policy)
     : buffer_policy_(buffer_policy) {
-  read_thread_ =
-      std::jthread([this](std::stop_token stop_token) { ReadLoop_(stop_token); });
+  read_thread_ = std::jthread(
+      [this](std::stop_token stop_token) { ReadLoop_(stop_token); });
 }
 
 /**
@@ -1337,8 +1307,8 @@ void TransferExecutionEngine::ReadLoop_(std::stop_token stop_token) {
     } catch (const std::exception &e) {
       read_rcm = Err(EC::UnknownError, "", "", e.what());
     } catch (...) {
-      read_rcm = Err(EC::UnknownError, "", "",
-                     "Unknown read thread runtime error");
+      read_rcm =
+          Err(EC::UnknownError, "", "", "Unknown read thread runtime error");
     }
     job.promise.set_value(read_rcm);
   }
@@ -1530,8 +1500,7 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
 
   if (task_info->Core.clients.empty()) {
     task_info->SetStatus(TaskStatus::Finished);
-    task_info->SetResult(
-        {EC::InvalidHandle, "", "", "Task clients not found"});
+    task_info->SetResult({EC::InvalidHandle, "", "", "Task clients not found"});
     task_info->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
     return;
   }
@@ -1698,8 +1667,7 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
       size_t resume_offset = task.transferred;
       if (resume_offset > 0) {
         if (resume_offset > task.size) {
-          task.rcm = {EC::InvalidOffset, "", "",
-                      "Offset exceeds src size"};
+          task.rcm = {EC::InvalidOffset, "", "", "Offset exceeds src size"};
           task.IsFinished = true;
           record_error(task.rcm);
           emit_entry_error(task);
@@ -1800,8 +1768,7 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
     task_info->SetResult({EC::OperationTimeout, "", "", "Task timeout"});
   } else if (IsTaskHardInterrupted_(task_info) &&
              !task_info->IsPauseRequested()) {
-    task_info->SetResult(
-        {EC::Terminate, "", "", "Task terminated by user"});
+    task_info->SetResult({EC::Terminate, "", "", "Task terminated by user"});
   } else if (last_non_ok.code != EC::Success) {
     task_info->SetResult(last_non_ok);
   } else {
@@ -1821,7 +1788,7 @@ void TransferExecutionPool::CancelPendingTasksOnExit_(
   {
     std::lock_guard<std::mutex> queue_lock(queue_mtx_);
     auto task_registry = task_registry_.lock();
-    auto cancel_one = [&](const TaskId &task_id) {
+    auto cancel_one = [&](const TaskID &task_id) {
       auto it = task_registry->find(task_id);
       if (it == task_registry->end() || !it->second) {
         return;
@@ -1862,7 +1829,7 @@ void TransferExecutionPool::RegisterTask(const TaskHandle &task_info,
                                          int affinity_thread) {
   std::lock_guard<std::mutex> queue_lock(queue_mtx_);
   auto task_registry = task_registry_.lock();
-  std::list<TaskId> *target_queue = nullptr;
+  std::list<TaskID> *target_queue = nullptr;
   const size_t active_count =
       desired_thread_count_.load(std::memory_order_relaxed);
   const bool affinity_valid =
@@ -1885,7 +1852,7 @@ void TransferExecutionPool::RegisterTask(const TaskHandle &task_info,
   task_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
   (*task_registry)[task_info->id] = task_info;
 }
-std::optional<std::pair<TaskId, TaskHandle>>
+std::optional<std::pair<TaskID, TaskHandle>>
 TransferExecutionPool::DequeueTask(std::stop_token stop_token,
                                    size_t thread_index) {
   while (true) {
@@ -1929,7 +1896,7 @@ TransferExecutionPool::DequeueTask(std::stop_token stop_token,
       }
     }
 
-    TaskId task_id = 0;
+    TaskID task_id = 0;
     if (thread_index < affinity_queues_.size() &&
         !affinity_queues_[thread_index].empty()) {
       task_id = affinity_queues_[thread_index].front();
@@ -1962,7 +1929,7 @@ void TransferExecutionPool::HandleCompletedTask(const TaskHandle &task_info) {
 }
 
 void TransferExecutionPool::SetConducting(size_t thread_index,
-                                          const TaskId &task_id,
+                                          const TaskID &task_id,
                                           const TaskHandle &task_info) {
   {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
@@ -1982,7 +1949,7 @@ void TransferExecutionPool::ClearConducting(size_t thread_index) {
   {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
     if (thread_index < conducting_by_thread_.size()) {
-      const TaskId id = conducting_by_thread_[thread_index];
+      const TaskID id = conducting_by_thread_[thread_index];
       if (id != 0) {
         conducting_tasks_.erase(id);
         removed_task = true;
@@ -2031,8 +1998,8 @@ void TransferExecutionPool::WorkerLoop(std::stop_token stop_token,
     }
     if (!engine) {
       task_info->SetStatus(TaskStatus::Finished);
-      task_info->SetResult(Err(EC::InvalidHandle, "", "",
-                               "Worker transfer engine is null"));
+      task_info->SetResult(
+          Err(EC::InvalidHandle, "", "", "Worker transfer engine is null"));
       task_info->Time.finish.store(AMTime::seconds(),
                                    std::memory_order_relaxed);
     } else {
@@ -2134,8 +2101,7 @@ ECM TransferExecutionPool::Shutdown(int timeout_ms) {
           lock, std::chrono::milliseconds(timeout_ms),
           [this]() { return conducting_tasks_.empty(); });
       if (!no_conducting) {
-        return {EC::OperationTimeout, "", "",
-                "Graceful terminate timed out"};
+        return {EC::OperationTimeout, "", "", "Graceful terminate timed out"};
       }
     }
   }
@@ -2234,8 +2200,9 @@ void TransferExecutionPool::EnsureWorkerCapacity_(size_t worker_count) {
 
   const size_t begin = worker_threads_.size();
   for (size_t idx = begin; idx < worker_count; ++idx) {
-    worker_threads_.emplace_back(
-        [this, idx](std::stop_token stop_token) { WorkerLoop(stop_token, idx); });
+    worker_threads_.emplace_back([this, idx](std::stop_token stop_token) {
+      WorkerLoop(stop_token, idx);
+    });
   }
 }
 
@@ -2354,8 +2321,8 @@ void TransferExecutionPool::HeartbeatTick_() {
         continue;
       }
 
-      auto check_result = client->IOPort().Check(
-          {}, AMDomain::client::ControlComponent(nullptr, timeout_ms));
+      auto check_result =
+          client->IOPort().Check({}, ControlComponent(nullptr, timeout_ms));
       if (!(check_result.rcm)) {
         if (!task_info->IsPauseRequested() &&
             !task_info->IsTerminateRequested()) {
@@ -2402,8 +2369,7 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
     return {EC::InvalidArg, "", "", "TaskInfo is nullptr"};
   }
   if (!running_.load(std::memory_order_acquire)) {
-    return {EC::OperationUnsupported, "", "",
-            "Work manager is shutting down"};
+    return {EC::OperationUnsupported, "", "", "Work manager is shutting down"};
   }
   const bool has_dir_tasks = !task_info->Core.dir_tasks.lock()->empty();
   const bool has_file_tasks = !task_info->Core.file_tasks.lock()->empty();
@@ -2415,7 +2381,7 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
   }
 
   if (task_info->id == 0 ||
-      IsTaskIdUsedHelper(task_info->id, task_registry_, conducting_mtx_,
+      IsTaskIDUsedHelper(task_info->id, task_registry_, conducting_mtx_,
                          conducting_tasks_)) {
     return {EC::InvalidArg, "", "", "Task ID is invalid or already used"};
   }
@@ -2455,7 +2421,7 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
 }
 
 std::optional<TaskStatus>
-TransferExecutionPool::GetStatus(const TaskId &id) const {
+TransferExecutionPool::GetStatus(const TaskID &id) const {
   auto task_registry = task_registry_.lock();
   auto it = task_registry->find(id);
   if (it != task_registry->end() && it->second) {
@@ -2465,10 +2431,9 @@ TransferExecutionPool::GetStatus(const TaskId &id) const {
 }
 
 std::pair<TaskHandle, ECM>
-TransferExecutionPool::StopActive(const TaskId &id,
+TransferExecutionPool::StopActive(const TaskID &id,
                                   AMDomain::transfer::ActiveStopReason reason,
-                                  int timeout_ms,
-                                  int grace_period_ms) {
+                                  int timeout_ms, int grace_period_ms) {
   TaskHandle existing = nullptr;
   {
     auto task_registry = task_registry_.lock();
@@ -2538,9 +2503,8 @@ TransferExecutionPool::StopActive(const TaskId &id,
       }
     }
 
-    existing->RequestPause(grace_period_ms > 0
-                               ? static_cast<size_t>(grace_period_ms)
-                               : size_t{0});
+    existing->RequestPause(
+        grace_period_ms > 0 ? static_cast<size_t>(grace_period_ms) : size_t{0});
     const int64_t start_ms = AMTime::miliseconds();
     while (timeout_ms < 0 || (AMTime::miliseconds() - start_ms) < timeout_ms) {
       status_t = existing->GetStatus();
@@ -2558,8 +2522,7 @@ TransferExecutionPool::StopActive(const TaskId &id,
       bool detached_from_worker = false;
       {
         std::lock_guard<std::mutex> lock(conducting_mtx_);
-        detached_from_worker =
-            !conducting_tasks_.contains(id);
+        detached_from_worker = !conducting_tasks_.contains(id);
       }
       if (status_t == TaskStatus::Paused && on_thread < 0 &&
           detached_from_worker) {
@@ -2616,9 +2579,8 @@ TransferExecutionPool::StopActive(const TaskId &id,
     }
   }
 
-  existing->RequestInterrupt(grace_period_ms > 0
-                                 ? static_cast<size_t>(grace_period_ms)
-                                 : size_t{0});
+  existing->RequestInterrupt(
+      grace_period_ms > 0 ? static_cast<size_t>(grace_period_ms) : size_t{0});
   const int64_t start_ms = AMTime::miliseconds();
   while (timeout_ms < 0 || (AMTime::miliseconds() - start_ms) < timeout_ms) {
     if (existing->GetStatus() == TaskStatus::Finished) {
@@ -2631,19 +2593,20 @@ TransferExecutionPool::StopActive(const TaskId &id,
            AMStr::fmt("Task terminate timeout: {}", id)}};
 }
 
-std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(
-    const TaskId &id, int timeout_ms, int grace_period_ms) {
+std::pair<TaskHandle, ECM>
+TransferExecutionPool::Terminate(const TaskID &id, int timeout_ms,
+                                 int grace_period_ms) {
   return StopActive(id, AMDomain::transfer::ActiveStopReason::Terminate,
                     timeout_ms, grace_period_ms);
 }
 
-std::unordered_map<TaskId, TaskHandle>
+std::unordered_map<TaskID, TaskHandle>
 TransferExecutionPool::GetRegistryCopy() const {
   auto task_registry = task_registry_.lock();
   return *task_registry;
 }
 
-TaskHandle TransferExecutionPool::GetActiveTask(const TaskId &id) const {
+TaskHandle TransferExecutionPool::GetActiveTask(const TaskID &id) const {
   auto task_registry = task_registry_.lock();
   auto it = task_registry->find(id);
   if (it == task_registry->end()) {
@@ -2652,14 +2615,14 @@ TaskHandle TransferExecutionPool::GetActiveTask(const TaskId &id) const {
   return it->second;
 }
 
-std::unordered_map<TaskId, TaskHandle>
+std::unordered_map<TaskID, TaskHandle>
 TransferExecutionPool::GetAllActiveTasks() const {
   return GetRegistryCopy();
 }
 
-std::unordered_map<TaskId, TaskHandle>
+std::unordered_map<TaskID, TaskHandle>
 TransferExecutionPool::GetPendingTasks() const {
-  std::unordered_map<TaskId, TaskHandle> out;
+  std::unordered_map<TaskID, TaskHandle> out;
   auto task_registry = task_registry_.lock();
   out.reserve(task_registry->size());
   for (const auto &[id, task] : *task_registry) {
@@ -2670,9 +2633,9 @@ TransferExecutionPool::GetPendingTasks() const {
   return out;
 }
 
-std::unordered_map<TaskId, TaskHandle>
+std::unordered_map<TaskID, TaskHandle>
 TransferExecutionPool::GetConductingTasks() const {
-  std::unordered_map<TaskId, TaskHandle> out;
+  std::unordered_map<TaskID, TaskHandle> out;
   std::lock_guard<std::mutex> lock(conducting_mtx_);
   out.reserve(conducting_infos_.size());
   for (const auto &task : conducting_infos_) {
@@ -2695,4 +2658,3 @@ CreateTransferPoolPort(const TransferManagerArg &arg) {
   return std::make_unique<AMInfra::transfer::TransferExecutionPool>(arg);
 }
 } // namespace AMDomain::transfer
-
