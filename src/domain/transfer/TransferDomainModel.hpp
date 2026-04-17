@@ -6,6 +6,7 @@
 #include "foundation/tools/string.hpp"
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -16,10 +17,20 @@ namespace AMDomain::transfer {
 class UserTransferSet;
 class TaskInfo;
 class TransferTask;
+using TaskID = int64_t;
 using AMDomain::filesystem::PathTarget;
 using TASKS = std::vector<TransferTask>;
 using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
 using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
+using TaskHistory = std::unordered_map<TaskID, sptr<TaskInfo>>;
+using ProgressCallback =
+    std::function<void(std::shared_ptr<TaskInfo>, bool force)>;
+
+enum class TaskStatus { Pending, Conducting, Paused, Finished };
+enum class TaskAssignType { Affinity, Public };
+enum class ControlIntent { Running, Pause, Terminate };
+enum class ActiveStopReason { Pause, Terminate };
+enum class TransferControl { Running = 1, Pause = 0, Terminate = -1 };
 
 struct TransferClientHolder {
   ClientHandle src = nullptr;
@@ -150,9 +161,6 @@ private:
   std::unordered_map<std::string, TransferClientHolder> holders_ = {};
 };
 
-enum class TaskStatus { Pending, Conducting, Paused, Finished };
-enum class ControlIntent { Running, Pause, Terminate };
-
 /**
  * @brief Settings payload for `Options.TransferManager`.
  */
@@ -161,8 +169,7 @@ struct TransferManagerArg {
   int bar_refresh_interval_ms = 200;
   int heartbeat_interval_s = 10;
   int heartbeat_timeout_ms = 5000;
-  size_t buffer_size =
-      AMDomain::client::ClientService::AMDefaultRemoteBufferSize;
+  size_t buffer_size = AMDomain::client::ClientService::AMDefaultBufferSize;
   size_t min_buffer = AMDomain::client::ClientService::AMMinBufferSize;
   size_t max_buffer = AMDomain::client::ClientService::AMMaxBufferSize;
 };
@@ -314,7 +321,7 @@ struct TaskSize {
 struct TaskCoreData {
   AMAtomic<TASKS> dir_tasks = AMAtomic<TASKS>(TASKS());
   AMAtomic<TASKS> file_tasks = AMAtomic<TASKS>(TASKS());
-  AMDomain::client::ControlComponent control = {};
+  ControlComponent control = {};
   AMAtomic<TransferTask *> cur_task = AMAtomic<TransferTask *>(nullptr);
   TransferClientContainer clients;
   std::vector<std::string> nicknames;
@@ -339,16 +346,7 @@ struct TaskCallback {
 } // namespace TaskStruct
 
 struct TaskInfo {
-  /**
-   * @brief Callback invoked when the task completes.
-   */
-
-  using ID = size_t;
-
-  /**
-   * @brief Unique task identifier.
-   */
-  ID id = 0;
+  TaskID id = 0;
   TaskStruct::TaskTime Time;
   TaskStruct::TaskState State;
   TaskStruct::TaskSize Size;
@@ -440,14 +438,14 @@ struct TaskInfo {
 
   void RequestInterrupt(size_t grace_period_ms = 0) {
     State.intent.store(ControlIntent::Terminate, std::memory_order_relaxed);
-    const auto &token = Core.control.ControlToken();
+    const auto &token = Core.control.InterruptRaw();
     if (token) {
       token->RequestInterrupt(grace_period_ms);
     }
   }
 
   void ClearInterrupt() {
-    const auto &token = Core.control.ControlToken();
+    const auto &token = Core.control.InterruptRaw();
     if (token) {
       token->ClearInterrupt();
     }
@@ -461,8 +459,7 @@ struct TaskInfo {
   }
 
   bool IsInterrupted() const {
-    return GetIntent() != ControlIntent::Running ||
-           Core.control.IsInterrupted();
+    return GetIntent() != ControlIntent::Running || Core.control.ShouldStop();
   }
 
   void RequestPause(size_t grace_period_ms = 0) {
@@ -470,7 +467,7 @@ struct TaskInfo {
       return;
     }
     State.intent.store(ControlIntent::Pause, std::memory_order_relaxed);
-    const auto &token = Core.control.ControlToken();
+    const auto &token = Core.control.InterruptRaw();
     if (token) {
       token->RequestInterrupt(grace_period_ms);
     }
@@ -558,10 +555,4 @@ public:
         resume(resume) {}
 };
 
-using TaskHistory = std::unordered_map<TaskInfo::ID, sptr<TaskInfo>>;
-using ProgressCallback =
-    std::function<void(std::shared_ptr<TaskInfo>, bool force)>;
 } // namespace AMDomain::transfer
-
-
-

@@ -7,7 +7,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace AMDomain::filesystem::services {
+namespace AMDomain::filesystem::service {
 
 inline std::string NormalizePath(const std::string &path) {
   if (path.empty()) {
@@ -54,4 +54,4 @@ BuildShellCommand(OS_TYPE os_type, const std::string &cwd,
   return AMStr::fmt("{}{}", cmd_template, command);
 };
 
-} // namespace AMDomain::filesystem::services
+} // namespace AMDomain::filesystem::service
