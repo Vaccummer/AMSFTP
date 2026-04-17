@@ -145,6 +145,7 @@ struct TaskEntryArgs : BaseArgStruct {
 struct TaskControlArgs : BaseArgStruct {
   enum class Action { Terminate, Pause, Resume };
   std::vector<size_t> ids = {};
+  int grace_period_ms = 1500;
   Action action = Action::Terminate;
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
@@ -152,6 +153,7 @@ struct TaskControlArgs : BaseArgStruct {
     AMInterface::transfer::TransferTaskControlArg arg = {};
     arg.ids = ids;
     arg.timeout_ms = 5000;
+    arg.grace_period_ms = grace_period_ms;
     switch (action) {
     case TaskControlArgs::Action::Terminate:
       return managers.interfaces.transfer_service->TaskTerminate(arg);
@@ -163,7 +165,10 @@ struct TaskControlArgs : BaseArgStruct {
       return Err(EC::InvalidArg, "", "", "Unknown task control action");
     }
   }
-  void reset() override { ids.clear(); }
+  void reset() override {
+    ids.clear();
+    grace_period_ms = 1500;
+  }
 };
 
 /**

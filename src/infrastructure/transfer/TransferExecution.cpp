@@ -164,9 +164,20 @@ constexpr const char *kHttpUserAgent = "amsftp-wget/1.0";
              client->ConfigPort().GetNickname(), "Client terminal is active");
 }
 
+bool IsTaskHardInterrupted_(const TaskHandle &task_info) {
+  if (!task_info) {
+    return false;
+  }
+  if (task_info->Core.control.IsTimeout()) {
+    return true;
+  }
+  const auto token = task_info->Core.control.ControlToken();
+  return token && token->IsInterrupt();
+}
+
 bool IsTaskInterrupted_(const RuntimeProgress &pd) {
   return pd.io_abort.load(std::memory_order_relaxed) ||
-         (pd.task_info && pd.task_info->IsInterrupted());
+         IsTaskHardInterrupted_(pd.task_info);
 }
 
 void SignalTaskIoAbort_(RuntimeProgress &pd) {
@@ -190,8 +201,16 @@ bool IsTaskIdUsedHelper(const TaskId &task_id, TaskRegistry &task_registry,
 }
 
 bool ShouldSkipTaskHelper(const TaskHandle &task_info) {
-  if (task_info && task_info->IsInterrupted() &&
-      !task_info->IsPauseRequested()) {
+  if (!task_info) {
+    return false;
+  }
+  if (task_info->IsPauseRequested()) {
+    task_info->SetResult({EC::Success, "", "", "Task paused"});
+    task_info->SetStatus(TaskStatus::Paused);
+    task_info->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
+    return true;
+  }
+  if (IsTaskHardInterrupted_(task_info) && !task_info->IsPauseRequested()) {
     task_info->SetResult(
         {EC::Terminate, "", "", "Task terminated before start"});
     task_info->SetStatus(TaskStatus::Finished);
@@ -256,7 +275,7 @@ public:
   LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
   AMSFTPIOCore *client = nullptr;
   RuntimeProgress *pd = nullptr;
-  AMDomain::client::ClientControlComponent control = {};
+  AMDomain::client::ControlComponent control = {};
 
   // Common members
   std::string path;
@@ -1036,8 +1055,8 @@ private:
       SignalTaskIoAbort_(*pd);
       return;
     }
-    if (pd->task_info && (pd->task_info->IsTerminateRequested() ||
-                          pd->task_info->Core.control.IsInterrupted())) {
+    if (pd->task_info && IsTaskHardInterrupted_(pd->task_info) &&
+        !pd->task_info->IsPauseRequested()) {
       cur_task->rcm =
           Err(EC::Terminate, "http.download", src, "Task terminated by user");
       SignalTaskIoAbort_(*pd);
@@ -1455,8 +1474,7 @@ ECM TransferExecutionEngine::TransferSignleFile(
   if (task_info->Core.control.IsTimeout()) {
     return {EC::OperationTimeout, "", "", "Task timeout"};
   }
-  if (task_info->IsTerminateRequested() ||
-      task_info->Core.control.IsInterrupted()) {
+  if (IsTaskHardInterrupted_(task_info) && !task_info->IsPauseRequested()) {
     return {EC::Terminate, "", "", "Task terminated by user"};
   }
   if (pd.io_abort.load(std::memory_order_relaxed) &&
@@ -1566,9 +1584,7 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
     if (task_info->Core.control.IsTimeout()) {
       return ECM{EC::OperationTimeout, "", "", "Task timeout"};
     }
-    if (task_info->IsTerminateRequested() ||
-        (task_info->Core.control.IsInterrupted() &&
-         !task_info->IsPauseRequested())) {
+    if (IsTaskHardInterrupted_(task_info) && !task_info->IsPauseRequested()) {
       return ECM{EC::Terminate, "", "", "Task terminated by user"};
     }
     return std::nullopt;
@@ -1772,9 +1788,8 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
     return;
   }
 
-  const bool terminated_requested = task_info->IsTerminateRequested() ||
-                                    (task_info->Core.control.IsInterrupted() &&
-                                     !task_info->IsPauseRequested());
+  const bool terminated_requested =
+      IsTaskHardInterrupted_(task_info) && !task_info->IsPauseRequested();
   if (terminated_requested) {
     const ECM terminate_rcm = {EC::Terminate, "", "",
                                "Task terminated by user"};
@@ -1783,8 +1798,8 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
 
   if (task_info->Core.control.IsTimeout()) {
     task_info->SetResult({EC::OperationTimeout, "", "", "Task timeout"});
-  } else if (task_info->IsTerminateRequested() ||
-             task_info->Core.control.IsInterrupted()) {
+  } else if (IsTaskHardInterrupted_(task_info) &&
+             !task_info->IsPauseRequested()) {
     task_info->SetResult(
         {EC::Terminate, "", "", "Task terminated by user"});
   } else if (last_non_ok.code != EC::Success) {
@@ -2340,7 +2355,7 @@ void TransferExecutionPool::HeartbeatTick_() {
       }
 
       auto check_result = client->IOPort().Check(
-          {}, AMDomain::client::ClientControlComponent(nullptr, timeout_ms));
+          {}, AMDomain::client::ControlComponent(nullptr, timeout_ms));
       if (!(check_result.rcm)) {
         if (!task_info->IsPauseRequested() &&
             !task_info->IsTerminateRequested()) {
@@ -2452,7 +2467,8 @@ TransferExecutionPool::GetStatus(const TaskId &id) const {
 std::pair<TaskHandle, ECM>
 TransferExecutionPool::StopActive(const TaskId &id,
                                   AMDomain::transfer::ActiveStopReason reason,
-                                  int timeout_ms) {
+                                  int timeout_ms,
+                                  int grace_period_ms) {
   TaskHandle existing = nullptr;
   {
     auto task_registry = task_registry_.lock();
@@ -2501,7 +2517,9 @@ TransferExecutionPool::StopActive(const TaskId &id,
             public_queue_.remove(id);
           }
           task_registry->erase(it);
-          task_info->RequestPause();
+          task_info->RequestPause(grace_period_ms > 0
+                                      ? static_cast<size_t>(grace_period_ms)
+                                      : size_t{0});
           task_info->SetResult(
               {EC::Success, "", AMStr::ToString(id), "Task paused"});
           task_info->SetStatus(TaskStatus::Paused);
@@ -2520,7 +2538,9 @@ TransferExecutionPool::StopActive(const TaskId &id,
       }
     }
 
-    existing->RequestPause();
+    existing->RequestPause(grace_period_ms > 0
+                               ? static_cast<size_t>(grace_period_ms)
+                               : size_t{0});
     const int64_t start_ms = AMTime::miliseconds();
     while (timeout_ms < 0 || (AMTime::miliseconds() - start_ms) < timeout_ms) {
       status_t = existing->GetStatus();
@@ -2573,7 +2593,9 @@ TransferExecutionPool::StopActive(const TaskId &id,
           public_queue_.remove(id);
         }
         task_registry->erase(it);
-        task_info->RequestInterrupt();
+        task_info->RequestInterrupt(grace_period_ms > 0
+                                        ? static_cast<size_t>(grace_period_ms)
+                                        : size_t{0});
         const ECM terminate_rcm = {EC::Terminate, "", AMStr::ToString(id),
                                    "Task terminated"};
         MarkUnfinishedTransferEntries_(task_info, terminate_rcm);
@@ -2594,7 +2616,9 @@ TransferExecutionPool::StopActive(const TaskId &id,
     }
   }
 
-  existing->RequestInterrupt();
+  existing->RequestInterrupt(grace_period_ms > 0
+                                 ? static_cast<size_t>(grace_period_ms)
+                                 : size_t{0});
   const int64_t start_ms = AMTime::miliseconds();
   while (timeout_ms < 0 || (AMTime::miliseconds() - start_ms) < timeout_ms) {
     if (existing->GetStatus() == TaskStatus::Finished) {
@@ -2607,10 +2631,10 @@ TransferExecutionPool::StopActive(const TaskId &id,
            AMStr::fmt("Task terminate timeout: {}", id)}};
 }
 
-std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
-                                                            int timeout_ms) {
+std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(
+    const TaskId &id, int timeout_ms, int grace_period_ms) {
   return StopActive(id, AMDomain::transfer::ActiveStopReason::Terminate,
-                    timeout_ms);
+                    timeout_ms, grace_period_ms);
 }
 
 std::unordered_map<TaskId, TaskHandle>

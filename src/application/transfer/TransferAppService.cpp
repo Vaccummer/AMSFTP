@@ -46,7 +46,8 @@ ECM TransferAppService::Submit(const TaskHandle &task_info) {
   return OK;
 }
 
-ECM TransferAppService::Pause(TaskId id, int timeout_ms) {
+ECM TransferAppService::Pause(TaskId id, int timeout_ms,
+                              int grace_period_ms) {
   if (id == 0) {
     return Err(EC::InvalidArg, "", "", "Task ID must be > 0");
   }
@@ -71,7 +72,8 @@ ECM TransferAppService::Pause(TaskId id, int timeout_ms) {
   }
 
   auto [task_info, rcm] = transfer_pool_.StopActive(
-      id, AMDomain::transfer::ActiveStopReason::Pause, timeout_ms);
+      id, AMDomain::transfer::ActiveStopReason::Pause, timeout_ms,
+      grace_period_ms);
   if (!(rcm)) {
     return rcm;
   }
@@ -132,7 +134,8 @@ ECM TransferAppService::Resume(TaskId id, int timeout_ms) {
 }
 
 std::pair<TransferAppService::TaskHandle, ECM>
-TransferAppService::Terminate(TaskId id, int timeout_ms) {
+TransferAppService::Terminate(TaskId id, int timeout_ms,
+                              int grace_period_ms) {
   if (id == 0) {
     return {nullptr, Err(EC::InvalidArg, "", "", "Task ID must be > 0")};
   }
@@ -147,26 +150,30 @@ TransferAppService::Terminate(TaskId id, int timeout_ms) {
     }
   }
 
+  TaskHandle paused_task = nullptr;
   {
     auto paused = paused_tasks_.lock();
     auto it = paused->find(id);
     if (it != paused->end()) {
-      TaskHandle task_info = it->second;
+      paused_task = it->second;
       paused->erase(it);
-      const ECM terminate_rcm =
-          Err(EC::Terminate, "", AMStr::ToString(id), "Task terminated");
-      MarkUnfinishedEntries_(task_info, terminate_rcm);
-      task_info->SetResult(terminate_rcm);
-      task_info->SetStatus(TaskStatus::Finished);
-      task_info->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
-      ReleaseClients_(task_info);
-      StoreFinished_(task_info);
-      return {task_info, OK};
     }
+  }
+  if (paused_task) {
+    const ECM terminate_rcm =
+        Err(EC::Terminate, "", AMStr::ToString(id), "Task terminated");
+    MarkUnfinishedEntries_(paused_task, terminate_rcm);
+    paused_task->SetResult(terminate_rcm);
+    paused_task->SetStatus(TaskStatus::Finished);
+    paused_task->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
+    ReleaseClients_(paused_task);
+    StoreFinished_(paused_task);
+    return {paused_task, OK};
   }
 
   auto [task_info, stop_rcm] = transfer_pool_.StopActive(
-      id, AMDomain::transfer::ActiveStopReason::Terminate, timeout_ms);
+      id, AMDomain::transfer::ActiveStopReason::Terminate, timeout_ms,
+      grace_period_ms);
   if (!(stop_rcm)) {
     return {task_info, stop_rcm};
   }

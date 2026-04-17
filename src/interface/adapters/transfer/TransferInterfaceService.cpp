@@ -20,7 +20,7 @@
 
 namespace AMInterface::transfer {
 namespace {
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
+using ControlComponent = AMDomain::client::ControlComponent;
 using TaskInfo = AMDomain::transfer::TaskInfo;
 using TransferTask = AMDomain::transfer::TransferTask;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
@@ -850,7 +850,7 @@ TransferInterfaceService::TransferInterfaceService(
     AMApplication::filesystem::FilesystemAppService &filesystem_service,
     AMApplication::transfer::TransferAppService &transfer_service,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
-    std::function<ClientControlComponent(AMDomain::client::amf)>
+    std::function<ControlComponent(AMDomain::client::amf)>
         control_component_factory,
     AMInterface::style::AMStyleService *style_service,
     int transfer_bar_refresh_interval_ms)
@@ -897,13 +897,13 @@ const char *TransferInterfaceService::PathTypeText_(PathType type) {
   }
 }
 
-ClientControlComponent TransferInterfaceService::ResolveControl_(
-    const std::optional<ClientControlComponent> &component,
+ControlComponent TransferInterfaceService::ResolveControl_(
+    const std::optional<ControlComponent> &component,
     int timeout_ms) const {
   if (component.has_value()) {
     return *component;
   }
-  return {default_control_token_, timeout_ms};
+  return {default_control_token_, timeout_ms > 0 ? timeout_ms : 0};
 }
 
 void TransferInterfaceService::PrintTaskSummary_(
@@ -1044,7 +1044,7 @@ ECM TransferInterfaceService::ConfirmWildcard_(
 }
 
 ECM TransferInterfaceService::BuildTaskInfo_(
-    const TransferRunArg &arg, const ClientControlComponent &control,
+    const TransferRunArg &arg, const ControlComponent &control,
     std::shared_ptr<TaskInfo> *out_task_info, std::vector<ECM> *warnings,
     const std::function<void(const std::string &)> &stage_reporter) const {
   if (!out_task_info) {
@@ -1202,17 +1202,17 @@ ECM TransferInterfaceService::BuildTaskInfo_(
   auto task_info = std::make_shared<TaskInfo>();
   task_info->id = BuildTaskId_();
   task_info->Set.quiet = arg.quiet;
-  int task_timeout_ms = -1;
+  int task_timeout_ms = 0;
   if (const auto remain_ms = control.RemainingTimeMs(); remain_ms.has_value()) {
     task_timeout_ms = static_cast<int>(*remain_ms);
   }
-  auto task_control_token = AMDomain::client::CreateClientControlToken();
+  auto task_control_token = AMDomain::client::CreateInterruptControl();
   if (!task_control_token) {
     return Err(EC::InvalidHandle, "", "",
                "failed to create transfer task control token");
   }
   task_info->Core.control =
-      ClientControlComponent(task_control_token, task_timeout_ms);
+      ControlComponent(task_control_token, task_timeout_ms);
   task_info->Set.transfer_sets =
       std::make_shared<std::vector<AMDomain::transfer::UserTransferSet>>(
           arg.transfer_sets);
@@ -1229,7 +1229,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
 
 ECM TransferInterfaceService::WaitTask_(
     const std::shared_ptr<TaskInfo> &task_info,
-    const ClientControlComponent &control) const {
+    const ControlComponent &control) const {
   if (!task_info) {
     return {EC::InvalidArg, "", "", "TaskInfo is null"};
   }
@@ -1388,7 +1388,7 @@ TransferInterfaceService::FindTask_(TaskInfo::ID task_id) const {
 
 ECM TransferInterfaceService::Transfer(
     const TransferRunArg &arg,
-    const std::optional<ClientControlComponent> &component) const {
+    const std::optional<ControlComponent> &component) const {
   const auto fail = [this](const ECM &rcm) -> ECM {
     if (!(rcm)) {
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1396,7 +1396,7 @@ ECM TransferInterfaceService::Transfer(
     return rcm;
   };
 
-  const ClientControlComponent control =
+  const ControlComponent control =
       ResolveControl_(component, arg.timeout_ms);
   if (const auto &token = control.ControlToken(); token) {
     token->ClearInterrupt();
@@ -1469,14 +1469,14 @@ ECM TransferInterfaceService::Transfer(
 
 ECM TransferInterfaceService::HttpGet(
     const HttpGetArg &arg,
-    const std::optional<ClientControlComponent> &component) const {
+    const std::optional<ControlComponent> &component) const {
   const auto fail = [this](const ECM &rcm) -> ECM {
     if (!(rcm)) {
       prompt_io_manager_.ErrorFormat(rcm);
     }
     return rcm;
   };
-  const ClientControlComponent control =
+  const ControlComponent control =
       ResolveControl_(component, arg.timeout_ms);
   if (const auto &token = control.ControlToken(); token) {
     token->ClearInterrupt();
@@ -1628,17 +1628,17 @@ ECM TransferInterfaceService::HttpGet(
   auto task_info = std::make_shared<TaskInfo>();
   task_info->id = BuildTaskId_();
   task_info->Set.quiet = arg.quiet;
-  int task_timeout_ms = -1;
+  int task_timeout_ms = 0;
   if (const auto remain_ms = control.RemainingTimeMs(); remain_ms.has_value()) {
     task_timeout_ms = static_cast<int>(*remain_ms);
   }
-  auto task_control_token = AMDomain::client::CreateClientControlToken();
+  auto task_control_token = AMDomain::client::CreateInterruptControl();
   if (!task_control_token) {
     return fail(Err(EC::InvalidHandle, "wget", src_url,
                     "failed to create transfer task control token"));
   }
   task_info->Core.control =
-      ClientControlComponent(task_control_token, task_timeout_ms);
+      ControlComponent(task_control_token, task_timeout_ms);
 
   AMDomain::transfer::TransferTask file_task = {};
   file_task.src = effective_src_url;
@@ -1857,7 +1857,7 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
         return s.starts_with("Task ");
       };
       while (true) {
-        if (token && token->IsInterrupted()) {
+        if (token && token->IsInterruptRequest()) {
           watch_canceled = true;
           break;
         }
@@ -1914,7 +1914,7 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
         }
         int remaining_ms = refresh_ms;
         while (remaining_ms > 0) {
-          if (token && token->IsInterrupted()) {
+          if (token && token->IsInterruptRequest()) {
             watch_canceled = true;
             break;
           }
@@ -1965,7 +1965,8 @@ ECM TransferInterfaceService::TaskPause(
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }
-    ECM rcm = transfer_app_service_.Pause(id, arg.timeout_ms);
+    ECM rcm = transfer_app_service_.Pause(id, arg.timeout_ms,
+                                          arg.grace_period_ms);
     if (!(rcm)) {
       status = rcm;
       prompt_io_manager_.ErrorFormat(rcm);
@@ -2007,7 +2008,8 @@ ECM TransferInterfaceService::TaskTerminate(
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }
-    auto [task_info, rcm] = transfer_app_service_.Terminate(id, arg.timeout_ms);
+    auto [task_info, rcm] = transfer_app_service_.Terminate(
+        id, arg.timeout_ms, arg.grace_period_ms);
     (void)task_info;
     if (!(rcm)) {
       status = rcm;
