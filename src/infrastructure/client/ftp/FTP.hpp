@@ -18,6 +18,7 @@
 // Internal dependencies
 #include "domain/client/ClientPort.hpp"
 #include "foundation/core/DataClass.hpp"
+#include "foundation/core/Enum.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/client/common/Base.hpp"
@@ -752,48 +753,6 @@ int ResolveCurrentTimeoutMs(CURLM *multi, const ControlComponent &control) {
   return wait_ms;
 }
 
-bool CheckHardStop_(const ControlComponent &control, ECM &rcm,
-                    const std::string &operation = "",
-                    const std::string &target = "") {
-  const auto hard = control.BuildECM(operation, target);
-  if (!hard.has_value()) {
-    return false;
-  }
-  rcm = *hard;
-  return true;
-}
-
-bool CheckSoftStop_(const ControlComponent &control, ECM &rcm,
-                    const std::string &operation = "",
-                    const std::string &target = "") {
-  if (CheckHardStop_(control, rcm, operation, target)) {
-    return true;
-  }
-  if (!control.ShouldStop()) {
-    return false;
-  }
-  if (const auto timeout = control.TimeoutRaw();
-      timeout && timeout->IsTimeoutRequest()) {
-    rcm = {EC::OperationTimeout, operation, target,
-           "Operation timeout requested"};
-    return true;
-  }
-  if (const auto interrupt = control.InterruptRaw();
-      interrupt && interrupt->IsInterruptRequest()) {
-    rcm = {EC::Terminate, operation, target, "Operation interrupt requested"};
-    return true;
-  }
-  rcm = {EC::Terminate, operation, target, "Operation stop requested"};
-  return true;
-}
-
-NBResult<CURLcode> BuildStoppedNbResult_(const ECM &rcm) {
-  if (rcm.code == EC::OperationTimeout) {
-    return NBResult<CURLcode>(CURLE_OPERATION_TIMEDOUT, WaitResult::Timeout);
-  }
-  return NBResult<CURLcode>(CURLE_ABORTED_BY_CALLBACK, WaitResult::Interrupted);
-}
-
 ECM GetECM(CURL *curl, CURLcode curl_code, const std::string &command,
            bool *has_response_code) {
   if (has_response_code) {
@@ -887,8 +846,8 @@ ECM GetECM(CURL *curl, CURLcode curl_code, const std::string &command,
           RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
 }
 
-ECM NBResultToECM(CURL *curl, const NBResult<CURLcode> &nb_res,
-                  const std::string &action, const std::string &target) {
+ECM NBResultToECM(CURL *curl, CURLcode code, const std::string &action,
+                  const std::string &target) {
   auto with_context = [&](ECM ecm) -> ECM {
     if (!action.empty()) {
       ecm.operation = action;
@@ -898,18 +857,12 @@ ECM NBResultToECM(CURL *curl, const NBResult<CURLcode> &nb_res,
     }
     return ecm;
   };
-  if (nb_res.status == WaitResult::Interrupted) {
-    return with_context({EC::Terminate, "", "", "Interrupted by user"});
-  }
-  if (nb_res.status == WaitResult::Timeout) {
-    return with_context({EC::OperationTimeout, "", "", "Operation timed out"});
-  }
-  if (nb_res.value == CURLE_OK) {
+  if (code == CURLE_OK) {
     return with_context(OK);
   }
 
   bool has_response_code = false;
-  ECM response_mapped = GetECM(curl, nb_res.value, action, &has_response_code);
+  ECM response_mapped = GetECM(curl, code, action, &has_response_code);
   if (has_response_code) {
     long response_code = 0;
     if (curl &&
@@ -917,17 +870,24 @@ ECM NBResultToECM(CURL *curl, const NBResult<CURLcode> &nb_res,
             CURLE_OK &&
         response_code > 0) {
       response_mapped.raw_error =
-          RawError{RawErrorSource::Curl, static_cast<int>(response_code)};
+          RawError(RawErrorSource::Curl, static_cast<int>(response_code));
     } else {
-      response_mapped.raw_error = RawError{RawErrorSource::Curl, 0};
+      response_mapped.raw_error = RawError(RawErrorSource::Curl, 0);
     }
     return with_context(std::move(response_mapped));
   }
 
-  ECM curl_mapped = {
-      CastCurlEC(nb_res.value), "", "", curl_easy_strerror(nb_res.value),
-      RawError(RawErrorSource::Curl, static_cast<int>(nb_res.value))};
+  ECM curl_mapped = {CastCurlEC(code), "", "", curl_easy_strerror(code),
+                     RawError(RawErrorSource::Curl, static_cast<int>(code))};
   return with_context(std::move(curl_mapped));
+}
+
+ECM NBResultRCMToECM(const NBResult<CURLcode> &nb_res,
+                     const std::string &operation, const std::string &target) {
+  ECM rcm = nb_res.rcm;
+  rcm.operation = operation;
+  rcm.target = target;
+  return rcm;
 }
 
 } // namespace
@@ -987,31 +947,57 @@ public:
     }
   }
 
-  NBResult<CURLcode> NbPerform(const ControlComponent &control) {
+  NBResult<CURLcode> NBPerform(const ControlComponent &control) {
     if (!multi || !curl) {
-      return NBResult<CURLcode>(CURLE_FAILED_INIT, WaitResult::Error);
+      return {CURLE_FAILED_INIT,
+              {EC::NoConnection, "", "", "CURL not initialized"}};
     }
 
-    ECM stop_rcm = OK;
-    if (CheckSoftStop_(control, stop_rcm)) {
-      return NBResult<CURLcode>(BuildStoppedNbResult_(stop_rcm));
+    auto kill_rcm = control.BuildECM();
+    if (kill_rcm.has_value()) {
+      if ((*kill_rcm).code == EC::OperationTimeout) {
+        return {CURLcode::CURLE_OPERATION_TIMEDOUT, (*kill_rcm)};
+      } else if ((*kill_rcm).code == EC::Terminate) {
+        return {CURLcode::CURLE_ABORTED_BY_CALLBACK, (*kill_rcm)};
+      } else {
+        return {CURLcode::CURLE_FAILED_INIT, (*kill_rcm)};
+      }
+    }
+
+    auto stop_request = control.BuildRequestECM();
+    if (stop_request.has_value()) {
+      if ((*stop_request).code == EC::OperationTimeout) {
+        return {CURLcode::CURLE_OPERATION_TIMEDOUT, (*stop_request)};
+      } else if ((*stop_request).code == EC::Terminate) {
+        return {CURLcode::CURLE_ABORTED_BY_CALLBACK, (*stop_request)};
+      } else {
+        return {CURLcode::CURLE_FAILED_INIT, (*stop_request)};
+      }
     }
 
     bool handle_added = false;
     CURLMcode add_result = curl_multi_add_handle(multi, curl);
     if (add_result != CURLM_OK) {
-      return NBResult<CURLcode>(CURLE_FAILED_INIT, WaitResult::Error);
+      return {CURLE_FAILED_INIT,
+              {EC::InvalidHandle, "", "", "Failed to add CURL handle to multi",
+               RawError(RawErrorSource::Curl, static_cast<int>(add_result))}};
     }
     handle_added = true;
 
-    const auto return_stopped = [&](const ECM &ecm) {
-      if (handle_added && multi && curl) {
-        curl_multi_remove_handle(multi, curl);
-      }
-      return NBResult<CURLcode>(BuildStoppedNbResult_(ecm));
-    };
+    struct CurlMultiHandleGuard {
+      CURLM *multi;
+      CURL *curl;
+      bool handle_added;
 
-    const sptr<InterruptControl> interrupt = control.InterruptRaw();
+      ~CurlMultiHandleGuard() {
+        if (handle_added && multi && curl) {
+          curl_multi_remove_handle(multi, curl);
+        }
+      }
+    } multi_handle_guard(multi, curl, handle_added);
+
+    const sptr<InterruptControl> interrupt =
+        stop_request.has_value() ? nullptr : control.InterruptRaw();
 
     [[maybe_unused]] const InterruptWakeupSafeGuard wakeup_guard(
         interrupt, [this]() {
@@ -1022,26 +1008,18 @@ public:
 
     int still_running = 1;
     CURLcode result = CURLE_OK;
-    WaitResult wait_result = WaitResult::Ready;
 
     while (still_running) {
-      if (CheckSoftStop_(control, stop_rcm)) {
-        return return_stopped(stop_rcm);
-      }
-
       CURLMcode mc = curl_multi_perform(multi, &still_running);
       if (mc != CURLM_OK) {
         result = CURLE_FAILED_INIT;
-        wait_result = WaitResult::Error;
-        break;
+        return {result,
+                {EC::InvalidHandle, "", "", "Failed to perform multi handle",
+                 RawError(RawErrorSource::Curl, static_cast<int>(mc))}};
       }
 
       if (!still_running) {
         break;
-      }
-
-      if (CheckSoftStop_(control, stop_rcm)) {
-        return return_stopped(stop_rcm);
       }
 
       int wait_ms = ResolveCurrentTimeoutMs(multi, control);
@@ -1050,28 +1028,33 @@ public:
       mc = curl_multi_poll(multi, nullptr, 0, wait_ms, &numfds);
       if (mc != CURLM_OK) {
         result = CURLE_FAILED_INIT;
-        wait_result = WaitResult::Error;
+        return {result,
+                {EC::InvalidHandle, "", "", "Failed to poll multi handle",
+                 RawError(RawErrorSource::Curl, static_cast<int>(mc))}};
         break;
       }
-      if (CheckSoftStop_(control, stop_rcm)) {
-        return return_stopped(stop_rcm);
-      }
-    }
 
-    if (wait_result == WaitResult::Ready) {
-      CURLMsg *msg;
-      int msgs_left;
-      while ((msg = curl_multi_info_read(multi, &msgs_left))) {
-        if (msg->msg == CURLMSG_DONE && msg->easy_handle == curl) {
-          result = msg->data.result;
+      kill_rcm = control.BuildECM();
+      if (kill_rcm.has_value()) {
+        if ((*kill_rcm).code == EC::OperationTimeout) {
+          return {CURLcode::CURLE_OPERATION_TIMEDOUT, (*kill_rcm)};
+        } else if ((*kill_rcm).code == EC::Terminate) {
+          return {CURLcode::CURLE_ABORTED_BY_CALLBACK, (*kill_rcm)};
+        } else {
+          return {CURLcode::CURLE_FAILED_INIT, (*kill_rcm)};
         }
       }
     }
 
-    if (handle_added) {
-      curl_multi_remove_handle(multi, curl);
+    CURLMsg *msg;
+    int msgs_left;
+    while ((msg = curl_multi_info_read(multi, &msgs_left))) {
+      if (msg->msg == CURLMSG_DONE && msg->easy_handle == curl) {
+        result = msg->data.result;
+      }
     }
-    return NBResult<CURLcode>(result, wait_result);
+
+    return {result, {}};
   }
 
   ECM SetupPath(const std::string &path, bool is_dir = false) {
@@ -1109,8 +1092,13 @@ public:
 
   std::pair<ECM, std::string> SYST_Query(const ControlComponent &control) {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "SYST_Query", kFTPHomeDir)) {
-      return {std::move(rcm), ""};
+    if (auto stop_rcm = control.BuildECM("SYST_Query", kFTPHomeDir);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm), ""};
+    }
+    if (auto stop_request = control.BuildRequestECM("SYST_Query", kFTPHomeDir);
+        stop_request.has_value()) {
+      return {std::move(*stop_request), ""};
     }
     if (!curl || !multi) {
       return {{EC::NoConnection, "", "", "CURL not initialized"}, ""};
@@ -1132,21 +1120,18 @@ public:
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)&header_chunk);
 
-    const auto nb_res = NbPerform(control);
+    const auto nb_res = NBPerform(control);
 
     curl_easy_setopt(curl, CURLOPT_QUOTE, nullptr);
     curl_slist_free_all(commands);
 
     if (!nb_res) {
       free(header_chunk.memory);
-      return {NBResultToECM(curl, nb_res, "SYST_Query", ""), ""};
+      return {NBResultRCMToECM(nb_res, "SYST_Query", kFTPHomeDir), ""};
     }
     if (nb_res.value != CURLE_OK) {
       free(header_chunk.memory);
-      return {{CastCurlEC(nb_res.value), "SYST", kFTPHomeDir,
-               curl_easy_strerror(nb_res.value),
-               RawError(RawErrorSource::Curl, static_cast<int>(nb_res.value))},
-              ""};
+      return {NBResultToECM(curl, nb_res.value, "SYST_Query", kFTPHomeDir), ""};
     }
 
     std::string response(header_chunk.memory, header_chunk.size);
@@ -1203,21 +1188,19 @@ public:
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)&header_chunk);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
 
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
     curl_slist_free_all(commands);
 
     if (!nb_res) {
       free(header_chunk.memory);
-      rcm = NBResultToECM(curl, nb_res, "MLST", path);
+      rcm = NBResultRCMToECM(nb_res, "MLST", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
       free(header_chunk.memory);
-      rcm = {CastCurlEC(nb_res.value), "MLST", path,
-             curl_easy_strerror(nb_res.value),
-             RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
+      rcm = NBResultToECM(curl, nb_res.value, "MLST", path);
       trace(rcm);
       return {std::move(rcm)};
     }
@@ -1269,7 +1252,7 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
     free(chunk.memory);
     if (nb_res && nb_res.value == CURLE_OK) {
       PathInfo info;
@@ -1282,7 +1265,7 @@ public:
     }
 
     if (!nb_res) {
-      rcm = NBResultToECM(curl, nb_res, "Common_libstat", path);
+      rcm = NBResultRCMToECM(nb_res, "Common_libstat", path);
       return {std::move(rcm)};
     }
 
@@ -1297,11 +1280,11 @@ public:
     chunk.size = 0;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-    nb_res = NbPerform(control);
+    nb_res = NBPerform(control);
     free(chunk.memory);
 
     if (!nb_res) {
-      rcm = NBResultToECM(curl, nb_res, "Common_libstat", path);
+      rcm = NBResultRCMToECM(nb_res, "Common_libstat", path);
       return {std::move(rcm)};
     }
     if (nb_res.value == CURLE_OK) {
@@ -1323,15 +1306,20 @@ public:
 
     // Keep error mapping consistent with other FTP calls so path-not-exist
     // is classified correctly (instead of collapsing to UnknownError).
-    rcm = NBResultToECM(curl, nb_res, "Common_libstat", path);
+    rcm = NBResultToECM(curl, nb_res.value, "Common_libstat", path);
     return {std::move(rcm)};
   }
 
   ECMData<AMFSI::ListResult> MLSD_Listdir(const AMFSI::ListdirArgs &args,
                                           const ControlComponent &control) {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "MLSD_Listdir", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("MLSD_Listdir", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("MLSD_Listdir", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     const std::string &path = args.path;
     if (!curl || !multi) {
@@ -1350,31 +1338,17 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, nullptr);
 
     if (!nb_res) {
       free(chunk.memory);
-      rcm = NBResultToECM(curl, nb_res, "MLSD_Listdir", path);
+      rcm = NBResultRCMToECM(nb_res, "MLSD_Listdir", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      long response_code = 0;
-      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-      if (response_code == 500 || response_code == 502 ||
-          nb_res.value == CURLE_QUOTE_ERROR ||
-          nb_res.value == CURLE_FTP_COULDNT_RETR_FILE) {
-        return {ECM{EC::OperationUnsupported, "MLSD_Listdir", path,
-                    "MLSD not supported"}};
-      }
-      if (response_code == 550) {
-        return {ECM{EC::PathNotExist, "MLSD_Listdir", path, "Path not found"}};
-      }
-      return {
-          ECM{EC::FTPListFailed, "MLSD_Listdir", path,
-              curl_easy_strerror(nb_res.value),
-              RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}}};
+      return {NBResultToECM(curl, nb_res.value, "MLSD_Listdir", path)};
     }
 
     std::string listing(chunk.memory, chunk.size);
@@ -1407,8 +1381,14 @@ public:
   ECMData<AMFSI::ListResult> Common_Listdir(const AMFSI::ListdirArgs &args,
                                             const ControlComponent &control) {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "Common_Listdir", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("Common_Listdir", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request =
+            control.BuildRequestECM("Common_Listdir", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     const std::string &path = args.path;
     rcm = SetupPath(path, true);
@@ -1422,17 +1402,15 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
     if (!nb_res) {
       free(chunk.memory);
-      rcm = NBResultToECM(curl, nb_res, "Common_Listdir", path);
+      rcm = NBResultRCMToECM(nb_res, "Common_Listdir", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      rcm = {CastCurlEC(nb_res.value), "Common_Listdir", path,
-             curl_easy_strerror(nb_res.value),
-             RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
+      rcm = NBResultToECM(curl, nb_res.value, "Common_Listdir", path);
       return {std::move(rcm)};
     }
 
@@ -1467,8 +1445,14 @@ public:
   MLSD_ListNames(const AMFSI::ListNamesArgs &args,
                  const ControlComponent &control) {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "MLSD_ListNames", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("MLSD_ListNames", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request =
+            control.BuildRequestECM("MLSD_ListNames", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     const std::string &path = args.path;
     if (!curl || !multi) {
@@ -1487,32 +1471,17 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, nullptr);
 
     if (!nb_res) {
       free(chunk.memory);
-      rcm = NBResultToECM(curl, nb_res, "MLSD_ListNames", path);
+      rcm = NBResultRCMToECM(nb_res, "MLSD_ListNames", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      long response_code = 0;
-      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-      if (response_code == 500 || response_code == 502 ||
-          nb_res.value == CURLE_QUOTE_ERROR ||
-          nb_res.value == CURLE_FTP_COULDNT_RETR_FILE) {
-        return {ECM{EC::OperationUnsupported, "MLSD_ListNames", path,
-                    "MLSD not supported"}};
-      }
-      if (response_code == 550) {
-        return {
-            ECM{EC::PathNotExist, "MLSD_ListNames", path, "Path not found"}};
-      }
-      return {
-          ECM{EC::FTPListFailed, "MLSD_ListNames", path,
-              curl_easy_strerror(nb_res.value),
-              RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}}};
+      return {NBResultToECM(curl, nb_res.value, "MLSD_ListNames", path)};
     }
 
     std::string listing(chunk.memory, chunk.size);
@@ -1540,8 +1509,14 @@ public:
   Common_ListNames(const AMFSI::ListNamesArgs &args,
                    const ControlComponent &control) {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "Common_ListNames", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("Common_ListNames", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request =
+            control.BuildRequestECM("Common_ListNames", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     const std::string &path = args.path;
     rcm = SetupPath(path, true);
@@ -1555,17 +1530,15 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
     if (!nb_res) {
       free(chunk.memory);
-      rcm = NBResultToECM(curl, nb_res, "Common_ListNames", path);
+      rcm = NBResultRCMToECM(nb_res, "Common_ListNames", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      rcm = {CastCurlEC(nb_res.value), "Common_ListNames", path,
-             curl_easy_strerror(nb_res.value),
-             RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
+      rcm = NBResultToECM(curl, nb_res.value, "Common_ListNames", path);
       return {std::move(rcm)};
     }
 
@@ -1620,9 +1593,15 @@ public:
                const ControlComponent &control) override {
     (void)args;
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "UpdateOSType",
-                       config_part_->GetNickname())) {
-      return {{OS_TYPE::Unknown}, std::move(rcm)};
+    if (auto stop_rcm =
+            control.BuildECM("UpdateOSType", config_part_->GetNickname());
+        stop_rcm.has_value()) {
+      return {{OS_TYPE::Unknown}, std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM(
+            "UpdateOSType", config_part_->GetNickname());
+        stop_request.has_value()) {
+      return {{OS_TYPE::Unknown}, std::move(*stop_request)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!curl || !multi) {
@@ -1658,8 +1637,14 @@ public:
     ECM rcm = OK;
     auto out = ECMData<AMFSI::CheckResult>();
     out.data.status = config_part_->GetState().data.status;
-    if (CheckSoftStop_(control, rcm, "Check", kFTPHomeDir)) {
-      out.rcm = std::move(rcm);
+    if (auto stop_rcm = control.BuildECM("Check", kFTPHomeDir);
+        stop_rcm.has_value()) {
+      out.rcm = std::move(*stop_rcm);
+      return out;
+    }
+    if (auto stop_request = control.BuildRequestECM("Check", kFTPHomeDir);
+        stop_request.has_value()) {
+      out.rcm = std::move(*stop_request);
       return out;
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1680,10 +1665,10 @@ public:
     curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
     free(chunk.memory);
     if (!nb_res) {
-      out.rcm = NBResultToECM(curl, nb_res, "Check", kFTPHomeDir);
+      out.rcm = NBResultRCMToECM(nb_res, "Check", kFTPHomeDir);
       if (out.rcm.code == EC::NoConnection) {
         out.data.status = AMDomain::client::ClientStatus::NoConnection;
       } else {
@@ -1696,15 +1681,14 @@ public:
       out.data.status = AMDomain::client::ClientStatus::OK;
       return out;
     }
-    out.rcm = {CastCurlEC(nb_res.value), "Check", kFTPHomeDir,
-               curl_easy_strerror(nb_res.value),
-               RawError(RawErrorSource::Curl, nb_res.value)};
+    out.rcm = NBResultToECM(curl, nb_res.value, "Check", kFTPHomeDir);
 
     if (out.rcm.code == EC::NoConnection) {
       out.data.status = AMDomain::client::ClientStatus::NoConnection;
     } else {
       out.data.status = AMDomain::client::ClientStatus::ConnectionBroken;
     }
+    config_part_->SetState({out.rcm, out.data.status});
     trace(out.rcm);
     return out;
   }
@@ -1721,8 +1705,14 @@ public:
     }
     const std::string connect_target =
         AMStr::fmt("{}:{}", request.hostname, request.port);
-    if (CheckSoftStop_(control, rcm, "Connect", connect_target)) {
-      out.rcm = std::move(rcm);
+    if (auto stop_rcm = control.BuildECM("Connect", connect_target);
+        stop_rcm.has_value()) {
+      out.rcm = std::move(*stop_rcm);
+      return out;
+    }
+    if (auto stop_request = control.BuildRequestECM("Connect", connect_target);
+        stop_request.has_value()) {
+      out.rcm = std::move(*stop_request);
       return out;
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1829,8 +1819,13 @@ public:
   ECMData<AMFSI::RTTResult> GetRTT(const AMFSI::GetRTTArgs &args,
                                    const ControlComponent &control) override {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "GetRTT", kFTPHomeDir)) {
-      return {{-1.0}, std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("GetRTT", kFTPHomeDir);
+        stop_rcm.has_value()) {
+      return {{-1.0}, std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("GetRTT", kFTPHomeDir);
+        stop_request.has_value()) {
+      return {{-1.0}, std::move(*stop_request)};
     }
     int times = args.times > 0 ? args.times : 1;
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1843,9 +1838,15 @@ public:
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
     for (ssize_t i = 0; i < times; i++) {
-      if (CheckSoftStop_(control, rcm, "GetRTT", kFTPHomeDir)) {
+      if (auto stop_rcm = control.BuildECM("GetRTT", kFTPHomeDir);
+          stop_rcm.has_value()) {
         free(chunk.memory);
-        return {{-1.0}, std::move(rcm)};
+        return {{-1.0}, std::move(*stop_rcm)};
+      }
+      if (auto stop_request = control.BuildRequestECM("GetRTT", kFTPHomeDir);
+          stop_request.has_value()) {
+        free(chunk.memory);
+        return {{-1.0}, std::move(*stop_request)};
       }
       rcm = SetupPath("", true);
       if (!rcm) {
@@ -1856,13 +1857,15 @@ public:
       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
       curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
       auto rtt_start_ms = AMTime::miliseconds();
-      auto nb_res = NbPerform(control);
+      auto nb_res = NBPerform(control);
       auto rtt_end_ms = AMTime::miliseconds();
       if (nb_res && nb_res.value == CURLE_OK) {
         rtts.push_back(rtt_end_ms - rtt_start_ms);
       } else {
         free(chunk.memory);
-        rcm = NBResultToECM(curl, nb_res, "GetRTT", kFTPHomeDir);
+        rcm = !nb_res
+                  ? NBResultRCMToECM(nb_res, "GetRTT", kFTPHomeDir)
+                  : NBResultToECM(curl, nb_res.value, "GetRTT", kFTPHomeDir);
         trace(rcm);
         return {{-1.0}, std::move(rcm)};
       }
@@ -1896,9 +1899,13 @@ public:
   ECMData<AMFSI::StatResult> stat(const AMFSI::StatArgs &args,
                                   const ControlComponent &control) override {
     ECM rcm = OK;
-    auto stop_rcm = control.BuildRequestECM("stat", args.path);
+    auto stop_rcm = control.BuildECM("stat", args.path);
     if (stop_rcm.has_value()) {
       return {std::move(*stop_rcm)};
+    }
+    auto stop_request = control.BuildRequestECM("stat", args.path);
+    if (stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
 
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1943,8 +1950,13 @@ public:
   ECMData<AMFSI::ListResult> listdir(const AMFSI::ListdirArgs &args,
                                      const ControlComponent &control) override {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "listdir", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("listdir", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("listdir", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     if (mlsd_state_ != CapabilityState::Unsupported) {
       auto mlsd_res = MLSD_Listdir(args, control);
@@ -1972,8 +1984,13 @@ public:
   listnames(const AMFSI::ListNamesArgs &args,
             const ControlComponent &control) override {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "listnames", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("listnames", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("listnames", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     if (mlsd_state_ != CapabilityState::Unsupported) {
       auto mlsd_res = MLSD_ListNames(args, control);
@@ -2000,8 +2017,13 @@ public:
   ECMData<AMFSI::MkdirResult> mkdir(const AMFSI::MkdirArgs &args,
                                     const ControlComponent &control) override {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "mkdir", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("mkdir", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("mkdir", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     rcm = SetupPath("", true);
@@ -2015,14 +2037,14 @@ public:
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
 
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
     curl_slist_free_all(commands);
 
     if (!nb_res) {
-      rcm = NBResultToECM(curl, nb_res, "mkdir", args.path);
+      rcm = NBResultRCMToECM(nb_res, "mkdir", args.path);
       trace(rcm);
       return {std::move(rcm)};
     }
@@ -2030,12 +2052,8 @@ public:
       return {{}, std::move(rcm)};
     }
 
-    bool has_response_code = false;
-    rcm = GetECM(curl, nb_res.value, "MKD", &has_response_code);
-    if (!has_response_code) {
-      trace(rcm);
-      return {std::move(rcm)};
-    }
+    rcm = NBResultToECM(curl, nb_res.value, "MKD", args.path);
+    rcm.operation = "mkdir";
 
     auto stat_res = stat(AMFSI::StatArgs(args.path, false), control);
     if (stat_res.rcm.code == EC::Success) {
@@ -2060,8 +2078,13 @@ public:
   mkdirs(const AMFSI::MkdirsArgs &args,
          const ControlComponent &control) override {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "mkdirs", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("mkdirs", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("mkdirs", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     if (args.path.empty()) {
       return {ECM{EC::InvalidArg, "mkdirs", args.path, "Invalid empty path"}};
@@ -2082,9 +2105,15 @@ public:
         current_path = kFTPHomeDir;
         continue;
       }
-      if (CheckSoftStop_(control, rcm, "mkdirs",
-                         current_path.empty() ? args.path : current_path)) {
-        return {std::move(rcm)};
+      const std::string stop_target =
+          current_path.empty() ? args.path : current_path;
+      if (auto stop_rcm = control.BuildECM("mkdirs", stop_target);
+          stop_rcm.has_value()) {
+        return {std::move(*stop_rcm)};
+      }
+      if (auto stop_request = control.BuildRequestECM("mkdirs", stop_target);
+          stop_request.has_value()) {
+        return {std::move(*stop_request)};
       }
 
       if (current_path.empty()) {
@@ -2105,8 +2134,13 @@ public:
   ECMData<AMFSI::RMResult> rmdir(const AMFSI::RmdirArgs &args,
                                  const ControlComponent &control) override {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "rmdir", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("rmdir", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("rmdir", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
@@ -2132,21 +2166,20 @@ public:
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
 
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
     curl_slist_free_all(commands);
 
     if (!nb_res) {
-      rcm = NBResultToECM(curl, nb_res, "rmdir", args.path);
+      rcm = NBResultRCMToECM(nb_res, "rmdir", args.path);
       trace(rcm);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
-      rcm = {CastCurlEC(nb_res.value), "rmdir", args.path,
-             curl_easy_strerror(nb_res.value),
-             RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
+      rcm = NBResultToECM(curl, nb_res.value, "RMD", args.path);
+      rcm.operation = "rmdir";
       trace(rcm);
       return {std::move(rcm)};
     }
@@ -2157,8 +2190,13 @@ public:
   ECMData<AMFSI::RMResult> rmfile(const AMFSI::RmfileArgs &args,
                                   const ControlComponent &control) override {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "rmfile", args.path)) {
-      return {std::move(rcm)};
+    if (auto stop_rcm = control.BuildECM("rmfile", args.path);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("rmfile", args.path);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     auto stat_res = stat(AMFSI::StatArgs(args.path, false), control);
@@ -2180,21 +2218,20 @@ public:
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
 
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
     curl_slist_free_all(commands);
 
     if (!nb_res) {
-      rcm = NBResultToECM(curl, nb_res, "rmfile", args.path);
+      rcm = NBResultRCMToECM(nb_res, "rmfile", args.path);
       trace(rcm);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
-      rcm = {CastCurlEC(nb_res.value), "rmfile", args.path,
-             curl_easy_strerror(nb_res.value),
-             RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
+      rcm = NBResultToECM(curl, nb_res.value, "DELE", args.path);
+      rcm.operation = "rmfile";
       trace(rcm);
       return {std::move(rcm)};
     }
@@ -2205,9 +2242,15 @@ public:
   ECMData<AMFSI::MoveResult> rename(const AMFSI::RenameArgs &args,
                                     const ControlComponent &control) override {
     ECM rcm = OK;
-    if (CheckSoftStop_(control, rcm, "rename",
-                       AMStr::fmt("{} -> {}", args.src, args.dst))) {
-      return {std::move(rcm)};
+    const std::string rename_target =
+        AMStr::fmt("{} -> {}", args.src, args.dst);
+    if (auto stop_rcm = control.BuildECM("rename", rename_target);
+        stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
+    }
+    if (auto stop_request = control.BuildRequestECM("rename", rename_target);
+        stop_request.has_value()) {
+      return {std::move(*stop_request)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
@@ -2225,11 +2268,10 @@ public:
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, headerlist);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
-    auto nb_res = NbPerform(control);
+    auto nb_res = NBPerform(control);
 
     if (!nb_res) {
-      rcm = NBResultToECM(curl, nb_res, "rename",
-                          AMStr::fmt("{} -> {}", args.src, args.dst));
+      rcm = NBResultRCMToECM(nb_res, "rename", rename_target);
       trace(rcm);
       return {std::move(rcm)};
     }
@@ -2241,10 +2283,7 @@ public:
     curl_slist_free_all(headerlist);
 
     if (res != CURLE_OK) {
-      rcm = {EC::FTPRenameFailed, "rename",
-             AMStr::fmt("{} -> {}", args.src, args.dst),
-             curl_easy_strerror(res),
-             RawError(RawErrorSource::Curl, static_cast<int>(res))};
+      rcm = NBResultToECM(curl, res, "rename", rename_target);
       trace(rcm);
       return {std::move(rcm)};
     }
