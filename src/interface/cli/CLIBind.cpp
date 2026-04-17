@@ -786,6 +786,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
                         Sem::None,
                         "Command timeout in milliseconds (<=0 means no "
                         "timeout)");
+    cmd_node->AddPositionalRule(0, Sem::ShellCmd, false);
   }
 
   CommandNode *ssh_node =
