@@ -1,12 +1,14 @@
 #pragma once
 // Standard library
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fcntl.h>
-#include <limits>
 #include <mutex>
 #include <ranges>
 #include <sstream>
@@ -32,313 +34,16 @@
 
 namespace AMInfra::client::FTP {
 class AMFTPIOCore;
-
-namespace detail {
+constexpr const char *const kFTPHomeDir = "/";
 struct MemoryStruct {
   char *memory;
   size_t size;
 };
 
-namespace parse {
-// Parse IIS/DOS directory listing line
-// Format: 03-03-25  11:27AM                90624 zlib1.dll
-//       01-10-26  12:01PM       <DIR>          AMSFTP
-inline PathInfo ParseDOSListLine(const std::string &line,
-                                 const std::string &dir_path) {
-  PathInfo info;
-  info.type = PathType::Unknown;
+namespace {
+constexpr int kMaxPollTimeoutMs = 2000;
 
-  // Skip leading spaces
-  size_t pos = 0;
-  while (pos < line.size() && std::isspace(line[pos]))
-    pos++;
-  if (pos >= line.size())
-    return info;
-
-  // Parse date (MM-DD-YY)
-  size_t date_start = pos;
-  size_t date_end = line.find_first_of(" \t", pos);
-  if (date_end == std::string::npos)
-    return info;
-  std::string date_str = line.substr(date_start, date_end - date_start);
-
-  // Skip spaces until time field
-  pos = date_end;
-  while (pos < line.size() && std::isspace(line[pos]))
-    pos++;
-  if (pos >= line.size())
-    return info;
-
-  // Parse time (HH:MMAM/PM)
-  size_t time_start = pos;
-  size_t time_end = line.find_first_of(" \t", pos);
-  if (time_end == std::string::npos)
-    return info;
-  std::string time_str = line.substr(time_start, time_end - time_start);
-
-  // Parse date/time to Unix timestamp
-  try {
-    // Parse date MM-DD-YY
-    int month = 0, day = 0, year = 0;
-    if (sscanf_s(date_str.c_str(), "%d-%d-%d", &month, &day, &year) == 3) {
-      // Handle two-digit year
-      if (year < 100) {
-        year += (year >= 70) ? 1900 : 2000;
-      }
-
-      // Parse time HH:MMAM/PM
-      int hour = 0, minute = 0;
-      std::array<char, 3> ampm = {0};
-      if (sscanf_s(time_str.c_str(), "%d:%d%2s", &hour, &minute, ampm) >= 2) {
-        // Convert 12-hour clock to 24-hour
-        std::string ampm_str(ampm.data());
-        std::transform(ampm_str.begin(), ampm_str.end(), ampm_str.begin(),
-                       ::toupper);
-        if (ampm_str == "PM" && hour != 12) {
-          hour += 12;
-        } else if (ampm_str == "AM" && hour == 12) {
-          hour = 0;
-        }
-
-        // Build tm struct and convert to time_t
-        struct tm tm_time = {};
-        tm_time.tm_year = year - 1900;
-        tm_time.tm_mon = month - 1;
-        tm_time.tm_mday = day;
-        tm_time.tm_hour = hour;
-        tm_time.tm_min = minute;
-        tm_time.tm_sec = 0;
-        tm_time.tm_isdst = -1; // Let system decide DST automatically
-
-        time_t unix_time = mktime(&tm_time);
-        if (unix_time != -1) {
-          info.modify_time = static_cast<double>(unix_time);
-        }
-      }
-    }
-  } catch (...) {
-    // Parse failed; keep modify_time as 0
-  }
-
-  // Skip spaces until <DIR> or file size
-  pos = time_end;
-  while (pos < line.size() && std::isspace(line[pos]))
-    pos++;
-  if (pos >= line.size())
-    return info;
-
-  // Check whether it is a directory (<DIR>) or file size
-  if (line.substr(pos, 5) == "<DIR>") {
-    info.type = PathType::DIR;
-    info.size = 0;
-    pos += 5;
-  } else {
-    // Parse file size
-    size_t size_end = line.find_first_of(" \t", pos);
-    if (size_end == std::string::npos)
-      return info;
-    std::string size_str = line.substr(pos, size_end - pos);
-    try {
-      info.size = std::stoull(size_str);
-    } catch (...) {
-      info.size = 0;
-    }
-    info.type = PathType::FILE;
-    pos = size_end;
-  }
-
-  // Skip spaces until filename
-  while (pos < line.size() && std::isspace(line[pos]))
-    pos++;
-  if (pos >= line.size())
-    return info;
-
-  // The remaining part is filename
-  std::string name = line.substr(pos);
-  // Trim trailing spaces and \r
-  while (!name.empty() && (std::isspace(name.back()) || name.back() == '\r')) {
-    name.pop_back();
-  }
-
-  if (name.empty())
-    return info;
-
-  info.name = name;
-  info.path = AMPath::join(dir_path, name, SepType::Unix);
-  info.dir = dir_path;
-
-  return info;
-}
-
-// Parse Unix directory listing line
-// Format: -rw-r--r-- 1 owner group size month day time filename
-//       drwxr-xr-x 1 owner group size month day time filename
-inline PathInfo ParseUnixListLine(const std::string &line,
-                                  const std::string &dir_path) {
-  PathInfo info;
-  info.type = PathType::Unknown;
-
-  std::istringstream iss(line);
-  std::string perms, links, owner, group, size_str, month, day, time_or_year,
-      name;
-
-  if (!(iss >> perms >> links >> owner >> group >> size_str >> month >> day >>
-        time_or_year)) {
-    return info;
-  }
-
-  // Get filename (rest of line)
-  std::getline(iss >> std::ws, name);
-  // Remove trailing \r if present (FTP uses CRLF)
-  if (!name.empty() && name.back() == '\r') {
-    name.pop_back();
-  }
-
-  // Handle symlink (name -> target)
-  if (!name.empty() && perms.size() > 0 && perms[0] == 'l') {
-    size_t arrow_pos = name.find(" -> ");
-    if (arrow_pos != std::string::npos) {
-      name = name.substr(0, arrow_pos);
-    }
-  }
-
-  info.name = name;
-  info.path = AMPath::join(dir_path, name, SepType::Unix);
-  info.dir = dir_path;
-  info.owner = owner;
-
-  // Parse type
-  if (!perms.empty()) {
-    if (perms[0] == 'd') {
-      info.type = PathType::DIR;
-    } else if (perms[0] == 'l') {
-      info.type = PathType::SYMLINK;
-    } else if (perms[0] == '-') {
-      info.type = PathType::FILE;
-    } else {
-      info.type = PathType::Unknown;
-    }
-  }
-
-  // Parse size
-  try {
-    info.size = std::stoull(size_str);
-  } catch (...) {
-    info.size = 0;
-  }
-
-  // Parse permissions (skip first char which is type)
-  if (perms.size() > 1) {
-    info.mode_str = perms.substr(1);
-  }
-
-  return info;
-}
-
-// Auto-detect and parse directory listing line
-inline PathInfo ParseListLine(const std::string &line,
-                              const std::string &dir_path) {
-  // Skip empty lines
-  if (line.empty())
-    return {};
-
-  // Detect line format: DOS/IIS usually starts with digits (date)
-  // Unix format starts with permission chars (d, -, l, etc.)
-  size_t first_nonspace = 0;
-  while (first_nonspace < line.size() && std::isspace(line[first_nonspace]))
-    first_nonspace++;
-
-  if (first_nonspace >= line.size())
-    return {};
-
-  char first_char = line[first_nonspace];
-
-  // DOS/IIS format starts with digits (date like 01-10-26)
-  if (std::isdigit(first_char)) {
-    return ParseDOSListLine(line, dir_path);
-  }
-
-  // Unix format starts with permission chars (d, -, l, c, b, p, s)
-  if (first_char == 'd' || first_char == '-' || first_char == 'l' ||
-      first_char == 'c' || first_char == 'b' || first_char == 'p' ||
-      first_char == 's') {
-    return ParseUnixListLine(line, dir_path);
-  }
-
-  // Unknown format
-  return {};
-}
-
-inline std::string ParseListName(const std::string &line) {
-  if (line.empty()) {
-    return "";
-  }
-  std::string linef = line;
-  if (!linef.empty() && linef.back() == '\r') {
-    linef.pop_back();
-  }
-
-  size_t first_nonspace = 0;
-  while (first_nonspace < linef.size() &&
-         std::isspace(static_cast<unsigned char>(linef[first_nonspace]))) {
-    first_nonspace++;
-  }
-  if (first_nonspace >= linef.size()) {
-    return "";
-  }
-
-  const char first_char = linef[first_nonspace];
-
-  // DOS/IIS style: date time <DIR>|size name
-  if (std::isdigit(static_cast<unsigned char>(first_char))) {
-    size_t pos = first_nonspace;
-    for (int token = 0; token < 3; token++) {
-      const size_t token_end = linef.find_first_of(" \t", pos);
-      if (token_end == std::string::npos) {
-        return "";
-      }
-      pos = linef.find_first_not_of(" \t", token_end);
-      if (pos == std::string::npos) {
-        return "";
-      }
-    }
-    std::string name = linef.substr(pos);
-    while (!name.empty() &&
-           (std::isspace(static_cast<unsigned char>(name.back())) ||
-            name.back() == '\r')) {
-      name.pop_back();
-    }
-    return name;
-  }
-
-  // Unix style: perms links owner group size month day time|year name
-  if (first_char == 'd' || first_char == '-' || first_char == 'l' ||
-      first_char == 'c' || first_char == 'b' || first_char == 'p' ||
-      first_char == 's') {
-    std::istringstream iss(linef.substr(first_nonspace));
-    std::string perms, links, owner, group, size_str, month, day, time_or_year;
-    if (!(iss >> perms >> links >> owner >> group >> size_str >> month >> day >>
-          time_or_year)) {
-      return "";
-    }
-    std::string name;
-    std::getline(iss >> std::ws, name);
-    if (!name.empty() && name.back() == '\r') {
-      name.pop_back();
-    }
-    if (!name.empty() && !perms.empty() && perms[0] == 'l') {
-      const size_t arrow_pos = name.find(" -> ");
-      if (arrow_pos != std::string::npos) {
-        name = name.substr(0, arrow_pos);
-      }
-    }
-    return name;
-  }
-
-  return "";
-}
-
-inline double ParseMListTime_(const std::string &value) {
+double ParseMListTime_(const std::string &value) {
   if (value.length() < 14) {
     return 0.0;
   }
@@ -356,8 +61,8 @@ inline double ParseMListTime_(const std::string &value) {
   }
 }
 
-inline bool SplitMLSDFactsAndName_(const std::string &line, std::string *facts,
-                                   std::string *filename) {
+bool SplitMLSDFactsAndName_(const std::string &line, std::string *facts,
+                            std::string *filename) {
   if (!facts || !filename) {
     return false;
   }
@@ -387,8 +92,7 @@ inline bool SplitMLSDFactsAndName_(const std::string &line, std::string *facts,
   return (!facts->empty() && !filename->empty());
 }
 
-inline size_t MListPermToUnixMode_(const std::string &perm_text,
-                                   PathType type) {
+size_t MListPermToUnixMode_(const std::string &perm_text, PathType type) {
   const std::string lowered = AMStr::lowercase(perm_text);
   auto has = [&lowered](char c) {
     return lowered.find(c) != std::string::npos;
@@ -399,18 +103,14 @@ inline size_t MListPermToUnixMode_(const std::string &perm_text,
   bool can_exec = false;
 
   if (type == PathType::DIR) {
-    // MLST/MLSD directory perms: list -> read, enter -> execute, mutation ->
-    // write
     can_read = has('l');
     can_exec = has('e');
     can_write = has('c') || has('m') || has('p') || has('f') || has('d');
   } else if (type == PathType::FILE) {
-    // File perms: retrieve -> read, store/append/delete/rename -> write
     can_read = has('r');
     can_write = has('w') || has('a') || has('d') || has('f');
     can_exec = false;
   } else {
-    // Unknown type: conservative union
     can_read = has('r') || has('l');
     can_exec = has('e');
     can_write = has('w') || has('a') || has('d') || has('f') || has('c') ||
@@ -430,8 +130,8 @@ inline size_t MListPermToUnixMode_(const std::string &perm_text,
   return mode;
 }
 
-inline void ParseMListFacts_(const std::string &facts, PathInfo *info,
-                             bool treat_cdir_pdir_as_dir) {
+void ParseMListFacts_(const std::string &facts, PathInfo *info,
+                      bool treat_cdir_pdir_as_dir) {
   if (!info) {
     return;
   }
@@ -502,11 +202,292 @@ inline void ParseMListFacts_(const std::string &facts, PathInfo *info,
   }
 }
 
-// Parse MLSD line (directory listing)
-// Format: type=file;size=1024;modify=20210315120000;perm=rwx; filename
-// Unlike MLST, each MLSD line includes filename and must be extracted
-inline PathInfo ParseMLSDLine(const std::string &line,
-                              const std::string &dir_path) {
+namespace parse {
+
+PathInfo ParseDOSListLine(const std::string &line,
+                          const std::string &dir_path) {
+  PathInfo info;
+  info.type = PathType::Unknown;
+
+  size_t pos = 0;
+  while (pos < line.size() && std::isspace(line[pos])) {
+    pos++;
+  }
+  if (pos >= line.size()) {
+    return info;
+  }
+
+  const size_t date_start = pos;
+  const size_t date_end = line.find_first_of(" \t", pos);
+  if (date_end == std::string::npos) {
+    return info;
+  }
+  const std::string date_str = line.substr(date_start, date_end - date_start);
+
+  pos = date_end;
+  while (pos < line.size() && std::isspace(line[pos])) {
+    pos++;
+  }
+  if (pos >= line.size()) {
+    return info;
+  }
+
+  const size_t time_start = pos;
+  const size_t time_end = line.find_first_of(" \t", pos);
+  if (time_end == std::string::npos) {
+    return info;
+  }
+  const std::string time_str = line.substr(time_start, time_end - time_start);
+
+  try {
+    int month = 0;
+    int day = 0;
+    int year = 0;
+    if (sscanf_s(date_str.c_str(), "%d-%d-%d", &month, &day, &year) == 3) {
+      if (year < 100) {
+        year += (year >= 70) ? 1900 : 2000;
+      }
+
+      int hour = 0;
+      int minute = 0;
+      std::array<char, 3> ampm = {0};
+      if (sscanf_s(time_str.c_str(), "%d:%d%2s", &hour, &minute, ampm) >= 2) {
+        std::string ampm_str(ampm.data());
+        std::transform(ampm_str.begin(), ampm_str.end(), ampm_str.begin(),
+                       ::toupper);
+        if (ampm_str == "PM" && hour != 12) {
+          hour += 12;
+        } else if (ampm_str == "AM" && hour == 12) {
+          hour = 0;
+        }
+
+        struct tm tm_time = {};
+        tm_time.tm_year = year - 1900;
+        tm_time.tm_mon = month - 1;
+        tm_time.tm_mday = day;
+        tm_time.tm_hour = hour;
+        tm_time.tm_min = minute;
+        tm_time.tm_sec = 0;
+        tm_time.tm_isdst = -1;
+
+        time_t unix_time = mktime(&tm_time);
+        if (unix_time != -1) {
+          info.modify_time = static_cast<double>(unix_time);
+        }
+      }
+    }
+  } catch (...) {
+  }
+
+  pos = time_end;
+  while (pos < line.size() && std::isspace(line[pos])) {
+    pos++;
+  }
+  if (pos >= line.size()) {
+    return info;
+  }
+
+  if (line.substr(pos, 5) == "<DIR>") {
+    info.type = PathType::DIR;
+    info.size = 0;
+    pos += 5;
+  } else {
+    const size_t size_end = line.find_first_of(" \t", pos);
+    if (size_end == std::string::npos) {
+      return info;
+    }
+    const std::string size_str = line.substr(pos, size_end - pos);
+    try {
+      info.size = std::stoull(size_str);
+    } catch (...) {
+      info.size = 0;
+    }
+    info.type = PathType::FILE;
+    pos = size_end;
+  }
+
+  while (pos < line.size() && std::isspace(line[pos])) {
+    pos++;
+  }
+  if (pos >= line.size()) {
+    return info;
+  }
+
+  std::string name = line.substr(pos);
+  while (!name.empty() && (std::isspace(name.back()) || name.back() == '\r')) {
+    name.pop_back();
+  }
+  if (name.empty()) {
+    return info;
+  }
+
+  info.name = name;
+  info.path = AMPath::join(dir_path, name, SepType::Unix);
+  info.dir = dir_path;
+  return info;
+}
+
+PathInfo ParseUnixListLine(const std::string &line,
+                           const std::string &dir_path) {
+  PathInfo info;
+  info.type = PathType::Unknown;
+
+  std::istringstream iss(line);
+  std::string perms;
+  std::string links;
+  std::string owner;
+  std::string group;
+  std::string size_str;
+  std::string month;
+  std::string day;
+  std::string time_or_year;
+  std::string name;
+
+  if (!(iss >> perms >> links >> owner >> group >> size_str >> month >> day >>
+        time_or_year)) {
+    return info;
+  }
+
+  std::getline(iss >> std::ws, name);
+  if (!name.empty() && name.back() == '\r') {
+    name.pop_back();
+  }
+
+  if (!name.empty() && !perms.empty() && perms[0] == 'l') {
+    const size_t arrow_pos = name.find(" -> ");
+    if (arrow_pos != std::string::npos) {
+      name = name.substr(0, arrow_pos);
+    }
+  }
+
+  info.name = name;
+  info.path = AMPath::join(dir_path, name, SepType::Unix);
+  info.dir = dir_path;
+  info.owner = owner;
+
+  if (!perms.empty()) {
+    if (perms[0] == 'd') {
+      info.type = PathType::DIR;
+    } else if (perms[0] == 'l') {
+      info.type = PathType::SYMLINK;
+    } else if (perms[0] == '-') {
+      info.type = PathType::FILE;
+    } else {
+      info.type = PathType::Unknown;
+    }
+  }
+
+  try {
+    info.size = std::stoull(size_str);
+  } catch (...) {
+    info.size = 0;
+  }
+
+  if (perms.size() > 1) {
+    info.mode_str = perms.substr(1);
+  }
+  return info;
+}
+
+PathInfo ParseListLine(const std::string &line, const std::string &dir_path) {
+  if (line.empty()) {
+    return {};
+  }
+
+  size_t first_nonspace = 0;
+  while (first_nonspace < line.size() && std::isspace(line[first_nonspace])) {
+    first_nonspace++;
+  }
+  if (first_nonspace >= line.size()) {
+    return {};
+  }
+
+  const char first_char = line[first_nonspace];
+  if (std::isdigit(first_char)) {
+    return ParseDOSListLine(line, dir_path);
+  }
+  if (first_char == 'd' || first_char == '-' || first_char == 'l' ||
+      first_char == 'c' || first_char == 'b' || first_char == 'p' ||
+      first_char == 's') {
+    return ParseUnixListLine(line, dir_path);
+  }
+  return {};
+}
+
+std::string ParseListName(const std::string &line) {
+  if (line.empty()) {
+    return "";
+  }
+  std::string linef = line;
+  if (!linef.empty() && linef.back() == '\r') {
+    linef.pop_back();
+  }
+
+  size_t first_nonspace = 0;
+  while (first_nonspace < linef.size() &&
+         std::isspace(static_cast<unsigned char>(linef[first_nonspace]))) {
+    first_nonspace++;
+  }
+  if (first_nonspace >= linef.size()) {
+    return "";
+  }
+
+  const char first_char = linef[first_nonspace];
+  if (std::isdigit(static_cast<unsigned char>(first_char))) {
+    size_t pos = first_nonspace;
+    for (int token = 0; token < 3; token++) {
+      const size_t token_end = linef.find_first_of(" \t", pos);
+      if (token_end == std::string::npos) {
+        return "";
+      }
+      pos = linef.find_first_not_of(" \t", token_end);
+      if (pos == std::string::npos) {
+        return "";
+      }
+    }
+    std::string name = linef.substr(pos);
+    while (!name.empty() &&
+           (std::isspace(static_cast<unsigned char>(name.back())) ||
+            name.back() == '\r')) {
+      name.pop_back();
+    }
+    return name;
+  }
+
+  if (first_char == 'd' || first_char == '-' || first_char == 'l' ||
+      first_char == 'c' || first_char == 'b' || first_char == 'p' ||
+      first_char == 's') {
+    std::istringstream iss(linef.substr(first_nonspace));
+    std::string perms;
+    std::string links;
+    std::string owner;
+    std::string group;
+    std::string size_str;
+    std::string month;
+    std::string day;
+    std::string time_or_year;
+    if (!(iss >> perms >> links >> owner >> group >> size_str >> month >> day >>
+          time_or_year)) {
+      return "";
+    }
+    std::string name;
+    std::getline(iss >> std::ws, name);
+    if (!name.empty() && name.back() == '\r') {
+      name.pop_back();
+    }
+    if (!name.empty() && !perms.empty() && perms[0] == 'l') {
+      const size_t arrow_pos = name.find(" -> ");
+      if (arrow_pos != std::string::npos) {
+        name = name.substr(0, arrow_pos);
+      }
+    }
+    return name;
+  }
+
+  return "";
+}
+
+PathInfo ParseMLSDLine(const std::string &line, const std::string &dir_path) {
   PathInfo info;
   info.type = PathType::Unknown;
 
@@ -524,7 +505,7 @@ inline PathInfo ParseMLSDLine(const std::string &line,
   return info;
 }
 
-inline std::string ParseMLSDName(const std::string &line) {
+std::string ParseMLSDName(const std::string &line) {
   std::string facts;
   std::string filename;
   if (!SplitMLSDFactsAndName_(line, &facts, &filename)) {
@@ -533,10 +514,7 @@ inline std::string ParseMLSDName(const std::string &line) {
   return filename;
 }
 
-// Parse MLST response format
-// Format: type=file;size=1024;modify=20210315120000;perm=rwx; filename
-inline PathInfo ParseMLSTLine(const std::string &line,
-                              const std::string &path) {
+PathInfo ParseMLSTLine(const std::string &line, const std::string &path) {
   PathInfo info;
   info.type = PathType::Unknown;
   info.path = path;
@@ -557,28 +535,27 @@ inline PathInfo ParseMLSTLine(const std::string &line,
   const std::string facts =
       (fact_end == std::string::npos ? linef : linef.substr(0, fact_end));
   ParseMListFacts_(facts, &info, true);
-
   return info;
 }
+
 } // namespace parse
 
-inline std::string MlistPath(const std::string &path, bool is_dir = false) {
-  std::string pathf = AMPath::UnifyPathSep(path, "/");
-  // Replace spaces with %20
+std::string MlistPath(const std::string &path, bool is_dir) {
+  std::string pathf = AMPath::UnifyPathSep(path, kFTPHomeDir);
   AMStr::vreplace_all(pathf, " ", "%20");
   while (!pathf.empty() && (pathf.back() == '/' || pathf.back() == '\\')) {
     pathf.pop_back();
   }
   if (is_dir) {
-    pathf += "/"; // Directory always ends with /, including empty path (root)
+    pathf += kFTPHomeDir;
   }
   if (!pathf.empty() && pathf.front() != '/') {
-    pathf = "/" + pathf;
+    pathf = kFTPHomeDir + pathf;
   }
   return pathf;
 }
 
-inline EC CastImportantCurlEC(CURLcode curl_code) {
+EC CastCurlEC(CURLcode curl_code) {
   switch (curl_code) {
   case CURLE_OK:
     return EC::Success;
@@ -695,15 +672,265 @@ inline EC CastImportantCurlEC(CURLcode curl_code) {
   }
 }
 
-inline EC CastCurlEC(CURLcode curl_code) {
-  return CastImportantCurlEC(curl_code);
-}
-
-inline std::string BuildBaseUrl(const ConRequest &request) {
+std::string BuildBaseUrl(const ConRequest &request) {
   return AMStr::fmt("ftp://{}:{}", request.hostname,
                     std::to_string(request.port));
 }
-} // namespace detail
+
+size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb,
+                           void *userp) {
+  size_t realsize = size * nmemb;
+  auto *mem = (MemoryStruct *)userp;
+
+  char *ptr = (char *)realloc(mem->memory, mem->size + realsize + 1);
+  if (!ptr) {
+    return 0;
+  }
+
+  mem->memory = ptr;
+  memcpy(&(mem->memory[mem->size]), contents, realsize);
+  mem->size += realsize;
+  mem->memory[mem->size] = 0;
+  return realsize;
+}
+
+size_t DiscardWriteCallback(void *contents, size_t size, size_t nmemb,
+                            void *userp) {
+  (void)contents;
+  (void)userp;
+  return size * nmemb;
+}
+
+OS_TYPE ParseSystResponseToOs(const std::string &response) {
+  const std::string lowered = AMStr::lowercase(response);
+  if (lowered.empty()) {
+    return OS_TYPE::Unknown;
+  }
+  if (lowered.find("filezilla") != std::string::npos &&
+      lowered.find("unix") != std::string::npos) {
+    return OS_TYPE::Unix;
+  }
+  if (lowered.find("windows") != std::string::npos ||
+      lowered.find("win32") != std::string::npos ||
+      lowered.find("win64") != std::string::npos ||
+      lowered.find("ms-dos") != std::string::npos ||
+      lowered.find("microsoft") != std::string::npos) {
+    return OS_TYPE::Windows;
+  }
+  if (lowered.find("freebsd") != std::string::npos) {
+    return OS_TYPE::FreeBSD;
+  }
+  if (lowered.find("darwin") != std::string::npos ||
+      lowered.find("macos") != std::string::npos ||
+      lowered.find("mac os") != std::string::npos) {
+    return OS_TYPE::MacOS;
+  }
+  if (lowered.find("linux") != std::string::npos) {
+    return OS_TYPE::Linux;
+  }
+  if (lowered.find("unix") != std::string::npos ||
+      lowered.find("type: l8") != std::string::npos) {
+    return OS_TYPE::Unix;
+  }
+  return OS_TYPE::Unknown;
+}
+
+int ResolveCurrentTimeoutMs(CURLM *multi, const ControlComponent &control) {
+  int wait_ms = kMaxPollTimeoutMs;
+
+  long curl_wait_ms = -1;
+  if (multi != nullptr &&
+      curl_multi_timeout(multi, &curl_wait_ms) == CURLM_OK &&
+      curl_wait_ms >= 0) {
+    wait_ms = wait_ms > curl_wait_ms ? curl_wait_ms : wait_ms;
+  }
+
+  const auto remain_opt = control.RemainTime_ms();
+  if (remain_opt.has_value()) {
+    wait_ms = wait_ms > *remain_opt ? *remain_opt : wait_ms;
+  }
+  return wait_ms;
+}
+
+bool CheckHardStop_(const ControlComponent &control, ECM &rcm,
+                    const std::string &operation = "",
+                    const std::string &target = "") {
+  const auto hard = control.BuildECM(operation, target);
+  if (!hard.has_value()) {
+    return false;
+  }
+  rcm = *hard;
+  return true;
+}
+
+bool CheckSoftStop_(const ControlComponent &control, ECM &rcm,
+                    const std::string &operation = "",
+                    const std::string &target = "") {
+  if (CheckHardStop_(control, rcm, operation, target)) {
+    return true;
+  }
+  if (!control.ShouldStop()) {
+    return false;
+  }
+  if (const auto timeout = control.TimeoutRaw();
+      timeout && timeout->IsTimeoutRequest()) {
+    rcm = {EC::OperationTimeout, operation, target,
+           "Operation timeout requested"};
+    return true;
+  }
+  if (const auto interrupt = control.InterruptRaw();
+      interrupt && interrupt->IsInterruptRequest()) {
+    rcm = {EC::Terminate, operation, target, "Operation interrupt requested"};
+    return true;
+  }
+  rcm = {EC::Terminate, operation, target, "Operation stop requested"};
+  return true;
+}
+
+NBResult<CURLcode> BuildStoppedNbResult_(const ECM &rcm) {
+  if (rcm.code == EC::OperationTimeout) {
+    return NBResult<CURLcode>(CURLE_OPERATION_TIMEDOUT, WaitResult::Timeout);
+  }
+  return NBResult<CURLcode>(CURLE_ABORTED_BY_CALLBACK, WaitResult::Interrupted);
+}
+
+ECM GetECM(CURL *curl, CURLcode curl_code, const std::string &command,
+           bool *has_response_code) {
+  if (has_response_code) {
+    *has_response_code = false;
+  }
+  if (curl_code == CURLE_OK) {
+    return OK;
+  }
+  if (curl == nullptr) {
+    return {EC::NoConnection, "", "", "curl handle is invalid",
+            RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
+  }
+
+  long response_code = 0;
+  if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code) ==
+          CURLE_OK &&
+      response_code > 0) {
+    if (has_response_code) {
+      *has_response_code = true;
+    }
+    const std::string cmd = AMStr::lowercase(command);
+    EC ec = EC::CommonFailure;
+    std::string msg =
+        AMStr::fmt("FTP server returned response code {}", response_code);
+    switch (response_code) {
+    case 421:
+      ec = EC::ConnectionLost;
+      msg = "FTP server closed control connection (421)";
+      break;
+    case 425:
+    case 426:
+      ec = EC::FTPRecvError;
+      msg = AMStr::fmt("FTP data transfer failed ({})", response_code);
+      break;
+    case 430:
+    case 530:
+    case 532:
+      ec = EC::AuthFailed;
+      msg = AMStr::fmt("FTP authentication failed ({})", response_code);
+      break;
+    case 450:
+      ec = EC::PathUsingByOthers;
+      msg = "FTP file is unavailable (450)";
+      break;
+    case 451:
+      ec = EC::CommonFailure;
+      msg = "FTP server aborted operation (451)";
+      break;
+    case 452:
+    case 552:
+      ec = EC::FilesystemNoSpace;
+      msg = AMStr::fmt("FTP server reports insufficient storage ({})",
+                       response_code);
+      break;
+    case 500:
+    case 501:
+    case 502:
+    case 503:
+    case 504:
+      ec = EC::OperationUnsupported;
+      msg = AMStr::fmt("FTP command is invalid or unsupported ({})",
+                       response_code);
+      break;
+    case 550:
+      if (cmd == "mkd" || cmd.starts_with("mkd")) {
+        ec = EC::PathAlreadyExists;
+        msg = "FTP directory already exists or cannot be created (550)";
+      } else {
+        ec = EC::PathNotExist;
+        msg = "FTP path does not exist or is inaccessible (550)";
+      }
+      break;
+    case 551:
+      ec = EC::InvalidArg;
+      msg = "FTP request has invalid parameters (551)";
+      break;
+    case 553:
+      ec = EC::InvalidFilename;
+      msg = "FTP filename is invalid (553)";
+      break;
+    default:
+      ec = EC::UnknownError;
+      msg = AMStr::fmt("Unexpected FTP response code {}", response_code);
+      break;
+    }
+    return {ec, "", "", msg,
+            RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
+  }
+
+  return {CastCurlEC(curl_code), "", "", curl_easy_strerror(curl_code),
+          RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
+}
+
+ECM NBResultToECM(CURL *curl, const NBResult<CURLcode> &nb_res,
+                  const std::string &action, const std::string &target) {
+  auto with_context = [&](ECM ecm) -> ECM {
+    if (!action.empty()) {
+      ecm.operation = action;
+    }
+    if (!target.empty()) {
+      ecm.target = target;
+    }
+    return ecm;
+  };
+  if (nb_res.status == WaitResult::Interrupted) {
+    return with_context({EC::Terminate, "", "", "Interrupted by user"});
+  }
+  if (nb_res.status == WaitResult::Timeout) {
+    return with_context({EC::OperationTimeout, "", "", "Operation timed out"});
+  }
+  if (nb_res.value == CURLE_OK) {
+    return with_context(OK);
+  }
+
+  bool has_response_code = false;
+  ECM response_mapped = GetECM(curl, nb_res.value, action, &has_response_code);
+  if (has_response_code) {
+    long response_code = 0;
+    if (curl &&
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code) ==
+            CURLE_OK &&
+        response_code > 0) {
+      response_mapped.raw_error =
+          RawError{RawErrorSource::Curl, static_cast<int>(response_code)};
+    } else {
+      response_mapped.raw_error = RawError{RawErrorSource::Curl, 0};
+    }
+    return with_context(std::move(response_mapped));
+  }
+
+  ECM curl_mapped = {
+      CastCurlEC(nb_res.value), "", "", curl_easy_strerror(nb_res.value),
+      RawError(RawErrorSource::Curl, static_cast<int>(nb_res.value))};
+  return with_context(std::move(curl_mapped));
+}
+
+} // namespace
 
 class FTPBase : public ClientIOBase {
 protected:
@@ -711,19 +938,6 @@ protected:
   CURLM *multi = nullptr; // Reused multi handle
   mutable std::recursive_mutex mtx;
   std::string current_url = ""; // Keep CURLOPT_URL string lifetime valid
-
-  [[nodiscard]] std::string GetHomeDir_() {
-    std::string home_dir = config_part_->GetHomeDir();
-    if (home_dir.empty()) {
-      home_dir = "/";
-      config_part_->SetHomeDir(home_dir);
-    }
-    return home_dir;
-  }
-
-  void SetState_(const ECMData<AMDomain::filesystem::CheckResult> &state) {
-    config_part_->SetState(state);
-  }
 
   void trace(AMDomain::client::TraceLevel level, EC error_code,
              const std::string &target = "", const std::string &action = "",
@@ -744,8 +958,8 @@ protected:
 
 public:
   FTPBase(AMDomain::client::IClientConfigPort *config_port,
-          AMDomain::client::IClientControlToken *control_port,
-          TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+          InterruptControl *control_port, TraceCallback trace_cb = {},
+          AuthCallback auth_cb = {})
       : ClientIOBase(config_port, control_port) {
     if (control_port == nullptr) {
       throw std::invalid_argument(
@@ -757,7 +971,7 @@ public:
     RegisterTraceCallback(std::move(trace_cb));
     RegisterAuthCallback(std::move(auth_cb));
     if (config_part_->GetHomeDir().empty()) {
-      config_part_->SetHomeDir("/");
+      config_part_->SetHomeDir(kFTPHomeDir);
     }
   }
 
@@ -773,52 +987,34 @@ public:
     }
   }
 
-  int ResolveCurrentTimeoutMs(
-      const AMDomain::client::ClientControlComponent &control) const {
-    int wait_ms = (std::numeric_limits<int>::max)();
-
-    long curl_wait_ms = -1;
-    if (multi != nullptr &&
-        curl_multi_timeout(multi, &curl_wait_ms) == CURLM_OK &&
-        curl_wait_ms >= 0) {
-      wait_ms = static_cast<int>(
-          std::min<long>(curl_wait_ms, (std::numeric_limits<int>::max)()));
-    }
-
-    const auto remain_opt = control.RemainingTimeMs();
-    if (remain_opt.has_value()) {
-      wait_ms = std::min(
-          wait_ms, static_cast<int>(std::min<unsigned int>(
-                       *remain_opt, static_cast<unsigned int>(
-                                        (std::numeric_limits<int>::max)()))));
-    }
-
-    if (wait_ms == (std::numeric_limits<int>::max)()) {
-      return 100;
-    }
-    return wait_ms;
-  }
-
-  NBResult<CURLcode>
-  NbPerform(const AMDomain::client::ClientControlComponent &control) {
+  NBResult<CURLcode> NbPerform(const ControlComponent &control) {
     if (!multi || !curl) {
-      return {CURLE_FAILED_INIT, WaitResult::Error};
-    }
-    if (control.IsInterrupted()) {
-      return {CURLE_ABORTED_BY_CALLBACK, WaitResult::Interrupted};
-    }
-    if (control.IsTimeout()) {
-      return {CURLE_OPERATION_TIMEDOUT, WaitResult::Timeout};
+      return NBResult<CURLcode>(CURLE_FAILED_INIT, WaitResult::Error);
     }
 
+    ECM stop_rcm = OK;
+    if (CheckSoftStop_(control, stop_rcm)) {
+      return NBResult<CURLcode>(BuildStoppedNbResult_(stop_rcm));
+    }
+
+    bool handle_added = false;
     CURLMcode add_result = curl_multi_add_handle(multi, curl);
     if (add_result != CURLM_OK) {
-      return {CURLE_FAILED_INIT, WaitResult::Error};
+      return NBResult<CURLcode>(CURLE_FAILED_INIT, WaitResult::Error);
     }
+    handle_added = true;
 
-    const amf &control_token = control.ControlToken();
-    [[maybe_unused]] const AMDomain::client::ControlTokenWakeupSafeGaurd
-        wakeup_guard(control_token, [this]() {
+    const auto return_stopped = [&](const ECM &ecm) {
+      if (handle_added && multi && curl) {
+        curl_multi_remove_handle(multi, curl);
+      }
+      return NBResult<CURLcode>(BuildStoppedNbResult_(ecm));
+    };
+
+    const sptr<InterruptControl> interrupt = control.InterruptRaw();
+
+    [[maybe_unused]] const InterruptWakeupSafeGuard wakeup_guard(
+        interrupt, [this]() {
           if (multi) {
             curl_multi_wakeup(multi);
           }
@@ -829,6 +1025,10 @@ public:
     WaitResult wait_result = WaitResult::Ready;
 
     while (still_running) {
+      if (CheckSoftStop_(control, stop_rcm)) {
+        return return_stopped(stop_rcm);
+      }
+
       CURLMcode mc = curl_multi_perform(multi, &still_running);
       if (mc != CURLM_OK) {
         result = CURLE_FAILED_INIT;
@@ -839,22 +1039,22 @@ public:
       if (!still_running) {
         break;
       }
-      if (control.IsInterrupted()) {
-        wait_result = WaitResult::Interrupted;
-        break;
-      }
-      if (control.IsTimeout()) {
-        wait_result = WaitResult::Timeout;
-        break;
+
+      if (CheckSoftStop_(control, stop_rcm)) {
+        return return_stopped(stop_rcm);
       }
 
-      const int wait_ms = ResolveCurrentTimeoutMs(control);
+      int wait_ms = ResolveCurrentTimeoutMs(multi, control);
+
       int numfds = 0;
       mc = curl_multi_poll(multi, nullptr, 0, wait_ms, &numfds);
       if (mc != CURLM_OK) {
         result = CURLE_FAILED_INIT;
         wait_result = WaitResult::Error;
         break;
+      }
+      if (CheckSoftStop_(control, stop_rcm)) {
+        return return_stopped(stop_rcm);
       }
     }
 
@@ -868,206 +1068,10 @@ public:
       }
     }
 
-    curl_multi_remove_handle(multi, curl);
-    return {result, wait_result};
-  }
-
-  ECM NBResultToECM(const NBResult<CURLcode> &nb_res,
-                    const std::string &action = "",
-                    const std::string &target = "") const {
-    auto with_context = [&](ECM ecm) -> ECM {
-      if (!action.empty()) {
-        ecm.operation = action;
-      }
-      if (!target.empty()) {
-        ecm.target = target;
-      }
-      return ecm;
-    };
-    if (nb_res.status == WaitResult::Interrupted) {
-      return with_context({EC::Terminate, "", "", "Interrupted by user"});
+    if (handle_added) {
+      curl_multi_remove_handle(multi, curl);
     }
-    if (nb_res.status == WaitResult::Timeout) {
-      return with_context(
-          {EC::OperationTimeout, "", "", "Operation timed out"});
-    }
-    if (nb_res.value == CURLE_OK) {
-      return with_context(OK);
-    }
-
-    bool has_response_code = false;
-    ECM response_mapped = GetECM(nb_res.value, action, &has_response_code);
-    if (has_response_code) {
-      long response_code = 0;
-      if (curl &&
-          curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code) ==
-              CURLE_OK &&
-          response_code > 0) {
-        response_mapped.raw_error =
-            RawError{RawErrorSource::Curl, static_cast<int>(response_code)};
-      } else {
-        response_mapped.raw_error = RawError{RawErrorSource::Curl, 0};
-      }
-      return with_context(std::move(response_mapped));
-    }
-
-    ECM curl_mapped = {
-        detail::CastImportantCurlEC(nb_res.value), "", "",
-        curl_easy_strerror(nb_res.value),
-        RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
-    return with_context(std::move(curl_mapped));
-  }
-
-  [[nodiscard]] ECM GetECM(CURLcode curl_code, const std::string &command = "",
-                           bool *has_response_code = nullptr) const {
-    if (has_response_code) {
-      *has_response_code = false;
-    }
-    if (curl_code == CURLE_OK) {
-      return OK;
-    }
-    if (curl == nullptr) {
-      return {EC::NoConnection, "", "", "curl handle is invalid",
-              RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
-    }
-
-    long response_code = 0;
-    if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code) ==
-            CURLE_OK &&
-        response_code > 0) {
-      if (has_response_code) {
-        *has_response_code = true;
-      }
-      const std::string cmd = AMStr::lowercase(command);
-      EC ec = EC::CommonFailure;
-      std::string msg =
-          AMStr::fmt("FTP server returned response code {}", response_code);
-      switch (response_code) {
-      case 421:
-        ec = EC::ConnectionLost;
-        msg = "FTP server closed control connection (421)";
-        break;
-      case 425:
-      case 426:
-        ec = EC::FTPRecvError;
-        msg = AMStr::fmt("FTP data transfer failed ({})", response_code);
-        break;
-      case 430:
-      case 530:
-      case 532:
-        ec = EC::AuthFailed;
-        msg = AMStr::fmt("FTP authentication failed ({})", response_code);
-        break;
-      case 450:
-        ec = EC::PathUsingByOthers;
-        msg = "FTP file is unavailable (450)";
-        break;
-      case 451:
-        ec = EC::CommonFailure;
-        msg = "FTP server aborted operation (451)";
-        break;
-      case 452:
-      case 552:
-        ec = EC::FilesystemNoSpace;
-        msg = AMStr::fmt("FTP server reports insufficient storage ({})",
-                         response_code);
-        break;
-      case 500:
-      case 501:
-      case 502:
-      case 503:
-      case 504:
-        ec = EC::OperationUnsupported;
-        msg = AMStr::fmt("FTP command is invalid or unsupported ({})",
-                         response_code);
-        break;
-      case 550:
-        if (cmd == "mkd" || cmd.starts_with("mkd")) {
-          ec = EC::PathAlreadyExists;
-          msg = "FTP directory already exists or cannot be created (550)";
-        } else {
-          ec = EC::PathNotExist;
-          msg = "FTP path does not exist or is inaccessible (550)";
-        }
-        break;
-      case 551:
-        ec = EC::InvalidArg;
-        msg = "FTP request has invalid parameters (551)";
-        break;
-      case 553:
-        ec = EC::InvalidFilename;
-        msg = "FTP filename is invalid (553)";
-        break;
-      default:
-        ec = EC::UnknownError;
-        msg = AMStr::fmt("Unexpected FTP response code {}", response_code);
-        break;
-      }
-      return {ec, "", "", msg,
-              RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
-    }
-
-    return {detail::CastCurlEC(curl_code), "", "",
-            curl_easy_strerror(curl_code),
-            RawError{RawErrorSource::Curl, static_cast<int>(curl_code)}};
-  }
-
-  static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb,
-                                    void *userp) {
-    size_t realsize = size * nmemb;
-    auto *mem = (detail::MemoryStruct *)userp;
-
-    char *ptr = (char *)realloc(mem->memory, mem->size + realsize + 1);
-    if (!ptr) {
-      return 0;
-    }
-
-    mem->memory = ptr;
-    memcpy(&(mem->memory[mem->size]), contents, realsize);
-    mem->size += realsize;
-    mem->memory[mem->size] = 0;
-    return realsize;
-  }
-
-  static size_t DiscardWriteCallback(void *contents, size_t size, size_t nmemb,
-                                     void *userp) {
-    (void)contents;
-    (void)userp;
-    return size * nmemb;
-  }
-
-  static OS_TYPE ParseSystResponseToOs(const std::string &response) {
-    const std::string lowered = AMStr::lowercase(response);
-    if (lowered.empty()) {
-      return OS_TYPE::Unknown;
-    }
-    if (lowered.find("filezilla") != std::string::npos &&
-        lowered.find("unix") != std::string::npos) {
-      return OS_TYPE::Unix;
-    }
-    if (lowered.find("windows") != std::string::npos ||
-        lowered.find("win32") != std::string::npos ||
-        lowered.find("win64") != std::string::npos ||
-        lowered.find("ms-dos") != std::string::npos ||
-        lowered.find("microsoft") != std::string::npos) {
-      return OS_TYPE::Windows;
-    }
-    if (lowered.find("freebsd") != std::string::npos) {
-      return OS_TYPE::FreeBSD;
-    }
-    if (lowered.find("darwin") != std::string::npos ||
-        lowered.find("macos") != std::string::npos ||
-        lowered.find("mac os") != std::string::npos) {
-      return OS_TYPE::MacOS;
-    }
-    if (lowered.find("linux") != std::string::npos) {
-      return OS_TYPE::Linux;
-    }
-    if (lowered.find("unix") != std::string::npos ||
-        lowered.find("type: l8") != std::string::npos) {
-      return OS_TYPE::Unix;
-    }
-    return OS_TYPE::Unknown;
+    return NBResult<CURLcode>(result, wait_result);
   }
 
   ECM SetupPath(const std::string &path, bool is_dir = false) {
@@ -1086,11 +1090,11 @@ public:
 
     std::string path_f = path;
     if (!path_f.empty()) {
-      path_f = detail::MlistPath(path, is_dir);
+      path_f = MlistPath(path, is_dir);
     }
 
     curl_easy_reset(curl);
-    current_url = AMStr::fmt("{}{}", detail::BuildBaseUrl(request), path_f);
+    current_url = AMStr::fmt("{}{}", BuildBaseUrl(request), path_f);
     curl_easy_setopt(curl, CURLOPT_URL, current_url.c_str());
     curl_easy_setopt(curl, CURLOPT_USERNAME, request.username.c_str());
     curl_easy_setopt(curl, CURLOPT_PASSWORD, decrypted_password.c_str());
@@ -1103,10 +1107,9 @@ public:
     return OK;
   }
 
-  std::pair<ECM, std::string>
-  SYST_Query(const AMDomain::client::ClientControlComponent &control) {
+  std::pair<ECM, std::string> SYST_Query(const ControlComponent &control) {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "SYST_Query", kFTPHomeDir)) {
       return {std::move(rcm), ""};
     }
     if (!curl || !multi) {
@@ -1118,7 +1121,7 @@ public:
       return {ecm, ""};
     }
 
-    detail::MemoryStruct header_chunk;
+    MemoryStruct header_chunk;
     header_chunk.memory = (char *)malloc(1);
     header_chunk.size = 0;
 
@@ -1136,13 +1139,13 @@ public:
 
     if (!nb_res) {
       free(header_chunk.memory);
-      return {NBResultToECM(nb_res, "SYST_Query"), ""};
+      return {NBResultToECM(curl, nb_res, "SYST_Query", ""), ""};
     }
     if (nb_res.value != CURLE_OK) {
       free(header_chunk.memory);
-      return {{detail::CastCurlEC(nb_res.value), "SYST", "/",
+      return {{CastCurlEC(nb_res.value), "SYST", kFTPHomeDir,
                curl_easy_strerror(nb_res.value),
-               RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}},
+               RawError(RawErrorSource::Curl, static_cast<int>(nb_res.value))},
               ""};
     }
 
@@ -1167,16 +1170,15 @@ public:
     if (!response.empty()) {
       return {OK, response};
     }
-    return {{EC::CommonFailure, "", "", "SYST returned empty response"},
-            ""};
+    return {{EC::CommonFailure, "", "", "SYST returned empty response"}, ""};
   }
 
-  ECMData<AMFSI::StatResult>
-  MLST_libstat(const AMFSI::StatArgs &args,
-               const AMDomain::client::ClientControlComponent &control) {
+  ECMData<AMFSI::StatResult> MLST_libstat(const AMFSI::StatArgs &args,
+                                          const ControlComponent &control) {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
-      return {std::move(rcm)};
+    auto stop_rcm = control.BuildRequestECM("MLST_stat", args.path);
+    if (stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
     }
     const std::string &path = args.path;
     if (!curl || !multi) {
@@ -1189,13 +1191,13 @@ public:
     }
 
     struct curl_slist *commands = nullptr;
-    std::string command = AMStr::fmt("MLST {}", detail::MlistPath(path));
+    std::string command = AMStr::fmt("MLST {}", MlistPath(path, true));
     commands = curl_slist_append(commands, command.c_str());
 
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
-    detail::MemoryStruct header_chunk;
+    MemoryStruct header_chunk;
     header_chunk.memory = (char *)malloc(1);
     header_chunk.size = 0;
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteMemoryCallback);
@@ -1208,12 +1210,12 @@ public:
 
     if (!nb_res) {
       free(header_chunk.memory);
-      rcm = NBResultToECM(nb_res, "MLST", path);
+      rcm = NBResultToECM(curl, nb_res, "MLST", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
       free(header_chunk.memory);
-      rcm = {detail::CastCurlEC(nb_res.value), "MLST", path,
+      rcm = {CastCurlEC(nb_res.value), "MLST", path,
              curl_easy_strerror(nb_res.value),
              RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
       trace(rcm);
@@ -1233,7 +1235,7 @@ public:
       }
       if (!line.empty() && (line[0] == ' ' || line[0] == '\t')) {
         line = line.substr(1);
-        info = detail::parse::ParseMLSTLine(line, path);
+        info = parse::ParseMLSTLine(line, path);
         found = true;
         break;
       }
@@ -1246,12 +1248,12 @@ public:
     return {AMFSI::StatResult{info}, std::move(rcm)};
   }
 
-  ECMData<AMFSI::StatResult>
-  Common_libstat(const AMFSI::StatArgs &args,
-                 const AMDomain::client::ClientControlComponent &control) {
+  ECMData<AMFSI::StatResult> Common_libstat(const AMFSI::StatArgs &args,
+                                            const ControlComponent &control) {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
-      return {std::move(rcm)};
+    auto stop_rcm = control.BuildRequestECM("Common_stat", args.path);
+    if (stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
     }
     const std::string &path = args.path;
 
@@ -1260,7 +1262,7 @@ public:
       return {std::move(rcm)};
     }
 
-    detail::MemoryStruct chunk;
+    MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
     curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
@@ -1280,7 +1282,7 @@ public:
     }
 
     if (!nb_res) {
-      rcm = NBResultToECM(nb_res, "Common_libstat", path);
+      rcm = NBResultToECM(curl, nb_res, "Common_libstat", path);
       return {std::move(rcm)};
     }
 
@@ -1299,7 +1301,7 @@ public:
     free(chunk.memory);
 
     if (!nb_res) {
-      rcm = NBResultToECM(nb_res, "Common_libstat", path);
+      rcm = NBResultToECM(curl, nb_res, "Common_libstat", path);
       return {std::move(rcm)};
     }
     if (nb_res.value == CURLE_OK) {
@@ -1321,15 +1323,14 @@ public:
 
     // Keep error mapping consistent with other FTP calls so path-not-exist
     // is classified correctly (instead of collapsing to UnknownError).
-    rcm = NBResultToECM(nb_res, "Common_libstat", path);
+    rcm = NBResultToECM(curl, nb_res, "Common_libstat", path);
     return {std::move(rcm)};
   }
 
-  ECMData<AMFSI::ListResult>
-  MLSD_Listdir(const AMFSI::ListdirArgs &args,
-               const AMDomain::client::ClientControlComponent &control) {
+  ECMData<AMFSI::ListResult> MLSD_Listdir(const AMFSI::ListdirArgs &args,
+                                          const ControlComponent &control) {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "MLSD_Listdir", args.path)) {
       return {std::move(rcm)};
     }
     const std::string &path = args.path;
@@ -1343,7 +1344,7 @@ public:
     }
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "MLSD");
 
-    detail::MemoryStruct chunk;
+    MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
@@ -1354,7 +1355,7 @@ public:
 
     if (!nb_res) {
       free(chunk.memory);
-      rcm = NBResultToECM(nb_res, "MLSD_Listdir", path);
+      rcm = NBResultToECM(curl, nb_res, "MLSD_Listdir", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
@@ -1394,7 +1395,7 @@ public:
       if (line.empty()) {
         continue;
       }
-      PathInfo info = detail::parse::ParseMLSDLine(line, dir_path);
+      PathInfo info = parse::ParseMLSDLine(line, dir_path);
       if (info.type != PathType::Unknown && info.name != "." &&
           info.name != "..") {
         file_list.push_back(info);
@@ -1403,11 +1404,10 @@ public:
     return {AMFSI::ListResult{std::move(file_list)}, std::move(rcm)};
   }
 
-  ECMData<AMFSI::ListResult>
-  Common_Listdir(const AMFSI::ListdirArgs &args,
-                 const AMDomain::client::ClientControlComponent &control) {
+  ECMData<AMFSI::ListResult> Common_Listdir(const AMFSI::ListdirArgs &args,
+                                            const ControlComponent &control) {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "Common_Listdir", args.path)) {
       return {std::move(rcm)};
     }
     const std::string &path = args.path;
@@ -1416,7 +1416,7 @@ public:
       return {std::move(rcm)};
     }
 
-    detail::MemoryStruct chunk;
+    MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
@@ -1425,12 +1425,12 @@ public:
     auto nb_res = NbPerform(control);
     if (!nb_res) {
       free(chunk.memory);
-      rcm = NBResultToECM(nb_res, "Common_Listdir", path);
+      rcm = NBResultToECM(curl, nb_res, "Common_Listdir", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      rcm = {detail::CastCurlEC(nb_res.value), "Common_Listdir", path,
+      rcm = {CastCurlEC(nb_res.value), "Common_Listdir", path,
              curl_easy_strerror(nb_res.value),
              RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
       return {std::move(rcm)};
@@ -1454,7 +1454,7 @@ public:
       if (line.empty()) {
         continue;
       }
-      PathInfo info = detail::parse::ParseListLine(line, dir_path);
+      PathInfo info = parse::ParseListLine(line, dir_path);
       if (info.type != PathType::Unknown && info.name != "." &&
           info.name != "..") {
         file_list.push_back(info);
@@ -1465,9 +1465,9 @@ public:
 
   ECMData<AMFSI::ListNamesResult>
   MLSD_ListNames(const AMFSI::ListNamesArgs &args,
-                 const AMDomain::client::ClientControlComponent &control) {
+                 const ControlComponent &control) {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "MLSD_ListNames", args.path)) {
       return {std::move(rcm)};
     }
     const std::string &path = args.path;
@@ -1481,7 +1481,7 @@ public:
     }
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "MLSD");
 
-    detail::MemoryStruct chunk;
+    MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
@@ -1492,7 +1492,7 @@ public:
 
     if (!nb_res) {
       free(chunk.memory);
-      rcm = NBResultToECM(nb_res, "MLSD_ListNames", path);
+      rcm = NBResultToECM(curl, nb_res, "MLSD_ListNames", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
@@ -1528,7 +1528,7 @@ public:
       if (line.empty()) {
         continue;
       }
-      std::string name = detail::parse::ParseMLSDName(line);
+      std::string name = parse::ParseMLSDName(line);
       if (!name.empty() && name != "." && name != "..") {
         names.push_back(std::move(name));
       }
@@ -1538,9 +1538,9 @@ public:
 
   ECMData<AMFSI::ListNamesResult>
   Common_ListNames(const AMFSI::ListNamesArgs &args,
-                   const AMDomain::client::ClientControlComponent &control) {
+                   const ControlComponent &control) {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "Common_ListNames", args.path)) {
       return {std::move(rcm)};
     }
     const std::string &path = args.path;
@@ -1549,7 +1549,7 @@ public:
       return {std::move(rcm)};
     }
 
-    detail::MemoryStruct chunk;
+    MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
@@ -1558,12 +1558,12 @@ public:
     auto nb_res = NbPerform(control);
     if (!nb_res) {
       free(chunk.memory);
-      rcm = NBResultToECM(nb_res, "Common_ListNames", path);
+      rcm = NBResultToECM(curl, nb_res, "Common_ListNames", path);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      rcm = {detail::CastCurlEC(nb_res.value), "Common_ListNames", path,
+      rcm = {CastCurlEC(nb_res.value), "Common_ListNames", path,
              curl_easy_strerror(nb_res.value),
              RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
       return {std::move(rcm)};
@@ -1582,7 +1582,7 @@ public:
       if (line.empty()) {
         continue;
       }
-      std::string name = detail::parse::ParseListName(line);
+      std::string name = parse::ParseListName(line);
       if (!name.empty() && name != "." && name != "..") {
         names.push_back(std::move(name));
       }
@@ -1593,8 +1593,6 @@ public:
   CURL *GetCURL() { return curl; }
 
   std::recursive_mutex &TransferMutex() { return mtx; }
-
-  const std::recursive_mutex &TransferMutex() const { return mtx; }
 };
 
 // FTP Client using libcurl
@@ -1612,17 +1610,18 @@ public:
   std::shared_ptr<AMFTPIOCore> mirror_client = nullptr;
 
   AMFTPIOCore(AMDomain::client::IClientConfigPort *config_port,
-              AMDomain::client::IClientControlToken *control_port,
-              TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+              InterruptControl *control_port, TraceCallback trace_cb = {},
+              AuthCallback auth_cb = {})
       : FTPBase(config_port, control_port, std::move(trace_cb),
                 std::move(auth_cb)) {}
 
-  ECMData<AMFSI::UpdateOSTypeResult> UpdateOSType(
-      const AMFSI::UpdateOSTypeArgs &args,
-      const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::UpdateOSTypeResult>
+  UpdateOSType(const AMFSI::UpdateOSTypeArgs &args,
+               const ControlComponent &control) override {
     (void)args;
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "UpdateOSType",
+                       config_part_->GetNickname())) {
       return {{OS_TYPE::Unknown}, std::move(rcm)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1641,26 +1640,25 @@ public:
     return {{config_part_->GetOSType()}, std::move(rcm)};
   }
 
-  ECMData<AMFSI::UpdateHomeDirResult> UpdateHomeDir(
-      const AMFSI::UpdateHomeDirArgs &args,
-      const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::UpdateHomeDirResult>
+  UpdateHomeDir(const AMFSI::UpdateHomeDirArgs &args,
+                const ControlComponent &control) override {
     (void)args;
     (void)control;
     ECMData<AMFSI::UpdateHomeDirResult> out = {};
-    config_part_->SetHomeDir("/");
-    out.data.home_dir = config_part_->GetHomeDir();
+    config_part_->SetHomeDir(kFTPHomeDir);
+    out.data.home_dir = kFTPHomeDir;
     out.rcm = OK;
     return out;
   }
 
-  ECMData<AMFSI::CheckResult>
-  Check(const AMFSI::CheckArgs &args,
-        const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::CheckResult> Check(const AMFSI::CheckArgs &args,
+                                    const ControlComponent &control) override {
     (void)args;
     ECM rcm = OK;
     auto out = ECMData<AMFSI::CheckResult>();
     out.data.status = config_part_->GetState().data.status;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "Check", kFTPHomeDir)) {
       out.rcm = std::move(rcm);
       return out;
     }
@@ -1676,7 +1674,7 @@ public:
       trace(out.rcm);
       return out;
     }
-    struct detail::MemoryStruct chunk;
+    struct MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
     curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
@@ -1685,7 +1683,7 @@ public:
     auto nb_res = NbPerform(control);
     free(chunk.memory);
     if (!nb_res) {
-      out.rcm = NBResultToECM(nb_res, "Check", "/");
+      out.rcm = NBResultToECM(curl, nb_res, "Check", kFTPHomeDir);
       if (out.rcm.code == EC::NoConnection) {
         out.data.status = AMDomain::client::ClientStatus::NoConnection;
       } else {
@@ -1698,9 +1696,10 @@ public:
       out.data.status = AMDomain::client::ClientStatus::OK;
       return out;
     }
-    out.rcm = {detail::CastCurlEC(nb_res.value), "Check", "/",
+    out.rcm = {CastCurlEC(nb_res.value), "Check", kFTPHomeDir,
                curl_easy_strerror(nb_res.value),
-               RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
+               RawError(RawErrorSource::Curl, nb_res.value)};
+
     if (out.rcm.code == EC::NoConnection) {
       out.data.status = AMDomain::client::ClientStatus::NoConnection;
     } else {
@@ -1712,21 +1711,21 @@ public:
 
   ECMData<AMFSI::ConnectResult>
   Connect(const AMFSI::ConnectArgs &args,
-          const AMDomain::client::ClientControlComponent &control) override {
+          const ControlComponent &control) override {
     ECMData<AMFSI::ConnectResult> out = {};
     out.data.status = config_part_->GetState().data.status;
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
-      out.rcm = std::move(rcm);
-      return out;
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
     ConRequest request = request_atomic_.lock().load();
     if (request.protocol != ClientProtocol::FTP) {
       throw std::invalid_argument("AMFTPIOCore only accepts FTP protocol");
     }
     const std::string connect_target =
         AMStr::fmt("{}:{}", request.hostname, request.port);
+    if (CheckSoftStop_(control, rcm, "Connect", connect_target)) {
+      out.rcm = std::move(rcm);
+      return out;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     connect_state("initialize FTP connection", connect_target);
 
     const auto state = config_part_->GetState();
@@ -1814,11 +1813,11 @@ public:
           (out.rcm.code == EC::NoConnection)
               ? AMDomain::client::ClientStatus::NoConnection
               : AMDomain::client::ClientStatus::ConnectionBroken;
-      SetState_({out.rcm, status});
+      config_part_->SetState({out.rcm, status});
       out.data.status = status;
       return out;
     }
-    SetState_({OK, AMDomain::client::ClientStatus::OK});
+    config_part_->SetState({OK, AMDomain::client::ClientStatus::OK});
     out.data.status = AMDomain::client::ClientStatus::OK;
     (void)UpdateOSType({}, control);
     connect_state("FTP connection established", connect_target);
@@ -1827,26 +1826,24 @@ public:
     return out;
   }
 
-  ECMData<AMFSI::RTTResult>
-  GetRTT(const AMFSI::GetRTTArgs &args,
-         const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::RTTResult> GetRTT(const AMFSI::GetRTTArgs &args,
+                                   const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "GetRTT", kFTPHomeDir)) {
       return {{-1.0}, std::move(rcm)};
     }
     int times = args.times > 0 ? args.times : 1;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!curl || !multi) {
-      return {{-1.0},
-              ECM{EC::NoConnection, "", "", "CURL not initialized"}};
+      return {{-1.0}, ECM{EC::NoConnection, "", "", "CURL not initialized"}};
     }
     std::vector<double> rtts;
     rtts.reserve(static_cast<size_t>(times));
-    struct detail::MemoryStruct chunk;
+    struct MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
     for (ssize_t i = 0; i < times; i++) {
-      if (control.CheckStop(rcm)) {
+      if (CheckSoftStop_(control, rcm, "GetRTT", kFTPHomeDir)) {
         free(chunk.memory);
         return {{-1.0}, std::move(rcm)};
       }
@@ -1865,7 +1862,7 @@ public:
         rtts.push_back(rtt_end_ms - rtt_start_ms);
       } else {
         free(chunk.memory);
-        rcm = NBResultToECM(nb_res, "GetRTT", "/");
+        rcm = NBResultToECM(curl, nb_res, "GetRTT", kFTPHomeDir);
         trace(rcm);
         return {{-1.0}, std::move(rcm)};
       }
@@ -1885,7 +1882,7 @@ public:
 
   ECMData<AMFSI::RunResult>
   ConductCmd(const AMFSI::ConductCmdArgs &args,
-             const AMDomain::client::ClientControlComponent &control) override {
+             const ControlComponent &control) override {
     (void)args;
     (void)control;
     ECMData<AMFSI::RunResult> res;
@@ -1896,13 +1893,14 @@ public:
     return res;
   }
 
-  ECMData<AMFSI::StatResult>
-  stat(const AMFSI::StatArgs &args,
-       const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::StatResult> stat(const AMFSI::StatArgs &args,
+                                  const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
-      return {std::move(rcm)};
+    auto stop_rcm = control.BuildRequestECM("stat", args.path);
+    if (stop_rcm.has_value()) {
+      return {std::move(*stop_rcm)};
     }
+
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
     if (!curl) {
@@ -1934,7 +1932,6 @@ public:
       }
       // Other errors also fall back to legacy method
     }
-
     auto common_res = Common_libstat(args, control);
     if (common_res.rcm.code == EC::Success) {
       return common_res;
@@ -1943,11 +1940,10 @@ public:
     return {std::move(common_res.rcm)};
   }
 
-  ECMData<AMFSI::ListResult>
-  listdir(const AMFSI::ListdirArgs &args,
-          const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::ListResult> listdir(const AMFSI::ListdirArgs &args,
+                                     const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "listdir", args.path)) {
       return {std::move(rcm)};
     }
     if (mlsd_state_ != CapabilityState::Unsupported) {
@@ -1974,9 +1970,9 @@ public:
 
   ECMData<AMFSI::ListNamesResult>
   listnames(const AMFSI::ListNamesArgs &args,
-            const AMDomain::client::ClientControlComponent &control) override {
+            const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "listnames", args.path)) {
       return {std::move(rcm)};
     }
     if (mlsd_state_ != CapabilityState::Unsupported) {
@@ -2001,11 +1997,10 @@ public:
     return common_res;
   }
 
-  ECMData<AMFSI::MkdirResult>
-  mkdir(const AMFSI::MkdirArgs &args,
-        const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::MkdirResult> mkdir(const AMFSI::MkdirArgs &args,
+                                    const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "mkdir", args.path)) {
       return {std::move(rcm)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -2016,8 +2011,7 @@ public:
 
     struct curl_slist *commands = nullptr;
     commands = curl_slist_append(
-        commands,
-        AMStr::fmt("MKD {}", detail::MlistPath(args.path, true)).c_str());
+        commands, AMStr::fmt("MKD {}", MlistPath(args.path, true)).c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
@@ -2028,7 +2022,7 @@ public:
     curl_slist_free_all(commands);
 
     if (!nb_res) {
-      rcm = NBResultToECM(nb_res, "mkdir", args.path);
+      rcm = NBResultToECM(curl, nb_res, "mkdir", args.path);
       trace(rcm);
       return {std::move(rcm)};
     }
@@ -2037,13 +2031,13 @@ public:
     }
 
     bool has_response_code = false;
-    rcm = GetECM(nb_res.value, "MKD", &has_response_code);
+    rcm = GetECM(curl, nb_res.value, "MKD", &has_response_code);
     if (!has_response_code) {
       trace(rcm);
       return {std::move(rcm)};
     }
 
-    auto stat_res = stat(AMFSI::StatArgs{args.path, false}, control);
+    auto stat_res = stat(AMFSI::StatArgs(args.path, false), control);
     if (stat_res.rcm.code == EC::Success) {
       if (stat_res.data.info.type == PathType::DIR) {
         return {{}, OK};
@@ -2064,9 +2058,9 @@ public:
 
   ECMData<AMFSI::MkdirsResult>
   mkdirs(const AMFSI::MkdirsArgs &args,
-         const AMDomain::client::ClientControlComponent &control) override {
+         const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "mkdirs", args.path)) {
       return {std::move(rcm)};
     }
     if (args.path.empty()) {
@@ -2084,11 +2078,12 @@ public:
       if (part.empty() || part == ".") {
         continue;
       }
-      if (part == "/") {
-        current_path = "/";
+      if (part == kFTPHomeDir) {
+        current_path = kFTPHomeDir;
         continue;
       }
-      if (control.CheckStop(rcm)) {
+      if (CheckSoftStop_(control, rcm, "mkdirs",
+                         current_path.empty() ? args.path : current_path)) {
         return {std::move(rcm)};
       }
 
@@ -2097,22 +2092,6 @@ public:
       } else {
         current_path = AMPath::join(current_path, part);
       }
-
-      // auto stat_res = stat(AMFSI::StatArgs{current_path, false}, control);
-      // if (stat_res.rcm.code == EC::Success) {
-      //   if (stat_res.data.info.type == PathType::DIR) {
-      //     continue;
-      //   }
-      //   out.rcm = ECM{
-      //       EC::PathAlreadyExists,
-      //       AMStr::fmt("Path exists and is not a directory: {}",
-      //       current_path)};
-      //   return out;
-      // }
-      // if (stat_res.rcm.code != EC::PathNotExist) {
-      //   out.rcm = stat_res.rcm;
-      //   return out;
-      // }
 
       auto mk_res = mkdir(AMFSI::MkdirArgs{current_path}, control);
       if (mk_res.rcm.code != EC::Success) {
@@ -2123,11 +2102,10 @@ public:
     return {{}, std::move(rcm)};
   }
 
-  ECMData<AMFSI::RMResult>
-  rmdir(const AMFSI::RmdirArgs &args,
-        const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::RMResult> rmdir(const AMFSI::RmdirArgs &args,
+                                 const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "rmdir", args.path)) {
       return {std::move(rcm)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -2135,7 +2113,7 @@ public:
     if (args.path.empty()) {
       return {ECM{EC::InvalidArg, "rmdir", args.path, "Invalid empty path"}};
     }
-    auto res = stat(AMFSI::StatArgs{args.path, false}, control);
+    auto res = stat(AMFSI::StatArgs(args.path, false), control);
     if (!res) {
       return {std::move(res.rcm)};
     }
@@ -2149,7 +2127,7 @@ public:
     }
 
     struct curl_slist *commands = nullptr;
-    std::string rmd_cmd = AMStr::fmt("RMD {}", detail::MlistPath(args.path));
+    std::string rmd_cmd = AMStr::fmt("RMD {}", MlistPath(args.path, true));
     commands = curl_slist_append(commands, rmd_cmd.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
@@ -2161,12 +2139,12 @@ public:
     curl_slist_free_all(commands);
 
     if (!nb_res) {
-      rcm = NBResultToECM(nb_res, "rmdir", args.path);
+      rcm = NBResultToECM(curl, nb_res, "rmdir", args.path);
       trace(rcm);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
-      rcm = {detail::CastCurlEC(nb_res.value), "rmdir", args.path,
+      rcm = {CastCurlEC(nb_res.value), "rmdir", args.path,
              curl_easy_strerror(nb_res.value),
              RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
       trace(rcm);
@@ -2176,15 +2154,14 @@ public:
     return {{}, std::move(rcm)};
   }
 
-  ECMData<AMFSI::RMResult>
-  rmfile(const AMFSI::RmfileArgs &args,
-         const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::RMResult> rmfile(const AMFSI::RmfileArgs &args,
+                                  const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "rmfile", args.path)) {
       return {std::move(rcm)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto stat_res = stat(AMFSI::StatArgs{args.path, false}, control);
+    auto stat_res = stat(AMFSI::StatArgs(args.path, false), control);
     if (!stat_res) {
       return {std::move(stat_res.rcm)};
     }
@@ -2210,12 +2187,12 @@ public:
     curl_slist_free_all(commands);
 
     if (!nb_res) {
-      rcm = NBResultToECM(nb_res, "rmfile", args.path);
+      rcm = NBResultToECM(curl, nb_res, "rmfile", args.path);
       trace(rcm);
       return {std::move(rcm)};
     }
     if (nb_res.value != CURLE_OK) {
-      rcm = {detail::CastCurlEC(nb_res.value), "rmfile", args.path,
+      rcm = {CastCurlEC(nb_res.value), "rmfile", args.path,
              curl_easy_strerror(nb_res.value),
              RawError{RawErrorSource::Curl, static_cast<int>(nb_res.value)}};
       trace(rcm);
@@ -2225,55 +2202,14 @@ public:
     return {{}, std::move(rcm)};
   }
 
-  ECMData<AMFSI::MoveResult>
-  rename(const AMFSI::RenameArgs &args,
-         const AMDomain::client::ClientControlComponent &control) override {
+  ECMData<AMFSI::MoveResult> rename(const AMFSI::RenameArgs &args,
+                                    const ControlComponent &control) override {
     ECM rcm = OK;
-    if (control.CheckStop(rcm)) {
+    if (CheckSoftStop_(control, rcm, "rename",
+                       AMStr::fmt("{} -> {}", args.src, args.dst))) {
       return {std::move(rcm)};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
-
-    // legacy checks before performing rename
-    /*
-    const std::string home_dir = GetHomeDir_();
-    std::string srcf = AMPath::abspath(args.src, true, home_dir, home_dir);
-    std::string dstf = AMPath::abspath(args.dst, true, home_dir, home_dir);
-    if (srcf.empty() || dstf.empty()) {
-      out.rcm = {EC::InvalidArg, "", "", AMStr::fmt("Invalid path: {} or
-    {}", srcf, dstf)}; return out;
-    }
-
-    auto src_stat = stat(AMFSI::StatArgs{srcf, false}, control);
-    if (src_stat.rcm.code != EC::Success) {
-      out.rcm = src_stat.rcm;
-      return out;
-    }
-
-    auto dst_stat = stat(AMFSI::StatArgs{dstf, false}, control);
-    if (dst_stat.rcm.code == EC::Success) {
-      if (dst_stat.data.info.type != src_stat.data.info.type) {
-        out.rcm = {EC::PathAlreadyExists, "", "", AMStr::fmt(
-                       "Dst already exists and is not the same type as src: "
-                       "{} ",
-                       dstf)};
-        return out;
-      }
-      if (!args.overwrite) {
-        out.rcm = {
-            EC::PathAlreadyExists,
-            AMStr::fmt("Dst already exists: {} and overwrite is false",
-            dstf)};
-        return out;
-      }
-    } else if (args.mkdir) {
-      ECM ecm = mkdirs(AMFSI::MkdirsArgs{AMPath::dirname(dstf)}, control);
-      if (ecm.code != EC::Success) {
-        out.rcm = ecm;
-        return out;
-      }
-    }
-    */
 
     rcm = SetupPath("", true);
     if (!rcm) {
@@ -2281,8 +2217,8 @@ public:
     }
 
     struct curl_slist *headerlist = nullptr;
-    std::string rnfr_cmd = "RNFR " + detail::MlistPath(args.src, args.isdir);
-    std::string rnto_cmd = "RNTO " + detail::MlistPath(args.dst, args.isdir);
+    std::string rnfr_cmd = "RNFR " + MlistPath(args.src, args.isdir);
+    std::string rnto_cmd = "RNTO " + MlistPath(args.dst, args.isdir);
     headerlist = curl_slist_append(headerlist, rnfr_cmd.c_str());
     headerlist = curl_slist_append(headerlist, rnto_cmd.c_str());
 
@@ -2290,12 +2226,14 @@ public:
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
     auto nb_res = NbPerform(control);
+
     if (!nb_res) {
-      rcm = NBResultToECM(nb_res, "rename",
+      rcm = NBResultToECM(curl, nb_res, "rename",
                           AMStr::fmt("{} -> {}", args.src, args.dst));
       trace(rcm);
       return {std::move(rcm)};
     }
+
     CURLcode res = nb_res.value;
 
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
@@ -2306,470 +2244,13 @@ public:
       rcm = {EC::FTPRenameFailed, "rename",
              AMStr::fmt("{} -> {}", args.src, args.dst),
              curl_easy_strerror(res),
-             RawError{RawErrorSource::Curl, static_cast<int>(res)}};
+             RawError(RawErrorSource::Curl, static_cast<int>(res))};
       trace(rcm);
       return {std::move(rcm)};
     }
 
     return {{}, std::move(rcm)};
   }
-
-  // Orchestration implementation details for iwalk/walk/find/remove/getsize.
-  /*
-  AMFSI::GetsizeResult
-  getsize(const AMFSI::GetsizeArgs &args,
-          const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "", "", "Operation timed out"},
-  -1};
-    }
-    const int64_t size = getsize(args.path, args.ignore_special_file, control);
-    if (size < 0) {
-      return {{EC::UnknownError, "", "", "getsize failed"}, size};
-    }
-    return {OK, size};
-  }
-
-  AMFSI::FindResult
-  find(const AMFSI::FindArgs &args,
-       const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "", "", "Operation timed out"},
-  {}};
-    }
-    auto legacy = find(args.path, args.type, control);
-    return {OK, std::move(legacy)};
-  }
-
-  ECM mkdirs(const AMFSI::MkdirsArgs &args,
-             const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsTimeout()) {
-      return ECM{EC::OperationTimeout, "", "", "Operation timed out"};
-    }
-    auto parts = AMPath::split(args.path);
-    if (parts.empty()) {
-      return {EC::InvalidArg, "", "", "Invalid empty path"};
-    }
-    if (parts.size() == 1) {
-      return mkdir(AMFSI::MkdirArgs{args.path}, control);
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    std::string current_path = parts.front();
-    for (size_t i = 1; i < parts.size(); i++) {
-      if (control.IsInterrupted()) {
-        return {EC::Terminate, "", "", "Interrupted by user"};
-      }
-      if (control.IsTimeout()) {
-        return {EC::OperationTimeout, "", "", "Operation timed out"};
-      }
-      current_path = AMPath::join(current_path, parts[i]);
-      ECM ecm = mkdir(AMFSI::MkdirArgs{current_path}, control);
-      if (ecm.code != EC::Success) {
-        return ecm;
-      }
-    }
-    return OK;
-  }
-
-  AMFSI::DeleteResult
-  remove(const AMFSI::RemoveArgs &args,
-         const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "", "", "Operation timed out"},
-  {}};
-    }
-    if (control.IsInterrupted()) {
-      return {ECM{EC::Terminate, "", "", "Interrupted by user"}, {}};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    RMR errors = {};
-    auto [rcm, info] = stat(AMFSI::StatArgs{args.path, false}, control);
-    if (rcm.code != EC::Success) {
-      if (args.error_callback && *args.error_callback) {
-        (*args.error_callback)(args.path, rcm);
-      }
-      return {rcm, {}};
-    }
-    _rm(info, errors, args.error_callback, control);
-    if (control.IsInterrupted()) {
-      return {ECM{EC::Terminate, "", "", "Interrupted by user"}, errors};
-    }
-    if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "", "", "Operation timed out"},
-  errors};
-    }
-    return {OK, errors};
-  }
-
-  ECM saferm(const AMFSI::SafermArgs &args,
-             const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsTimeout()) {
-      return ECM{EC::OperationTimeout, "", "", "Operation timed out"};
-    }
-    auto [rcm, errors] = remove(AMFSI::RemoveArgs{args.path, nullptr}, control);
-    if (rcm.code != EC::Success) {
-      return rcm;
-    }
-    if (!errors.empty()) {
-      return {EC::CommonFailure, "saferm", args.path,
-              AMStr::fmt("Partially failed on {} entries", errors.size())};
-    }
-    return OK;
-  }
-
-  ECM copy(const AMFSI::CopyArgs &args,
-           const AMDomain::client::ClientControlComponent &control) {
-    (void)args;
-    (void)control;
-    return {EC::OperationUnsupported, "", "", "FTP client does not support
-  server-side copy"};
-  }
-
-  AMFSI::IWalkResult
-  iwalk(const AMFSI::IWalkArgs &args,
-        const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "", "", "Operation timed out"},
-  {}, {}};
-    }
-    auto legacy = iwalk(args.path, args.show_all, args.ignore_special_file,
-                        args.error_callback, control);
-    return {legacy.first, legacy.second.first, legacy.second.second};
-  }
-
-  AMFSI::WalkResult
-  walk(const AMFSI::WalkArgs &args,
-       const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "", "", "Operation timed out"},
-  {}, {}};
-    }
-    auto legacy = walk(args.path, args.max_depth, args.show_all,
-                       args.ignore_special_file, args.error_callback, control);
-    return {legacy.first, legacy.second.first, legacy.second.second};
-  }
-
-  void _iwalk(const PathInfo &info, WRV &result, RMR &errors, bool show_all,
-              bool ignore_special_file,
-              const AMPath::WalkErrorCallback &error_callback,
-              const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsInterrupted() || control.IsTimeout()) {
-      return;
-    }
-
-    auto [rcm2, list_info] = listdir(AMFSI::ListdirArgs{info.path}, control);
-    if (rcm2.code != EC::Success) {
-      if (rcm2.code != EC::OperationTimeout) {
-        if (error_callback && *error_callback) {
-          (*error_callback)(info.path, rcm2);
-        }
-        errors.emplace_back(info.path, rcm2);
-      }
-      return;
-    }
-
-    const bool filter_hidden = !show_all;
-    const bool filter_special = !show_all && ignore_special_file;
-    const auto is_hidden_name = [](const std::string &name) {
-      return !name.empty() && name[0] == '.';
-    };
-    bool no_subdir = true;
-    for (auto &item : list_info) {
-      if (control.IsInterrupted() || control.IsTimeout()) {
-        return;
-      }
-      if (filter_hidden && is_hidden_name(item.name)) {
-        continue;
-      }
-      if (item.type != PathType::DIR) {
-        if (filter_special && static_cast<int>(item.type) < 0) {
-          continue;
-        }
-        result.push_back(item);
-        continue;
-      }
-      no_subdir = false;
-      _iwalk(item, result, errors, show_all, ignore_special_file,
-             error_callback, control);
-    }
-
-    if (no_subdir) {
-      result.push_back(info);
-    }
-  }
-
-  std::pair<ECM, WRI>
-  iwalk(const std::string &path, bool show_all, bool ignore_special_file,
-        const AMPath::WalkErrorCallback &error_callback,
-        const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsTimeout()) {
-      return {ECM{EC::OperationTimeout, "", "", "Operation timed out"},
-  {WRV{}, RMR{}}};
-    }
-    if (control.IsInterrupted()) {
-      return {ECM{EC::Terminate, "", "", "Interrupted by user"}, {WRV{},
-  RMR{}}};
-    }
-
-    if (path.empty()) {
-      ECM out = {EC::InvalidArg, "", "", "Invalid empty path"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      return {out, {WRV{}, RMR{}}};
-    }
-    WRV result = {};
-    RMR errors = {};
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto [rcm, info] = stat(AMFSI::StatArgs{path, false}, control);
-    if (rcm.code != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm);
-      }
-      errors.emplace_back(path, rcm);
-      return {rcm, {WRV{}, errors}};
-    } else if (info.type != PathType::DIR) {
-      return {OK, {WRV{info}, errors}};
-    }
-    _iwalk(info, result, errors, show_all, ignore_special_file, error_callback,
-           control);
-    if (control.IsInterrupted()) {
-      ECM out = {EC::Terminate, "", "", "iwalk interrupted by user"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      return {out, {result, errors}};
-    }
-    if (control.IsTimeout()) {
-      ECM out = {EC::OperationTimeout, "", "", "Operation timed out"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      return {out, {result, errors}};
-    }
-    return {OK, {result, errors}};
-  }
-
-  void _walk(const std::vector<std::string> &parts, WRD &result, RMR &errors,
-             int cur_depth, int max_depth, bool show_all,
-             bool ignore_special_file,
-             const AMPath::WalkErrorCallback &error_callback,
-             const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsInterrupted() || control.IsTimeout()) {
-      return;
-    }
-    if (max_depth != -1 && cur_depth > max_depth) {
-      return;
-    }
-    std::string pathf = AMPath::join(parts);
-    auto [rcm2, list_info] = listdir(AMFSI::ListdirArgs{pathf}, control);
-    if (rcm2.code != EC::Success) {
-      if (rcm2.code != EC::OperationTimeout) {
-        if (error_callback && *error_callback) {
-          (*error_callback)(pathf, rcm2);
-        }
-        errors.emplace_back(pathf, rcm2);
-      }
-      return;
-    }
-    if (list_info.empty()) {
-      result.push_back({parts, {}});
-      return;
-    }
-
-    const bool filter_hidden = !show_all;
-    const bool filter_special = !show_all && ignore_special_file;
-    const auto is_hidden_name = [](const std::string &name) {
-      return !name.empty() && name[0] == '.';
-    };
-    std::vector<PathInfo> files_info = {};
-    for (auto &info : list_info) {
-      if (control.IsInterrupted() || control.IsTimeout()) {
-        return;
-      }
-      if (filter_hidden && is_hidden_name(info.name)) {
-        continue;
-      }
-      if (info.type == PathType::DIR) {
-        auto new_parts = parts;
-        new_parts.push_back(info.name);
-        _walk(new_parts, result, errors, cur_depth + 1, max_depth, show_all,
-              ignore_special_file, error_callback, control);
-      } else {
-        if (filter_special && static_cast<int>(info.type) < 0) {
-          continue;
-        }
-        files_info.push_back(info);
-      }
-    }
-    if (!files_info.empty()) {
-      result.emplace_back(parts, files_info);
-    }
-  }
-
-  std::pair<ECM, WRDR>
-  walk(const std::string &path, int max_depth, bool show_all,
-       bool ignore_special_file, const AMPath::WalkErrorCallback
-  &error_callback, const AMDomain::client::ClientControlComponent &control) { if
-  (control.IsTimeout()) { return {ECM{EC::OperationTimeout, "", "",
-  "Operation timed out"}, {WRD{}, RMR{}}};
-    }
-    if (control.IsInterrupted()) {
-      return {ECM{EC::Terminate, "", "", "Interrupted by user"}, {WRD{},
-  RMR{}}};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto [rcm, br] = stat(AMFSI::StatArgs{path, false}, control);
-    RMR errors = {};
-    if (rcm.code != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm);
-      }
-      errors.emplace_back(path, rcm);
-      return {rcm, {WRD{}, errors}};
-    }
-    WRD result_dict = {};
-    std::vector<std::string> parts = {path};
-    _walk(parts, result_dict, errors, 0, max_depth, show_all,
-          ignore_special_file, error_callback, control);
-    if (control.IsInterrupted()) {
-      ECM out = {EC::Terminate, "", "", "Interrupted by user, no action
-  conducted"}; if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      return {out, {result_dict, errors}};
-    }
-    if (control.IsTimeout()) {
-      ECM out = {EC::OperationTimeout, "", "", "Operation timed out"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      return {out, {result_dict, errors}};
-    }
-    return {OK, {result_dict, errors}};
-  }
-
-  int64_t getsize(const std::string &path, bool ignore_special_file,
-                  const AMDomain::client::ClientControlComponent &control) {
-    auto [rcm, pack] = iwalk(path, true, ignore_special_file, nullptr, control);
-    if (rcm.code != EC::Success || control.IsInterrupted() ||
-        control.IsTimeout()) {
-      return -1;
-    }
-    int64_t size = 0;
-    for (const auto &item : pack.first) {
-      size += static_cast<int64_t>(item.size);
-    }
-    return size;
-  }
-
-  std::vector<PathInfo>
-  find(const std::string &path, SearchType type,
-       const AMDomain::client::ClientControlComponent &control) {
-    std::vector<PathInfo> results = {};
-    if (control.IsInterrupted() || control.IsTimeout()) {
-      return results;
-    }
-    auto parts = AMPath::split(path);
-    if (parts.empty()) {
-      return results;
-    } else if (parts.size() == 1) {
-      auto [error, info] = stat(AMFSI::StatArgs{parts[0], false}, control);
-      if (error.code == EC::Success &&
-          (type == SearchType::All ||
-           (type == SearchType::Directory && info.type == PathType::DIR) ||
-           (type == SearchType::File && info.type == PathType::FILE))) {
-        results.push_back(info);
-      }
-      return results;
-    }
-
-    std::string cur_path = parts[0];
-    bool is_stop = false;
-    std::vector<std::string> match_parts = {};
-
-    for (size_t i = 1; i < parts.size(); i++) {
-      if (!is_stop && !BasePathMatch::IsUseMatch(parts[i])) {
-        cur_path = AMPath::join(cur_path, parts[i]);
-      } else {
-        is_stop = true;
-        match_parts.push_back(parts[i]);
-      }
-    }
-
-    auto [error, info] = stat(AMFSI::StatArgs{cur_path, false}, control);
-    if (error.code != EC::Success) {
-      return {};
-    }
-    if (match_parts.empty()) {
-      if (type == SearchType::All ||
-          (type == SearchType::Directory && info.type == PathType::DIR) ||
-          (type == SearchType::File && info.type == PathType::FILE)) {
-        results.push_back(info);
-      }
-      return results;
-    }
-    if (info.type != PathType::DIR) {
-      return results;
-    }
-
-    std::vector<PathInfo> candidates;
-    CollectFindCandidates_(info, candidates, control);
-    for (const auto &item : candidates) {
-      if (control.IsInterrupted() || control.IsTimeout()) {
-        break;
-      }
-      if (!BasePathMatch::MatchPathPatternLiteral(item.path, path)) {
-        continue;
-      }
-      if (type == SearchType::All ||
-          (type == SearchType::Directory && item.type == PathType::DIR) ||
-          (type == SearchType::File && item.type == PathType::FILE)) {
-        results.push_back(item);
-      }
-    }
-    return results;
-  }
-
-  void _rm(const PathInfo &info, RMR &errors,
-           const AMPath::WalkErrorCallback &error_callback,
-           const AMDomain::client::ClientControlComponent &control) {
-    if (control.IsInterrupted() || control.IsTimeout()) {
-      return;
-    }
-    if (info.type != PathType::DIR) {
-      ECM rc = rmfile(AMFSI::RmfileArgs{info.path}, control).rcm;
-      if (rc.code != EC::Success) {
-        errors.emplace_back(info.path, rc);
-      }
-      return;
-    }
-    auto [rcm2, file_list] = listdir(AMFSI::ListdirArgs{info.path}, control);
-    if (rcm2.code != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(info.path, rcm2);
-      }
-      errors.emplace_back(info.path, rcm2);
-      return;
-    }
-    for (const auto &itemf : file_list) {
-      if (control.IsInterrupted() || control.IsTimeout()) {
-        return;
-      }
-      _rm(itemf, errors, error_callback, control);
-    }
-    // Delete directory after removing all contents
-    ECM rc = rmdir(AMFSI::RmdirArgs{info.path}, control).rcm;
-    if (rc.code != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(info.path, rc);
-      }
-      errors.emplace_back(info.path, rc);
-    }
-  }
-
-   */
 };
 
 } // namespace AMInfra::client::FTP
-
