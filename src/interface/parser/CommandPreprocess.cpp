@@ -16,6 +16,8 @@ struct CliTokenWithMeta_ {
   bool quoted = false;
 };
 
+constexpr char kQuotedDashShellCmdSentinel_ = '\x1D';
+
 /**
  * @brief Restore backtick escapes and strip syntactic quote delimiters.
  *
@@ -275,8 +277,10 @@ void ProtectQuotedDashLiterals_(std::vector<CliTokenWithMeta_> *tokens,
       continue;
     }
 
-    // Quoted '-' literals collide with CLI11 options. For path positionals, map
-    // to an equivalent relative path form ("./-x") before parse.
+    // Quoted '-' literals collide with CLI11 options.
+    // - Path positionals: map to equivalent relative path ("./-x").
+    // - Shell command positionals: prefix one private sentinel to keep literal
+    //   value while avoiding option classification in CLI11.
     if (token.quoted && StartsWithDashLiteral_(text)) {
       const auto semantic =
           command_tree->ResolvePositionalSemantic(command_path, positional_index);
@@ -284,6 +288,15 @@ void ProtectQuotedDashLiterals_(std::vector<CliTokenWithMeta_> *tokens,
           semantic.value() == AMCommandArgSemantic::Path) {
         auto rewritten_token = token;
         rewritten_token.text = AMStr::fmt("./{}", text);
+        rewritten.push_back(std::move(rewritten_token));
+        ++positional_index;
+        continue;
+      }
+      if (semantic.has_value() &&
+          semantic.value() == AMCommandArgSemantic::ShellCmd) {
+        auto rewritten_token = token;
+        rewritten_token.text =
+            std::string(1, kQuotedDashShellCmdSentinel_) + text;
         rewritten.push_back(std::move(rewritten_token));
         ++positional_index;
         continue;

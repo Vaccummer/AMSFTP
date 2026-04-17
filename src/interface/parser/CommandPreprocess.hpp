@@ -36,7 +36,9 @@ public:
    * Quote wrappers are removed, and backtick escapes are restored for every
    * escaped character except `$` (`` `$`` is preserved for post-parse var
    * substitution). Quoted path literals that start with '-' are normalized to
-   * an equivalent "./-name" form to avoid option parsing conflicts.
+   * an equivalent "./-name" form, and quoted shell-command literals that start
+   * with '-' are tagged as protected literals, to avoid option parsing
+   * conflicts in CLI11.
    */
   std::vector<std::string> SplitCliTokens(const std::string &input) const;
 

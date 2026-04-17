@@ -14,6 +14,14 @@ namespace AMInterface::cli {
 namespace filesystem_arg_detail {
 using PathTarget = AMDomain::filesystem::PathTarget;
 using TransferConfirmPolicy = AMInterface::transfer::TransferConfirmPolicy;
+constexpr char kQuotedDashShellCmdSentinel = '\x1D';
+
+inline std::string DecodeQuotedDashShellCmd(const std::string &raw) {
+  if (!raw.empty() && raw.front() == kQuotedDashShellCmdSentinel) {
+    return raw.substr(1);
+  }
+  return raw;
+}
 
 inline ECM ResolveTransferEndpoint(const CLIServices &managers,
                                    const std::string &raw,
@@ -597,7 +605,9 @@ struct CmdArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    const std::string command = AMStr::Strip(request.cmd);
+    const std::string command =
+        AMStr::Strip(filesystem_arg_detail::DecodeQuotedDashShellCmd(
+            request.cmd));
     if (command.empty()) {
       return Err(EC::InvalidArg, "", "", "cmd cannot be empty");
     }
