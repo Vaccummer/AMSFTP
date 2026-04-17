@@ -7,7 +7,6 @@
 #include <string>
 
 namespace AMDomain::log {
-
 /**
  * @brief Domain port for concrete logger writers in infrastructure.
  */
@@ -83,8 +82,3 @@ private:
 std::unique_ptr<ILoggerWritePort> BuildLoggerWritePort();
 
 } // namespace AMDomain::log
-
-/**
- * @brief Backward-compatible global alias kept during rename migration.
- */
-using AMLoggerWritePort = AMDomain::log::ILoggerWritePort;

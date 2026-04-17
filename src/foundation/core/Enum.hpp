@@ -147,33 +147,8 @@ enum class ErrorCode {
   InvalidOffset = 108,
   ProgrammInitializeFailed = 109,
   TargetAlreadyExists = 110,
+  LUAExecutionError = 111,
 };
-
-enum class WaitResult {
-  Ready,       // Socket is ready for read/write
-  ReadReady,   // Socket is ready for read (ReadOrWrite mode only)
-  WriteReady,  // Socket is ready for write (ReadOrWrite mode only)
-  Timeout,     // Operation timed out
-  Interrupted, // Operation was interrupted by flag
-  Error        // Socket error occurred
-};
-
-inline ErrorCode wait_result_to_error_code(WaitResult wr) {
-  switch (wr) {
-  case WaitResult::Ready:
-  case WaitResult::ReadReady:
-  case WaitResult::WriteReady:
-    return ErrorCode::Success;
-  case WaitResult::Timeout:
-    return ErrorCode::OperationTimeout;
-  case WaitResult::Interrupted:
-    return ErrorCode::Terminate;
-  case WaitResult::Error:
-    return ErrorCode::SocketRecvError;
-  default:
-    return ErrorCode::UnknownError;
-  }
-}
 
 enum class PathType {
   BlockDevice = -1,
@@ -186,22 +161,7 @@ enum class PathType {
   SYMLINK = 2
 };
 
-enum class SearchType { All = 0, File = 1, Directory = 2 };
-
 enum class SepType { Unix = 0, Windows = 1 };
-
-enum class MapType { Read = 0, Write = 1 };
-
-enum class TaskAssignType { Affinity, Public };
-
-enum class BufferStatus {
-  is_writing = 0,
-  is_reading = 1,
-  read_done = 2,
-  write_done = 3
-};
-
-enum class TransferControl { Running = 1, Pause = 0, Terminate = -1 };
 
 enum class AMTokenType {
   Unset = -1,
@@ -249,8 +209,6 @@ enum class AMTokenType {
   ValidNewChannelName = 41,
   InvalidNewChannelName = 42
 };
-
-enum class TraceSource { Client = 0, Programm = 1 };
 
 using EC = ErrorCode;
 

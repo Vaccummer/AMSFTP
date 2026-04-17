@@ -12,6 +12,8 @@
 
 namespace AMDomain::filesystem {
 
+enum class SearchType { All = 0, File = 1, Directory = 2 };
+
 using EC = ErrorCode;
 using ErrorList = std::vector<std::pair<std::string, ECM>>;
 using WalkTree =
