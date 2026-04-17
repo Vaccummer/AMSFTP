@@ -13,7 +13,6 @@
 #include <optional>
 #include <stop_token>
 #include <thread>
-#include <type_traits>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -27,8 +26,6 @@ namespace AMSFTP = AMInfra::client::SFTP;
 
 class RealtimeSSHChannelPort final : public AMT::IChannelPort {
 public:
-  using ClientControlComponent = AMDomain::client::ClientControlComponent;
-
   RealtimeSSHChannelPort(std::string terminal_key, std::string channel_name,
                          AMSFTP::AMSFTPIOCore *sftp_core, std::string host)
       : terminal_key_(std::move(terminal_key)),
@@ -64,14 +61,14 @@ public:
   }
 
   ECM Init(const AMT::ChannelInitArgs &init_args,
-           const ClientControlComponent &control = {}) override {
+           const ControlComponent &control = {}) override {
     if (sftp_core_ == nullptr) {
       return Err(EC::NoSession, "terminal.channel.init", GetChannelName(),
                  "SFTP IO core is unavailable");
     }
 
     std::lock_guard<std::recursive_mutex> lock(sftp_core_->TransferMutex());
-    LIBSSH2_SESSION *session = sftp_core_->session;
+    LIBSSH2_SESSION *session = sftp_core_->Session();
     if (session == nullptr) {
       return Err(EC::NoConnection, "terminal.channel.init", GetChannelName(),
                  "Client session is not connected");
@@ -110,13 +107,20 @@ public:
     }
 
     libssh2_session_set_blocking(session, 0);
-    auto pty_res = NBCall_(control, [&]() {
+    auto pty_res = sftp_core_->NBPerform(control, [&]() {
       return libssh2_channel_request_pty_ex(
           channel_holder_->channel, term_.c_str(),
           static_cast<unsigned int>(term_.size()), nullptr, 0, window_cols_,
           window_rows_, window_width_, window_height_);
     });
-    if (!pty_res || pty_res.value != 0) {
+    if (!pty_res) {
+      ECM ecm = ContextualizeRCM_(pty_res.rcm, "terminal.channel.init.pty");
+      channel_holder_.reset();
+      eof_ = true;
+      state_ = ecm;
+      return ecm;
+    }
+    if (pty_res.value != 0) {
       ECM ecm = Err(LastEC_(), "terminal.channel.init.pty", GetChannelName(),
                     LastError_());
       channel_holder_.reset();
@@ -125,10 +129,17 @@ public:
       return ecm;
     }
 
-    auto shell_res = NBCall_(control, [&]() {
+    auto shell_res = sftp_core_->NBPerform(control, [&]() {
       return libssh2_channel_shell(channel_holder_->channel);
     });
-    if (!shell_res || shell_res.value != 0) {
+    if (!shell_res) {
+      ECM ecm = ContextualizeRCM_(shell_res.rcm, "terminal.channel.init.shell");
+      channel_holder_.reset();
+      eof_ = true;
+      state_ = ecm;
+      return ecm;
+    }
+    if (shell_res.value != 0) {
       ECM ecm = Err(LastEC_(), "terminal.channel.init.shell", GetChannelName(),
                     LastError_());
       channel_holder_.reset();
@@ -155,25 +166,25 @@ public:
 
   [[nodiscard]] ECMData<AMT::ChannelReadWrappedResult>
   ReadWrapped(const AMT::ChannelReadArgs &read_args,
-              const ClientControlComponent &control = {}) override {
+              const ControlComponent &control = {}) override {
     auto raw_read = RawRead_(read_args, control);
     return cache_.WrapReadResultFromRaw(raw_read);
   }
 
   [[nodiscard]] ECMData<AMT::ChannelWriteResult>
   WriteRaw(const AMT::ChannelWriteArgs &write_args,
-           const ClientControlComponent &control = {}) override {
+           const ControlComponent &control = {}) override {
     return RawWrite_(write_args, control);
   }
 
   [[nodiscard]] ECMData<AMT::ChannelResizeResult>
   Resize(const AMT::ChannelResizeArgs &resize_args,
-         const ClientControlComponent &control = {}) override {
+         const ControlComponent &control = {}) override {
     return RawResize_(resize_args, control);
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCloseResult>
-  Close(bool force, const ClientControlComponent &control = {}) override {
+  Close(bool force, const ControlComponent &control = {}) override {
     RequestStop_();
     JoinLoop_();
     auto close_result = RawClose_(force, control);
@@ -304,7 +315,7 @@ public:
       foreground_wake_guard_.reset();
       if (interrupt_event_ != nullptr && control_token_) {
         foreground_wake_guard_ =
-            std::make_unique<AMDomain::client::ControlTokenWakeupSafeGaurd>(
+            std::make_unique<AMDomain::client::InterruptWakeupSafeGuard>(
                 control_token_, [this]() { (void)SetEvent(interrupt_event_); });
       }
 #endif
@@ -382,7 +393,7 @@ private:
     return sftp_core_->GetLastErrorMsg();
   }
 
-  [[nodiscard]] static int TimeoutMs_(ClientControlComponent const &control) {
+  [[nodiscard]] static int TimeoutMs_(ControlComponent const &control) {
     auto const remain_opt = control.RemainingTimeMs();
     if (!remain_opt.has_value()) {
       return -1;
@@ -392,45 +403,37 @@ private:
         static_cast<unsigned int>((std::numeric_limits<int>::max)())));
   }
 
-  [[nodiscard]] WaitResult WaitSocket_(AMSFTP::detail::SocketWaitType wait_type,
-                                       ClientControlComponent const &control) {
-    if (sftp_core_ == nullptr) {
-      return WaitResult::Error;
-    }
-    return sftp_core_->wait_for_socket(wait_type, control);
+  [[nodiscard]] ECM ContextualizeRCM_(ECM rcm, std::string operation) const {
+    rcm.operation = std::move(operation);
+    rcm.target = GetChannelName();
+    return rcm;
   }
 
-  template <typename Func>
-  [[nodiscard]] auto NBCall_(ClientControlComponent const &control, Func &&func)
-      -> NBResult<decltype(func())> {
-    using RetType = decltype(func());
-    if (control.IsInterrupted()) {
-      return {RetType{}, WaitResult::Interrupted};
+  [[nodiscard]] ECM WaitUntilReadable_(ControlComponent const &control) {
+    if (!HasBinding_()) {
+      return Err(EC::InvalidHandle, "terminal.channel.read", GetChannelName(),
+                 "Channel binding is invalid");
     }
-    if (control.IsTimeout()) {
-      return {RetType{}, WaitResult::Timeout};
+    auto &holder = channel_holder_;
+    if (!holder || !holder->channel || sftp_core_ == nullptr) {
+      return Err(EC::NoConnection, "terminal.channel.read", GetChannelName(),
+                 "Channel is closed");
     }
 
-    while (true) {
-      RetType rc = func();
-      bool retry = false;
-      if constexpr (std::is_same_v<RetType, int> ||
-                    std::is_same_v<RetType, ssize_t>) {
-        retry = (rc == LIBSSH2_ERROR_EAGAIN);
-      } else if constexpr (std::is_pointer_v<RetType>) {
-        auto *session = (sftp_core_ == nullptr) ? nullptr : sftp_core_->session;
-        retry = (rc == nullptr && session != nullptr &&
-                 libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN);
+    auto wait_res = sftp_core_->NBPerform(control, [&]() {
+      if (libssh2_channel_eof(holder->channel) != 0) {
+        return 1;
       }
-      if (!retry) {
-        return {rc, WaitResult::Ready};
+      if (libssh2_poll_channel_read(holder->channel, 0) > 0 ||
+          libssh2_poll_channel_read(holder->channel, 1) > 0) {
+        return 1;
       }
-      WaitResult const wr =
-          WaitSocket_(AMSFTP::detail::SocketWaitType::Auto, control);
-      if (wr != WaitResult::Ready) {
-        return {RetType{}, wr};
-      }
+      return LIBSSH2_ERROR_EAGAIN;
+    });
+    if (!wait_res) {
+      return ContextualizeRCM_(wait_res.rcm, "terminal.channel.read");
     }
+    return OK;
   }
 
   [[nodiscard]] bool IsChannelAliveUnlocked_() {
@@ -454,7 +457,6 @@ private:
   }
 
   [[nodiscard]] ECM ReadChunk_(std::string *output, size_t max_bytes,
-                               ClientControlComponent const &control,
                                ssize_t (*reader)(LIBSSH2_CHANNEL *, char *,
                                                  size_t)) {
     if (!HasBinding_() || output == nullptr) {
@@ -473,6 +475,9 @@ private:
       size_t const cap = std::min(buffer.size(), left);
       ssize_t const rc = reader(holder->channel, buffer.data(), cap);
       if (rc > 0) {
+        if (sftp_core_ != nullptr) {
+          sftp_core_->TouchLastIO();
+        }
         output->append(buffer.data(), static_cast<size_t>(rc));
         continue;
       }
@@ -483,14 +488,6 @@ private:
         }
         return OK;
       }
-      if (control.IsInterrupted()) {
-        return Err(EC::Terminate, "terminal.channel.read", GetChannelName(),
-                   "Interrupted");
-      }
-      if (control.IsTimeout()) {
-        return Err(EC::OperationTimeout, "terminal.channel.read",
-                   GetChannelName(), "Timed out");
-      }
       return Err(LastEC_(), "terminal.channel.read", GetChannelName(),
                  LastError_());
     }
@@ -499,7 +496,7 @@ private:
 
   [[nodiscard]] ECMData<AMT::ChannelReadResult>
   RawRead_(AMT::ChannelReadArgs const &read_args,
-           ClientControlComponent const &control) {
+           ControlComponent const &control) {
     ECMData<AMT::ChannelReadResult> out = {};
     out.data.channel_name = GetChannelName();
 
@@ -524,7 +521,7 @@ private:
 
     auto drain_output = [&]() -> ECM {
       ECM read_rcm =
-          ReadChunk_(&out.data.output, max_bytes, control,
+          ReadChunk_(&out.data.output, max_bytes,
                      [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
                        return libssh2_channel_read(channel, buf, size);
                      });
@@ -535,7 +532,7 @@ private:
         return OK;
       }
       ECM stderr_rcm =
-          ReadChunk_(&out.data.output, max_bytes, control,
+          ReadChunk_(&out.data.output, max_bytes,
                      [](LIBSSH2_CHANNEL *channel, char *buf, size_t size) {
                        return libssh2_channel_read_stderr(channel, buf, size);
                      });
@@ -557,23 +554,8 @@ private:
     }
 
     if (control.RemainingTimeMs().has_value()) {
-      WaitResult const wr =
-          WaitSocket_(AMSFTP::detail::SocketWaitType::Read, control);
-      if (wr == WaitResult::Interrupted) {
-        out.rcm = Err(EC::Terminate, "terminal.channel.read", GetChannelName(),
-                      "Interrupted while waiting output");
-        out.data.eof = eof_;
-        return out;
-      }
-      if (wr == WaitResult::Timeout) {
-        out.rcm = Err(EC::OperationTimeout, "terminal.channel.read",
-                      GetChannelName(), "Timed out while waiting output");
-        out.data.eof = eof_;
-        return out;
-      }
-      if (wr == WaitResult::Error) {
-        out.rcm = Err(EC::SocketRecvError, "terminal.channel.read",
-                      GetChannelName(), "Socket error while waiting output");
+      out.rcm = WaitUntilReadable_(control);
+      if (!(out.rcm)) {
         out.data.eof = eof_;
         return out;
       }
@@ -586,7 +568,7 @@ private:
 
   [[nodiscard]] ECMData<AMT::ChannelWriteResult>
   RawWrite_(AMT::ChannelWriteArgs const &write_args,
-            ClientControlComponent const &control) {
+            ControlComponent const &control) {
     ECMData<AMT::ChannelWriteResult> out = {};
     out.data.channel_name = GetChannelName();
 
@@ -606,33 +588,20 @@ private:
     auto &holder = channel_holder_;
     size_t offset = 0;
     while (offset < write_args.input.size()) {
-      ssize_t const rc = libssh2_channel_write(
-          holder->channel, write_args.input.data() + offset,
-          static_cast<int>(write_args.input.size() - offset));
-      if (rc > 0) {
-        offset += static_cast<size_t>(rc);
-        continue;
-      }
-      if (rc == LIBSSH2_ERROR_EAGAIN) {
-        WaitResult const wr =
-            WaitSocket_(AMSFTP::detail::SocketWaitType::Write, control);
-        if (wr == WaitResult::Ready) {
-          continue;
-        }
-        if (wr == WaitResult::Interrupted) {
-          out.rcm = Err(EC::Terminate, "terminal.channel.write",
-                        GetChannelName(), "Interrupted while waiting write");
-        } else if (wr == WaitResult::Timeout) {
-          out.rcm = Err(EC::OperationTimeout, "terminal.channel.write",
-                        GetChannelName(), "Timed out while waiting write");
-        } else {
-          out.rcm = Err(EC::SocketRecvError, "terminal.channel.write",
-                        GetChannelName(), "Socket error while waiting write");
-        }
+      auto write_res = sftp_core_->NBPerform(control, [&]() {
+        return libssh2_channel_write(
+            holder->channel, write_args.input.data() + offset,
+            static_cast<int>(write_args.input.size() - offset));
+      });
+      if (!write_res) {
+        out.rcm = ContextualizeRCM_(write_res.rcm, "terminal.channel.write");
         out.data.bytes_written = offset;
         return out;
       }
-
+      if (write_res.value > 0) {
+        offset += static_cast<size_t>(write_res.value);
+        continue;
+      }
       out.rcm = Err(LastEC_(), "terminal.channel.write", GetChannelName(),
                     LastError_());
       out.data.bytes_written = offset;
@@ -646,7 +615,7 @@ private:
 
   [[nodiscard]] ECMData<AMT::ChannelResizeResult>
   RawResize_(AMT::ChannelResizeArgs const &resize_args,
-             ClientControlComponent const &control) {
+             ControlComponent const &control) {
     ECMData<AMT::ChannelResizeResult> out = {};
     out.data.channel_name = GetChannelName();
 
@@ -669,12 +638,17 @@ private:
     }
 
     auto &holder = channel_holder_;
-    auto resize_res = NBCall_(control, [&]() {
+    auto resize_res = sftp_core_->NBPerform(control, [&]() {
       return libssh2_channel_request_pty_size_ex(holder->channel, window_cols_,
                                                  window_rows_, window_width_,
                                                  window_height_);
     });
-    if (!resize_res || resize_res.value != 0) {
+    if (!resize_res) {
+      out.rcm = ContextualizeRCM_(resize_res.rcm, "terminal.channel.resize");
+      out.data.resized = false;
+      return out;
+    }
+    if (resize_res.value != 0) {
       out.rcm = Err(LastEC_(), "terminal.channel.resize", GetChannelName(),
                     LastError_());
       out.data.resized = false;
@@ -687,7 +661,7 @@ private:
   }
 
   void BindCloseControl_(AMSFTP::detail::SafeChannel *channel,
-                         ClientControlComponent const &control) {
+                         ControlComponent const &control) {
     if (channel == nullptr) {
       return;
     }
@@ -703,7 +677,7 @@ private:
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCloseResult>
-  RawClose_(bool force, ClientControlComponent const &control) {
+  RawClose_(bool force, ControlComponent const &control) {
     ECMData<AMT::ChannelCloseResult> out = {};
     out.data.channel_name = GetChannelName();
 
@@ -1137,7 +1111,7 @@ private:
   HANDLE stop_event_ = nullptr;
   HANDLE state_event_ = nullptr;
   HANDLE interrupt_event_ = nullptr;
-  std::unique_ptr<AMDomain::client::ControlTokenWakeupSafeGaurd>
+  std::unique_ptr<AMDomain::client::InterruptWakeupSafeGuard>
       foreground_wake_guard_ = nullptr;
 #endif
 };
