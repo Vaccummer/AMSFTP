@@ -139,11 +139,8 @@ public:
     }
 
     const auto binding = GetBindingSnapshot_();
-    const auto request = GetRequestSnapshot_();
-    const std::string terminal_key =
-        AMDomain::host::HostService::NormalizeNickname(request.nickname);
-    auto port = std::make_shared<RealtimeSSHChannelPort>(
-        terminal_key, channel_name, binding.sftp_core, request.hostname);
+    auto port = std::make_shared<RealtimeSSHChannelPort>(binding.owner_client,
+                                                         channel_name);
     if (!port) {
       out.rcm = Err(EC::InvalidHandle, "terminal.open", channel_name,
                     "Failed to create realtime SSH channel port");

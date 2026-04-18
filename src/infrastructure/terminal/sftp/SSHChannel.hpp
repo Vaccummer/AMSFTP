@@ -275,8 +275,8 @@ public:
   ECM Rename(const std::string &new_channel_name) override {
     std::string renamed = AMStr::Strip(new_channel_name);
     if (renamed.empty()) {
-      return Err(EC::InvalidArg, "terminal.channel.rename", GetChannelName(),
-                 "new channel name is empty");
+      return {EC::InvalidArg, "terminal.channel.rename", GetChannelName(),
+              "new channel name is empty"};
     }
     identity_.channel_name = renamed;
     cache_.SetChannelName(identity_.channel_name);
