@@ -1,5 +1,6 @@
 #include "infrastructure/signal_monitor/SignalMonitor.hpp"
 #include <algorithm>
+#include <csignal>
 #include <chrono>
 #include <foundation/tools/enum_related.hpp>
 #include <memory>

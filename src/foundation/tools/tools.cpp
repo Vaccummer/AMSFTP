@@ -1,9 +1,6 @@
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <openssl/sha.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -12,8 +9,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <regex>
 #include <sstream>
+
 
 namespace {
 namespace fs = std::filesystem;
@@ -21,7 +22,7 @@ std::string FormatScaledBinary_(double value, int max_nums, int max_point,
                                 size_t pad_width, bool pad_left,
                                 bool per_second) {
   static const std::array<const char *, 5> kUnits = {"B", "KB", "MB", "GB",
-                                                      "TB"};
+                                                     "TB"};
   if (!std::isfinite(value) || value < 0.0) {
     value = 0.0;
   }
@@ -39,7 +40,8 @@ std::string FormatScaledBinary_(double value, int max_nums, int max_point,
     ++unit_idx;
   }
 
-  const double point_scale = std::pow(10.0, static_cast<double>(safe_max_point));
+  const double point_scale =
+      std::pow(10.0, static_cast<double>(safe_max_point));
   if (point_scale > 0.0) {
     const double rounded = std::round(value * point_scale) / point_scale;
     if (rounded > max_value && unit_idx + 1 < kUnits.size()) {
@@ -503,9 +505,8 @@ std::pair<bool, int> endswith(const std::string &str,
   if (str.size() < suffix.size()) {
     return std::make_pair(false, 0);
   }
-  return std::make_pair(
-      str.ends_with(suffix),
-      static_cast<int>(str.size() - suffix.size()));
+  return std::make_pair(str.ends_with(suffix),
+                        static_cast<int>(str.size() - suffix.size()));
 }
 
 std::string ModeTrans(size_t mode_int) {
@@ -924,12 +925,45 @@ std::optional<std::string> HexToAnsi(const std::string &value) {
 }
 } // namespace AMStr
 
+namespace AMAuth {} // namespace AMAuth
+
 namespace AMAuth {
 namespace {
 constexpr unsigned char kPasswordCipherVersion = 1;
 constexpr size_t kNonceSize = 12;
 constexpr size_t kTagSize = 16;
 constexpr size_t kMinPayloadSize = 1 + kNonceSize + kTagSize;
+constexpr bool IsAsciiAlpha_(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+constexpr bool IsAsciiDigit_(char c) { return c >= '0' && c <= '9'; }
+
+constexpr bool IsAllowedKeyChar_(char c) {
+  if (IsAsciiAlpha_(c) || IsAsciiDigit_(c)) {
+    return true;
+  }
+  return c == '_' || c == '-' || c == ':' || c == '.';
+}
+
+constexpr bool IsPasswordKeyFormatAllowed_(std::string_view key) {
+  if (key.size() < 16 || key.size() > 128) {
+    return false;
+  }
+  bool has_alpha = false;
+  bool has_digit = false;
+  for (char c : key) {
+    if (!IsAllowedKeyChar_(c)) {
+      return false;
+    }
+    has_alpha = has_alpha || IsAsciiAlpha_(c);
+    has_digit = has_digit || IsAsciiDigit_(c);
+  }
+  return has_alpha && has_digit;
+}
+static_assert(IsPasswordKeyFormatAllowed_(kPasswordKey),
+              "AMSFTP_PASSWORD_KEY format invalid: use 16-128 chars, only "
+              "[A-Za-z0-9_.:-], and include both letters and digits.");
 
 std::array<unsigned char, 32> DerivePasswordKey_() {
   std::array<unsigned char, 32> key = {};
@@ -1022,17 +1056,19 @@ std::string EncryptPassword(const std::string &plain) {
                                nullptr) == 1;
   ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
                                  static_cast<int>(nonce.size()), nullptr) == 1;
-  ok = ok && EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(),
-                                nonce.data()) == 1;
-  ok = ok && EVP_EncryptUpdate(
-                 ctx, reinterpret_cast<unsigned char *>(ciphertext.data()),
-                 &out_len, reinterpret_cast<const unsigned char *>(plain.data()),
-                 static_cast<int>(plain.size())) == 1;
+  ok = ok &&
+       EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce.data()) == 1;
+  ok =
+      ok && EVP_EncryptUpdate(
+                ctx, reinterpret_cast<unsigned char *>(ciphertext.data()),
+                &out_len, reinterpret_cast<const unsigned char *>(plain.data()),
+                static_cast<int>(plain.size())) == 1;
   total_len = out_len;
-  ok = ok && EVP_EncryptFinal_ex(
-                 ctx,
-                 reinterpret_cast<unsigned char *>(ciphertext.data()) + total_len,
-                 &out_len) == 1;
+  ok =
+      ok &&
+      EVP_EncryptFinal_ex(
+          ctx, reinterpret_cast<unsigned char *>(ciphertext.data()) + total_len,
+          &out_len) == 1;
   total_len += out_len;
   ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG,
                                  static_cast<int>(tag.size()), tag.data()) == 1;
@@ -1099,17 +1135,17 @@ std::string DecryptPassword(const std::string &stored) {
   ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN,
                                  static_cast<int>(kNonceSize), nullptr) == 1;
   ok = ok && EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce) == 1;
-  ok = ok &&
-       EVP_DecryptUpdate(ctx, reinterpret_cast<unsigned char *>(plain.data()),
-                         &out_len, ciphertext,
-                         static_cast<int>(cipher_len)) == 1;
+  ok = ok && EVP_DecryptUpdate(
+                 ctx, reinterpret_cast<unsigned char *>(plain.data()), &out_len,
+                 ciphertext, static_cast<int>(cipher_len)) == 1;
   total_len = out_len;
   ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG,
                                  static_cast<int>(kTagSize),
                                  const_cast<unsigned char *>(tag)) == 1;
-  ok = ok && EVP_DecryptFinal_ex(
-                 ctx, reinterpret_cast<unsigned char *>(plain.data()) + total_len,
-                 &out_len) == 1;
+  ok = ok &&
+       EVP_DecryptFinal_ex(
+           ctx, reinterpret_cast<unsigned char *>(plain.data()) + total_len,
+           &out_len) == 1;
   total_len += out_len;
 
   EVP_CIPHER_CTX_free(ctx);
@@ -1257,4 +1293,3 @@ ECM fecm(const std::error_code &ec) {
   return {fec(ec), "filesystem.error", ec.category().name(), ec.message(),
           RawError{RawErrorSource::Filesystem, ec.value()}};
 }
-
