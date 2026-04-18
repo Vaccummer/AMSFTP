@@ -1,15 +1,15 @@
 #include "domain/client/ClientDomainService.hpp"
 #include "domain/client/ClientModel.hpp"
-#include "domain/config/ConfigModel.hpp"
 #include "domain/completion/CompletionModel.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "domain/log/LoggerModel.hpp"
 #include "domain/prompt/PromptDomainModel.hpp"
 #include "domain/style/StyleDomainModel.hpp"
-#include "domain/transfer/TransferDomainModel.hpp"
 #include "domain/style/StyleDomainService.hpp"
+#include "domain/transfer/TransferDomainModel.hpp"
 #include "domain/var/VarDomainService.hpp"
 #include "foundation/tools/json.hpp"
 #include "foundation/tools/string.hpp"
@@ -20,8 +20,7 @@
 
 namespace {
 using DocumentKind = AMDomain::config::DocumentKind;
-using AMDomain::client::ClientService::AMDefaultLocalBufferSize;
-using AMDomain::client::ClientService::AMDefaultRemoteBufferSize;
+using AMDomain::client::ClientService::AMDefaultBufferSize;
 using AMDomain::client::ClientService::AMMaxBufferSize;
 using AMDomain::client::ClientService::AMMinBufferSize;
 using namespace AMDomain::host::HostService;
@@ -131,8 +130,7 @@ bool DecodeHostConfig_(const std::string &nickname, const Json &json,
   (void)AMJson::QueryKey(json, {kCwdKey}, &cfg.metadata.cwd);
   bool has_cmd_template = false;
   std::string cmd_template = {};
-  has_cmd_template =
-      AMJson::QueryKey(json, {kCmdTemplateKey}, &cmd_template);
+  has_cmd_template = AMJson::QueryKey(json, {kCmdTemplateKey}, &cmd_template);
   if (has_cmd_template) {
     cfg.metadata.cmd_template = cmd_template;
   } else {
@@ -165,7 +163,7 @@ bool DecodeHostConfig_(const std::string &nickname, const Json &json,
         std::min<int64_t>(std::max<int64_t>(parsed_buffer_size, 1),
                           static_cast<int64_t>(AMMaxBufferSize));
   } else {
-    cfg.request.buffer_size = AMDefaultRemoteBufferSize;
+    cfg.request.buffer_size = AMDefaultBufferSize;
   }
 
   *out = std::move(cfg);
@@ -426,11 +424,11 @@ public:
 
 namespace settings_codec {
 using AMDomain::client::ClientServiceArg;
-using AMDomain::config::ConfigBackupSet;
-using AMDomain::log::LogManagerArg;
 using AMDomain::completion::CompleterArg;
-using AMDomain::transfer::TransferManagerArg;
+using AMDomain::config::ConfigBackupSet;
 using AMDomain::filesystem::FilesystemArg;
+using AMDomain::log::LogManagerArg;
+using AMDomain::transfer::TransferManagerArg;
 using AMDomain::var::VarSetArg;
 
 Json OptionsRoot_(const Json &root) {
@@ -553,8 +551,7 @@ public:
       *root = Json::object();
     }
 
-    (*root)["Options"]["TransferManager"]["max_threads"] =
-        typed->max_threads;
+    (*root)["Options"]["TransferManager"]["max_threads"] = typed->max_threads;
     (*root)["Options"]["TransferManager"]["bar_refresh_interval_ms"] =
         typed->bar_refresh_interval_ms;
     (*root)["Options"]["TransferManager"]["buffer_size"] = typed->buffer_size;
@@ -677,8 +674,7 @@ public:
   [[nodiscard]] bool Encode(const void *in, Json *root,
                             std::string *error) const override {
     if (!in || !root) {
-      return codec_common::Fail_(error,
-                                 "null input CompleterArg or root json");
+      return codec_common::Fail_(error, "null input CompleterArg or root json");
     }
     const auto *typed = static_cast<const CompleterArg *>(in);
     if (!root->is_object()) {
@@ -686,8 +682,7 @@ public:
     }
 
     (*root)["Options"]["Completer"]["maxnum"] = typed->maxnum;
-    (*root)["Options"]["Completer"]["maxrows_perpage"] =
-        typed->maxrows_perpage;
+    (*root)["Options"]["Completer"]["maxrows_perpage"] = typed->maxrows_perpage;
     (*root)["Options"]["Completer"]["number_pick"] = typed->number_pick;
     (*root)["Options"]["Completer"]["auto_fillin"] = typed->auto_fillin;
     (*root)["Options"]["Completer"]["complete_delay_ms"] =
@@ -1160,7 +1155,8 @@ void DecodeTable_(const Json &json, TableStyle *out) {
   (void)AMJson::QueryKey(json, {"right_padding"}, &out->right_padding);
   (void)AMJson::QueryKey(json, {"top_padding"}, &out->top_padding);
   (void)AMJson::QueryKey(json, {"bottom_padding"}, &out->bottom_padding);
-  (void)AMJson::QueryKey(json, {"refresh_interval_ms"}, &out->refresh_interval_ms);
+  (void)AMJson::QueryKey(json, {"refresh_interval_ms"},
+                         &out->refresh_interval_ms);
   (void)AMJson::QueryKey(json, {"speed_window_size"}, &out->speed_window_size);
 }
 
@@ -1352,16 +1348,23 @@ void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"string"}, &out->string);
   (void)AMJson::QueryKey(json, {"public_varname"}, &out->public_varname);
   (void)AMJson::QueryKey(json, {"private_varname"}, &out->private_varname);
-  (void)AMJson::QueryKey(json, {"nonexistent_varname"}, &out->nonexistent_varname);
+  (void)AMJson::QueryKey(json, {"nonexistent_varname"},
+                         &out->nonexistent_varname);
   (void)AMJson::QueryKey(json, {"varvalue"}, &out->varvalue);
   (void)AMJson::QueryKey(json, {"nickname"}, &out->nickname);
-  (void)AMJson::QueryKey(json, {"disconnected_nickname"}, &out->disconnected_nickname);
-  (void)AMJson::QueryKey(json, {"unestablished_nickname"}, &out->unestablished_nickname);
-  (void)AMJson::QueryKey(json, {"nonexistent_nickname"}, &out->nonexistent_nickname);
-  (void)AMJson::QueryKey(json, {"valid_new_nickname"}, &out->valid_new_nickname);
-  (void)AMJson::QueryKey(json, {"invalid_new_nickname"}, &out->invalid_new_nickname);
+  (void)AMJson::QueryKey(json, {"disconnected_nickname"},
+                         &out->disconnected_nickname);
+  (void)AMJson::QueryKey(json, {"unestablished_nickname"},
+                         &out->unestablished_nickname);
+  (void)AMJson::QueryKey(json, {"nonexistent_nickname"},
+                         &out->nonexistent_nickname);
+  (void)AMJson::QueryKey(json, {"valid_new_nickname"},
+                         &out->valid_new_nickname);
+  (void)AMJson::QueryKey(json, {"invalid_new_nickname"},
+                         &out->invalid_new_nickname);
   (void)AMJson::QueryKey(json, {"builtin_arg"}, &out->builtin_arg);
-  (void)AMJson::QueryKey(json, {"nonexistent_builtin_arg"}, &out->nonexistent_builtin_arg);
+  (void)AMJson::QueryKey(json, {"nonexistent_builtin_arg"},
+                         &out->nonexistent_builtin_arg);
   (void)AMJson::QueryKey(json, {"username"}, &out->username);
   (void)AMJson::QueryKey(json, {"atsign"}, &out->atsign);
   (void)AMJson::QueryKey(json, {"dollarsign"}, &out->dollarsign);
@@ -1572,7 +1575,8 @@ Json EncodeCommon_(const InputHighlightStyle &in) {
   return out;
 }
 
-void DecodeValueQueryHighlight_(const Json &json, ValueQueryHighlightStyle *out) {
+void DecodeValueQueryHighlight_(const Json &json,
+                                ValueQueryHighlightStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
@@ -1711,7 +1715,7 @@ public:
     DecodeSystemInfo_(codec_common::QueryObjectAt_(style, {"SystemInfo"}),
                       &typed->style.system_info);
 
-    AMDomain::style::services::NormalizeStyleConfigArg(typed);
+    AMDomain::style::service::NormalizeStyleConfigArg(typed);
     return true;
   }
 
@@ -1730,7 +1734,8 @@ public:
     style["CompleteMenu"] = EncodeCompleteMenu_(typed->style.complete_menu);
     style["Table"] = EncodeTable_(typed->style.table);
     style["ProgressBar"] = EncodeProgressBar_(typed->style.progress_bar);
-    style["shortcut"] = codec_common::WriteStringMap_(typed->style.cli_prompt.shortcut);
+    style["shortcut"] =
+        codec_common::WriteStringMap_(typed->style.cli_prompt.shortcut);
     style["CLIPrompt"] = EncodeCliPrompt_(typed->style.cli_prompt);
     style["Common"] = EncodeCommon_(typed->style.common);
     style["ValueQueryHighlight"] =
@@ -1786,8 +1791,7 @@ public:
 } // namespace
 
 namespace AMInfra::config {
-std::unordered_map<std::type_index, const IArgCodec *>
-BuildCodecMap() {
+std::unordered_map<std::type_index, const IArgCodec *> BuildCodecMap() {
   static const host_codec::HostConfigArgCodec host_config_codec = {};
   static const host_codec::KnownHostEntryArgCodec known_host_codec = {};
   static const settings_codec::ConfigBackupSetCodec backup_set_codec = {};
@@ -1820,4 +1824,3 @@ BuildCodecMap() {
   return map;
 }
 } // namespace AMInfra::config
-

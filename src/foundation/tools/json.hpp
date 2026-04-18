@@ -3,19 +3,19 @@
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
-#include <concepts>
 #include <filesystem>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <type_traits>
-#include <vector>
 #include <variant>
+#include <vector>
 
+using Json = nlohmann::ordered_json;
+namespace AMJson {
 using Json = nlohmann::ordered_json;
 using JsonValue =
     std::variant<Json, int64_t, uint64_t, double, bool, std::string>;
-namespace AMJson {
 template <class T>
 concept JsonValueSupported =
     std::is_arithmetic_v<std::decay_t<T>> ||
@@ -93,7 +93,8 @@ inline bool QueryKey(const Json &root, const std::vector<std::string> &path,
       return true;
     }
     return false;
-  } else if constexpr (std::is_same_v<std::decay_t<T>, std::vector<std::string>>) {
+  } else if constexpr (std::is_same_v<std::decay_t<T>,
+                                      std::vector<std::string>>) {
     if (!node->is_array()) {
       return false;
     }
