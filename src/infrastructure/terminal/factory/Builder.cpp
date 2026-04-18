@@ -44,7 +44,7 @@ ECMData<TerminalHandle> CreateTerminalPort(const ClientHandle &client) {
     }
     auto terminal =
         std::make_shared<AMInfra::client::LOCAL::terminal::LocalTerminalPort>(
-            client, request, local_core);
+            client);
     if (!terminal) {
       return {nullptr,
               Err(EC::InvalidHandle, "CreateTerminalPort", request.nickname,
