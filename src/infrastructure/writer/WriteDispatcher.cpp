@@ -19,7 +19,7 @@ void AMInfraAsyncWriter::Stop() {
   if (worker_.joinable()) {
     worker_.request_stop();
   }
-  cv_.notify_all();
+  task_ready_.release();
   if (worker_.joinable()) {
     worker_.join();
   }
@@ -37,11 +37,12 @@ void AMInfraAsyncWriter::Submit(Task task) {
     task();
     return;
   }
+  pending_tasks_.fetch_add(1, std::memory_order_acq_rel);
   {
     std::lock_guard<std::mutex> lock(mtx_);
     queue_.push(std::move(task));
   }
-  cv_.notify_one();
+  task_ready_.release();
 }
 
 /**
@@ -55,8 +56,13 @@ bool AMInfraAsyncWriter::IsRunning() const {
  * @brief Wait until queued and active tasks are fully drained.
  */
 void AMInfraAsyncWriter::WaitIdle() {
-  std::unique_lock<std::mutex> lock(mtx_);
-  idle_cv_.wait(lock, [this]() { return queue_.empty() && active_tasks_ == 0; });
+  while (true) {
+    const size_t pending = pending_tasks_.load(std::memory_order_acquire);
+    if (pending == 0) {
+      return;
+    }
+    pending_tasks_.wait(pending, std::memory_order_acquire);
+  }
 }
 
 /**
@@ -64,37 +70,35 @@ void AMInfraAsyncWriter::WaitIdle() {
  */
 void AMInfraAsyncWriter::Loop_(std::stop_token stop_token) {
   while (true) {
+    task_ready_.acquire();
+    if (stop_token.stop_requested()) {
+      std::lock_guard<std::mutex> lock(mtx_);
+      if (queue_.empty()) {
+        break;
+      }
+    }
+
     Task task;
     {
-      std::unique_lock<std::mutex> lock(mtx_);
-      cv_.wait(lock, [this, &stop_token]() {
-        return stop_token.stop_requested() || !queue_.empty();
-      });
-      if (stop_token.stop_requested() && queue_.empty()) {
-        break;
+      std::lock_guard<std::mutex> lock(mtx_);
+      if (queue_.empty()) {
+        if (stop_token.stop_requested()) {
+          break;
+        }
+        continue;
       }
       task = std::move(queue_.front());
       queue_.pop();
-      ++active_tasks_;
     }
     if (task) {
       task();
     }
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
-      if (active_tasks_ > 0) {
-        --active_tasks_;
-      }
-      if (queue_.empty() && active_tasks_ == 0) {
-        idle_cv_.notify_all();
-      }
-    }
-  }
-  {
-    std::lock_guard<std::mutex> lock(mtx_);
-    if (queue_.empty() && active_tasks_ == 0) {
-      idle_cv_.notify_all();
+    const size_t previous =
+        pending_tasks_.fetch_sub(1, std::memory_order_acq_rel);
+    if (previous == 1) {
+      pending_tasks_.notify_all();
     }
   }
   running_.store(false, std::memory_order_release);
+  pending_tasks_.notify_all();
 }

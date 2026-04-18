@@ -456,7 +456,10 @@ void AMCompleteEngine::StartAsyncWorkers_() {
 void AMCompleteEngine::StopAsyncWorkers_() {
   async_stop_.store(true, std::memory_order_relaxed);
   CancelPendingAsyncRequests_();
-  async_queue_cv_.notify_all();
+  if (!async_workers_.empty()) {
+    async_queue_ready_.release(
+        static_cast<std::ptrdiff_t>(async_workers_.size()));
+  }
 
   for (auto &worker : async_workers_) {
     if (worker.joinable()) {
@@ -490,7 +493,7 @@ void AMCompleteEngine::ScheduleAsyncTask_(AMCompletionAsyncTask request) {
     std::lock_guard<std::mutex> lock(async_queue_mtx_);
     async_queue_.push_back(std::move(request));
   }
-  async_queue_cv_.notify_one();
+  async_queue_ready_.release();
 }
 
 void AMCompleteEngine::TerminateOnAirTask_(AMCompletionTarget target) {
@@ -627,19 +630,18 @@ void AMCompleteEngine::ConsumeAsyncResults_(const AMCompletionContext &ctx,
  */
 void AMCompleteEngine::AsyncWorkerLoop_(std::stop_token stop_token) {
   while (true) {
+    async_queue_ready_.acquire();
+    if (stop_token.stop_requested() ||
+        async_stop_.load(std::memory_order_relaxed)) {
+      return;
+    }
+
     AMCompletionAsyncTask request;
     {
-      std::unique_lock<std::mutex> lock(async_queue_mtx_);
-      async_queue_cv_.wait(lock, [this, &stop_token]() {
-        return stop_token.stop_requested() ||
-               async_stop_.load(std::memory_order_relaxed) ||
-               !async_queue_.empty();
-      });
-      if (stop_token.stop_requested() ||
-          async_stop_.load(std::memory_order_relaxed)) {
-        return;
+      std::lock_guard<std::mutex> lock(async_queue_mtx_);
+      if (async_queue_.empty()) {
+        continue;
       }
-
       request = std::move(async_queue_.front());
       async_queue_.pop_front();
     }

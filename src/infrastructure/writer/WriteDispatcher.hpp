@@ -1,9 +1,9 @@
 #pragma once
 #include "domain/writer/IWriteSchedulerPort.hpp"
 #include <atomic>
-#include <condition_variable>
 #include <mutex>
 #include <queue>
+#include <semaphore>
 #include <stop_token>
 #include <thread>
 
@@ -55,12 +55,11 @@ private:
   void Loop_(std::stop_token stop_token);
 
   mutable std::mutex mtx_;
-  std::condition_variable cv_;
-  std::condition_variable idle_cv_;
   std::queue<Task> queue_;
+  std::counting_semaphore<> task_ready_{0};
   std::jthread worker_;
   std::atomic<bool> running_{false};
-  size_t active_tasks_ = 0;
+  std::atomic<size_t> pending_tasks_{0};
 };
 
 /**
