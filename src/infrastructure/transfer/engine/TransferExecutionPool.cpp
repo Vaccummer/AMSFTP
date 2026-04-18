@@ -19,8 +19,8 @@ void TransferExecutionPool::CancelPendingTasksOnExit_(
     const std::string &reason) {
   std::vector<TaskHandle> canceled_tasks = {};
   {
-    std::lock_guard<std::mutex> queue_lock(queue_mtx_);
-    auto task_registry = task_registry_.lock();
+    std::lock_guard<std::mutex> queue_lock(queue_.mtx);
+    auto task_registry = queue_.registry.lock();
     auto cancel_one = [&](const TaskID &task_id) {
       auto it = task_registry->find(task_id);
       if (it == task_registry->end() || !it->second) {
@@ -38,12 +38,12 @@ void TransferExecutionPool::CancelPendingTasksOnExit_(
       canceled_tasks.push_back(std::move(task_info));
     };
 
-    for (const auto &task_id : public_queue_) {
+    for (const auto &task_id : queue_.public_queue) {
       cancel_one(task_id);
     }
-    public_queue_.clear();
+    queue_.public_queue.clear();
 
-    for (auto &queue : affinity_queues_) {
+    for (auto &queue : queue_.affinity) {
       for (const auto &task_id : queue) {
         cancel_one(task_id);
       }
@@ -59,21 +59,21 @@ void TransferExecutionPool::CancelPendingTasksOnExit_(
 void TransferExecutionPool::RegisterTask(const TaskHandle &task_info,
                                          TaskAssignType assign_type,
                                          int affinity_thread) {
-  std::lock_guard<std::mutex> queue_lock(queue_mtx_);
-  auto task_registry = task_registry_.lock();
+  std::lock_guard<std::mutex> queue_lock(queue_.mtx);
+  auto task_registry = queue_.registry.lock();
   std::list<TaskID> *target_queue = nullptr;
   const size_t active_count =
-      desired_thread_count_.load(std::memory_order_relaxed);
+      control_.desired_thread_count.load(std::memory_order_relaxed);
   const bool affinity_valid =
       affinity_thread >= 0 &&
       static_cast<size_t>(affinity_thread) < active_count &&
-      static_cast<size_t>(affinity_thread) < affinity_queues_.size();
+      static_cast<size_t>(affinity_thread) < queue_.affinity.size();
   if (assign_type == TaskAssignType::Affinity && affinity_valid) {
-    target_queue = &affinity_queues_[static_cast<size_t>(affinity_thread)];
+    target_queue = &queue_.affinity[static_cast<size_t>(affinity_thread)];
   } else {
     assign_type = TaskAssignType::Public;
     affinity_thread = -1;
-    target_queue = &public_queue_;
+    target_queue = &queue_.public_queue;
   }
 
   target_queue->push_back(task_info->id);
@@ -88,21 +88,21 @@ std::optional<std::pair<TaskID, TaskHandle>>
 TransferExecutionPool::DequeueTask(std::stop_token stop_token,
                                    size_t thread_index) {
   while (true) {
-    std::unique_lock<std::mutex> lock(queue_mtx_);
-    queue_cv_.wait(lock, [this, &stop_token, thread_index]() {
+    std::unique_lock<std::mutex> lock(queue_.mtx);
+    queue_.cv.wait(lock, [this, &stop_token, thread_index]() {
       if (stop_token.stop_requested()) {
         return true;
       }
-      if (!running_.load(std::memory_order_acquire)) {
+      if (!control_.running.load(std::memory_order_acquire)) {
         return true;
       }
-      const bool has_affinity = thread_index < affinity_queues_.size() &&
-                                !affinity_queues_[thread_index].empty();
+      const bool has_affinity = thread_index < queue_.affinity.size() &&
+                                !queue_.affinity[thread_index].empty();
       if (has_affinity) {
         return true;
       }
       const size_t desired =
-          desired_thread_count_.load(std::memory_order_relaxed);
+          control_.desired_thread_count.load(std::memory_order_relaxed);
       if (thread_index >= desired) {
         return false;
       }
@@ -113,36 +113,36 @@ TransferExecutionPool::DequeueTask(std::stop_token stop_token,
       return std::nullopt;
     }
 
-    if (!running_.load(std::memory_order_relaxed) &&
+    if (!control_.running.load(std::memory_order_relaxed) &&
         !HasPendingTasksUnsafe_()) {
       return std::nullopt;
     }
 
     const size_t desired =
-        desired_thread_count_.load(std::memory_order_relaxed);
+        control_.desired_thread_count.load(std::memory_order_relaxed);
     if (thread_index >= desired) {
-      const bool has_affinity = thread_index < affinity_queues_.size() &&
-                                !affinity_queues_[thread_index].empty();
+      const bool has_affinity = thread_index < queue_.affinity.size() &&
+                                !queue_.affinity[thread_index].empty();
       if (!has_affinity) {
         continue;
       }
     }
 
     TaskID task_id = 0;
-    if (thread_index < affinity_queues_.size() &&
-        !affinity_queues_[thread_index].empty()) {
-      task_id = affinity_queues_[thread_index].front();
-      affinity_queues_[thread_index].pop_front();
-    } else if (!public_queue_.empty()) {
-      task_id = public_queue_.front();
-      public_queue_.pop_front();
+    if (thread_index < queue_.affinity.size() &&
+        !queue_.affinity[thread_index].empty()) {
+      task_id = queue_.affinity[thread_index].front();
+      queue_.affinity[thread_index].pop_front();
+    } else if (!queue_.public_queue.empty()) {
+      task_id = queue_.public_queue.front();
+      queue_.public_queue.pop_front();
     } else {
       continue;
     }
 
     lock.unlock();
 
-    auto task_registry = task_registry_.lock();
+    auto task_registry = queue_.registry.lock();
     auto it = task_registry->find(task_id);
     if (it == task_registry->end()) {
       continue;
@@ -165,14 +165,14 @@ void TransferExecutionPool::SetConducting(size_t thread_index,
                                           const TaskID &task_id,
                                           const TaskHandle &task_info) {
   {
-    std::lock_guard<std::mutex> lock(conducting_mtx_);
-    if (thread_index >= conducting_by_thread_.size()) {
-      conducting_by_thread_.resize(thread_index + 1);
-      conducting_infos_.resize(thread_index + 1);
+    std::lock_guard<std::mutex> lock(conducting_.mtx);
+    if (thread_index >= conducting_.by_thread.size()) {
+      conducting_.by_thread.resize(thread_index + 1);
+      conducting_.infos.resize(thread_index + 1);
     }
-    conducting_by_thread_[thread_index] = task_id;
-    conducting_infos_[thread_index] = task_info;
-    conducting_tasks_.insert(task_id);
+    conducting_.by_thread[thread_index] = task_id;
+    conducting_.infos[thread_index] = task_info;
+    conducting_.tasks.insert(task_id);
   }
   RecomputeDesiredThreadCount_();
 }
@@ -181,30 +181,30 @@ void TransferExecutionPool::ClearConducting(size_t thread_index) {
   bool removed_task = false;
   TaskHandle finished_info = nullptr;
   {
-    std::lock_guard<std::mutex> lock(conducting_mtx_);
-    if (thread_index < conducting_by_thread_.size()) {
-      const TaskID id = conducting_by_thread_[thread_index];
+    std::lock_guard<std::mutex> lock(conducting_.mtx);
+    if (thread_index < conducting_.by_thread.size()) {
+      const TaskID id = conducting_.by_thread[thread_index];
       if (id != 0) {
-        conducting_tasks_.erase(id);
+        conducting_.tasks.erase(id);
         removed_task = true;
       }
-      finished_info = conducting_infos_[thread_index];
-      conducting_by_thread_[thread_index] = 0;
-      conducting_infos_[thread_index] = nullptr;
+      finished_info = conducting_.infos[thread_index];
+      conducting_.by_thread[thread_index] = 0;
+      conducting_.infos[thread_index] = nullptr;
     }
   }
   if (finished_info) {
     finished_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
   }
   if (removed_task) {
-    conducting_cv_.notify_all();
+    conducting_.cv.notify_all();
   }
   RecomputeDesiredThreadCount_();
 }
 
 void TransferExecutionPool::WorkerLoop(std::stop_token stop_token,
                                        size_t thread_index) {
-  while (running_.load(std::memory_order_relaxed) &&
+  while (control_.running.load(std::memory_order_relaxed) &&
          !stop_token.stop_requested()) {
     auto task_opt = DequeueTask(stop_token, thread_index);
     if (!task_opt.has_value()) {
@@ -219,7 +219,7 @@ void TransferExecutionPool::WorkerLoop(std::stop_token stop_token,
     if (detail::ShouldSkipTask(task_info)) {
       task_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
       {
-        auto task_registry = task_registry_.lock();
+        auto task_registry = queue_.registry.lock();
         task_registry->erase(task_id);
       }
       HandleCompletedTask(task_info);
@@ -228,8 +228,8 @@ void TransferExecutionPool::WorkerLoop(std::stop_token stop_token,
     }
 
     TransferExecutionEngine *engine = nullptr;
-    if (thread_index < engines_.size()) {
-      engine = engines_[thread_index].get();
+    if (thread_index < workers_.engines.size()) {
+      engine = workers_.engines[thread_index].get();
     }
     if (!engine) {
       task_info->SetStatus(TaskStatus::Finished);
@@ -241,7 +241,7 @@ void TransferExecutionPool::WorkerLoop(std::stop_token stop_token,
     }
 
     {
-      auto task_registry = task_registry_.lock();
+      auto task_registry = queue_.registry.lock();
       task_registry->erase(task_info->id);
     }
     HandleCompletedTask(task_info);
@@ -253,25 +253,25 @@ void TransferExecutionPool::WorkerLoop(std::stop_token stop_token,
 
 TransferExecutionPool::TransferExecutionPool(
     const AMDomain::transfer::TransferManagerArg &arg)
-    : manager_arg_(arg) {
+    : config_({arg}) {
   const size_t max_threads = ClampMaxThreads_(
-      static_cast<size_t>(std::max(1, manager_arg_.max_threads)));
-  max_thread_count_.store(max_threads, std::memory_order_relaxed);
-  desired_thread_count_.store(0, std::memory_order_relaxed);
+      static_cast<size_t>(std::max(1, config_.manager_arg.max_threads)));
+  control_.max_thread_count.store(max_threads, std::memory_order_relaxed);
+  control_.desired_thread_count.store(0, std::memory_order_relaxed);
 
   {
-    std::lock_guard<std::mutex> lock(queue_mtx_);
-    affinity_queues_.resize(max_threads);
+    std::lock_guard<std::mutex> lock(queue_.mtx);
+    queue_.affinity.resize(max_threads);
   }
   {
-    std::lock_guard<std::mutex> lock(conducting_mtx_);
-    conducting_by_thread_.resize(max_threads);
-    conducting_infos_.resize(max_threads);
+    std::lock_guard<std::mutex> lock(conducting_.mtx);
+    conducting_.by_thread.resize(max_threads);
+    conducting_.infos.resize(max_threads);
   }
 
-  heartbeat_interval_s_.store(std::max(0, manager_arg_.heartbeat_interval_s),
+  heartbeat_.interval_s.store(std::max(0, config_.manager_arg.heartbeat_interval_s),
                               std::memory_order_relaxed);
-  heartbeat_timeout_ms_.store(std::max(1, manager_arg_.heartbeat_timeout_ms),
+  heartbeat_.timeout_ms.store(std::max(1, config_.manager_arg.heartbeat_timeout_ms),
                               std::memory_order_relaxed);
   StartHeartbeat_();
   RecomputeDesiredThreadCount_();
@@ -280,16 +280,16 @@ TransferExecutionPool::TransferExecutionPool(
 TransferExecutionPool::~TransferExecutionPool() { (void)Shutdown(3000); }
 
 ECM TransferExecutionPool::Shutdown(int timeout_ms) {
-  if (is_deconstruct.load(std::memory_order_relaxed)) {
+  if (control_.is_deconstruct.load(std::memory_order_relaxed)) {
     return OK;
   }
-  running_.store(false, std::memory_order_relaxed);
+  control_.running.store(false, std::memory_order_relaxed);
   StopHeartbeat_();
   CancelPendingTasksOnExit_();
-  queue_cv_.notify_all();
+  queue_.cv.notify_all();
   {
-    std::lock_guard<std::mutex> lock(conducting_mtx_);
-    for (const auto &info : conducting_infos_) {
+    std::lock_guard<std::mutex> lock(conducting_.mtx);
+    for (const auto &info : conducting_.infos) {
       if (info) {
         info->RequestInterrupt();
       }
@@ -297,7 +297,7 @@ ECM TransferExecutionPool::Shutdown(int timeout_ms) {
   }
   std::vector<TaskHandle> paused_tasks = {};
   {
-    auto task_registry = task_registry_.lock();
+    auto task_registry = queue_.registry.lock();
     for (auto it = task_registry->begin(); it != task_registry->end();) {
       const TaskHandle &task_info = it->second;
       if (!task_info || task_info->GetStatus() != TaskStatus::Paused) {
@@ -318,13 +318,13 @@ ECM TransferExecutionPool::Shutdown(int timeout_ms) {
     HandleCompletedTask(task_info);
   }
   {
-    std::unique_lock<std::mutex> lock(conducting_mtx_);
+    std::unique_lock<std::mutex> lock(conducting_.mtx);
     if (timeout_ms < 0) {
-      conducting_cv_.wait(lock, [this]() { return conducting_tasks_.empty(); });
+      conducting_.cv.wait(lock, [this]() { return conducting_.tasks.empty(); });
     } else {
-      const bool no_conducting = conducting_cv_.wait_for(
+      const bool no_conducting = conducting_.cv.wait_for(
           lock, std::chrono::milliseconds(timeout_ms),
-          [this]() { return conducting_tasks_.empty(); });
+          [this]() { return conducting_.tasks.empty(); });
       if (!no_conducting) {
         return {EC::OperationTimeout, "", "", "Graceful terminate timed out"};
       }
@@ -332,15 +332,15 @@ ECM TransferExecutionPool::Shutdown(int timeout_ms) {
   }
 
   {
-    std::lock_guard<std::mutex> worker_lock(worker_mtx_);
-    for (auto &thread : worker_threads_) {
+    std::lock_guard<std::mutex> worker_lock(workers_.mtx);
+    for (auto &thread : workers_.threads) {
       if (thread.joinable()) {
         thread.join();
       }
     }
   }
-  engines_.clear();
-  is_deconstruct.store(true, std::memory_order_relaxed);
+  workers_.engines.clear();
+  control_.is_deconstruct.store(true, std::memory_order_relaxed);
   return OK;
 }
 
@@ -353,10 +353,10 @@ size_t TransferExecutionPool::ClampMaxThreads_(size_t value) const {
 }
 
 bool TransferExecutionPool::HasPendingTasksUnsafe_() const {
-  if (!public_queue_.empty()) {
+  if (!queue_.public_queue.empty()) {
     return true;
   }
-  for (const auto &queue : affinity_queues_) {
+  for (const auto &queue : queue_.affinity) {
     if (!queue.empty()) {
       return true;
     }
@@ -367,65 +367,66 @@ bool TransferExecutionPool::HasPendingTasksUnsafe_() const {
 size_t TransferExecutionPool::ComputeDesiredThreadCount_() const {
   size_t pending_count = 0;
   {
-    std::lock_guard<std::mutex> lock(queue_mtx_);
-    pending_count += public_queue_.size();
-    for (const auto &queue : affinity_queues_) {
+    std::lock_guard<std::mutex> lock(queue_.mtx);
+    pending_count += queue_.public_queue.size();
+    for (const auto &queue : queue_.affinity) {
       pending_count += queue.size();
     }
   }
 
   size_t conducting_count = 0;
   {
-    std::lock_guard<std::mutex> lock(conducting_mtx_);
-    conducting_count = conducting_tasks_.size();
+    std::lock_guard<std::mutex> lock(conducting_.mtx);
+    conducting_count = conducting_.tasks.size();
   }
 
   const size_t max_threads =
-      ClampMaxThreads_(max_thread_count_.load(std::memory_order_relaxed));
+      ClampMaxThreads_(control_.max_thread_count.load(std::memory_order_relaxed));
   const size_t active_count = pending_count + conducting_count;
   return std::min(max_threads, active_count);
 }
 
 void TransferExecutionPool::EnsureWorkerCapacity_(size_t worker_count) {
   const size_t max_threads =
-      ClampMaxThreads_(max_thread_count_.load(std::memory_order_relaxed));
+      ClampMaxThreads_(control_.max_thread_count.load(std::memory_order_relaxed));
   worker_count = std::min(worker_count, max_threads);
   if (worker_count == 0) {
     return;
   }
 
-  std::lock_guard<std::mutex> worker_lock(worker_mtx_);
-  if (worker_count <= worker_threads_.size()) {
+  std::lock_guard<std::mutex> worker_lock(workers_.mtx);
+  if (worker_count <= workers_.threads.size()) {
     return;
   }
 
   {
-    std::lock_guard<std::mutex> lock(queue_mtx_);
-    if (worker_count > affinity_queues_.size()) {
-      affinity_queues_.resize(worker_count);
+    std::lock_guard<std::mutex> lock(queue_.mtx);
+    if (worker_count > queue_.affinity.size()) {
+      queue_.affinity.resize(worker_count);
     }
   }
   {
-    std::lock_guard<std::mutex> lock(conducting_mtx_);
-    if (worker_count > conducting_by_thread_.size()) {
-      conducting_by_thread_.resize(worker_count);
-      conducting_infos_.resize(worker_count);
+    std::lock_guard<std::mutex> lock(conducting_.mtx);
+    if (worker_count > conducting_.by_thread.size()) {
+      conducting_.by_thread.resize(worker_count);
+      conducting_.infos.resize(worker_count);
     }
   }
 
-  const TransferBufferPolicy policy = {manager_arg_.buffer_size,
-                                       manager_arg_.min_buffer,
-                                       manager_arg_.max_buffer};
-  if (worker_count > engines_.size()) {
-    engines_.reserve(worker_count);
-    for (size_t idx = engines_.size(); idx < worker_count; ++idx) {
-      engines_.push_back(std::make_unique<TransferExecutionEngine>(policy));
+  const TransferBufferPolicy policy = {config_.manager_arg.buffer_size,
+                                       config_.manager_arg.min_buffer,
+                                       config_.manager_arg.max_buffer};
+  if (worker_count > workers_.engines.size()) {
+    workers_.engines.reserve(worker_count);
+    for (size_t idx = workers_.engines.size(); idx < worker_count; ++idx) {
+      workers_.engines.push_back(
+          std::make_unique<TransferExecutionEngine>(policy));
     }
   }
 
-  const size_t begin = worker_threads_.size();
+  const size_t begin = workers_.threads.size();
   for (size_t idx = begin; idx < worker_count; ++idx) {
-    worker_threads_.emplace_back([this, idx](std::stop_token stop_token) {
+    workers_.threads.emplace_back([this, idx](std::stop_token stop_token) {
       WorkerLoop(stop_token, idx);
     });
   }
@@ -434,51 +435,51 @@ void TransferExecutionPool::EnsureWorkerCapacity_(size_t worker_count) {
 void TransferExecutionPool::RecomputeDesiredThreadCount_() {
   const size_t desired = ComputeDesiredThreadCount_();
   EnsureWorkerCapacity_(desired);
-  desired_thread_count_.store(desired, std::memory_order_relaxed);
-  queue_cv_.notify_all();
+  control_.desired_thread_count.store(desired, std::memory_order_relaxed);
+  queue_.cv.notify_all();
 }
 
 void TransferExecutionPool::StartHeartbeat_() {
-  if (heartbeat_interval_s_.load(std::memory_order_relaxed) <= 0) {
-    heartbeat_running_.store(false, std::memory_order_relaxed);
+  if (heartbeat_.interval_s.load(std::memory_order_relaxed) <= 0) {
+    heartbeat_.running.store(false, std::memory_order_relaxed);
     return;
   }
-  if (heartbeat_running_.exchange(true, std::memory_order_acq_rel)) {
+  if (heartbeat_.running.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
-  heartbeat_thread_ = std::jthread(
+  heartbeat_.thread = std::jthread(
       [this](std::stop_token stop_token) { HeartbeatLoop_(stop_token); });
 }
 
 void TransferExecutionPool::StopHeartbeat_() {
-  heartbeat_running_.store(false, std::memory_order_release);
-  if (heartbeat_thread_.joinable()) {
-    heartbeat_thread_.request_stop();
+  heartbeat_.running.store(false, std::memory_order_release);
+  if (heartbeat_.thread.joinable()) {
+    heartbeat_.thread.request_stop();
   }
-  heartbeat_cv_.notify_all();
-  if (heartbeat_thread_.joinable()) {
-    heartbeat_thread_.join();
+  heartbeat_.cv.notify_all();
+  if (heartbeat_.thread.joinable()) {
+    heartbeat_.thread.join();
   }
 }
 
 void TransferExecutionPool::HeartbeatLoop_(std::stop_token stop_token) {
-  while (running_.load(std::memory_order_acquire) &&
-         heartbeat_running_.load(std::memory_order_acquire) &&
+  while (control_.running.load(std::memory_order_acquire) &&
+         heartbeat_.running.load(std::memory_order_acquire) &&
          !stop_token.stop_requested()) {
     const int interval_s =
-        std::max(1, heartbeat_interval_s_.load(std::memory_order_relaxed));
-    std::unique_lock<std::mutex> lock(heartbeat_wait_mtx_);
-    (void)heartbeat_cv_.wait_for(
+        std::max(1, heartbeat_.interval_s.load(std::memory_order_relaxed));
+    std::unique_lock<std::mutex> lock(heartbeat_.wait_mtx);
+    (void)heartbeat_.cv.wait_for(
         lock, std::chrono::seconds(interval_s), [this, &stop_token]() {
           if (stop_token.stop_requested()) {
             return true;
           }
-          return !running_.load(std::memory_order_acquire) ||
-                 !heartbeat_running_.load(std::memory_order_acquire);
+          return !control_.running.load(std::memory_order_acquire) ||
+                 !heartbeat_.running.load(std::memory_order_acquire);
         });
     lock.unlock();
-    if (!running_.load(std::memory_order_acquire) ||
-        !heartbeat_running_.load(std::memory_order_acquire) ||
+    if (!control_.running.load(std::memory_order_acquire) ||
+        !heartbeat_.running.load(std::memory_order_acquire) ||
         stop_token.stop_requested()) {
       break;
     }
@@ -488,7 +489,7 @@ void TransferExecutionPool::HeartbeatLoop_(std::stop_token stop_token) {
 
 void TransferExecutionPool::HeartbeatTick_() {
   const int timeout_ms =
-      std::max(1, heartbeat_timeout_ms_.load(std::memory_order_relaxed));
+      std::max(1, heartbeat_.timeout_ms.load(std::memory_order_relaxed));
   const auto active_tasks = GetRegistryCopy();
   for (const auto &[id, task_info] : active_tasks) {
     (void)id;
@@ -562,28 +563,29 @@ size_t TransferExecutionPool::ThreadCount(size_t new_count) {
   if (new_count > 0) {
     (void)MaxThreadCount(new_count);
   }
-  return desired_thread_count_.load(std::memory_order_relaxed);
+  return control_.desired_thread_count.load(std::memory_order_relaxed);
 }
 
 size_t TransferExecutionPool::MaxThreadCount(size_t new_max) {
   if (new_max == 0) {
-    return max_thread_count_.load(std::memory_order_relaxed);
+    return control_.max_thread_count.load(std::memory_order_relaxed);
   }
   const size_t clamped = ClampMaxThreads_(new_max);
-  max_thread_count_.store(clamped, std::memory_order_relaxed);
-  manager_arg_.max_threads = static_cast<int>(clamped);
+  control_.max_thread_count.store(clamped, std::memory_order_relaxed);
+  config_.manager_arg.max_threads = static_cast<int>(clamped);
   RecomputeDesiredThreadCount_();
   return clamped;
 }
 
 std::unordered_map<size_t, bool> TransferExecutionPool::GetThreadIDs() const {
   std::unordered_map<size_t, bool> states = {};
-  const size_t count = desired_thread_count_.load(std::memory_order_relaxed);
+  const size_t count =
+      control_.desired_thread_count.load(std::memory_order_relaxed);
   states.reserve(count);
-  std::lock_guard<std::mutex> lock(conducting_mtx_);
+  std::lock_guard<std::mutex> lock(conducting_.mtx);
   for (size_t i = 0; i < count; ++i) {
-    const bool busy =
-        i < conducting_by_thread_.size() && conducting_by_thread_[i] != 0;
+    const bool busy = i < conducting_.by_thread.size() &&
+                      conducting_.by_thread[i] != 0;
     states.emplace(i, busy);
   }
   return states;
@@ -593,7 +595,7 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
   if (!task_info) {
     return {EC::InvalidArg, "", "", "TaskInfo is nullptr"};
   }
-  if (!running_.load(std::memory_order_acquire)) {
+  if (!control_.running.load(std::memory_order_acquire)) {
     return {EC::OperationUnsupported, "", "", "Work manager is shutting down"};
   }
   const bool has_dir_tasks = !task_info->Core.dir_tasks.lock()->empty();
@@ -606,8 +608,8 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
   }
 
   if (task_info->id == 0 ||
-      detail::IsTaskIDUsed(task_info->id, task_registry_, conducting_mtx_,
-                           conducting_tasks_)) {
+      detail::IsTaskIDUsed(task_info->id, queue_.registry, conducting_.mtx,
+                           conducting_.tasks)) {
     return {EC::InvalidArg, "", "", "Task ID is invalid or already used"};
   }
   task_info->ResetCompletionDispatch();
@@ -631,11 +633,11 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
   const int requested_thread_id =
       task_info->Set.affinity_thread.load(std::memory_order_relaxed);
   const size_t active_count =
-      desired_thread_count_.load(std::memory_order_relaxed);
+      control_.desired_thread_count.load(std::memory_order_relaxed);
   const bool affinity_valid =
       requested_thread_id >= 0 &&
       static_cast<size_t>(requested_thread_id) < active_count &&
-      static_cast<size_t>(requested_thread_id) < affinity_queues_.size();
+      static_cast<size_t>(requested_thread_id) < queue_.affinity.size();
   const TaskAssignType assign_type =
       affinity_valid ? TaskAssignType::Affinity : TaskAssignType::Public;
   const int affinity_id = affinity_valid ? requested_thread_id : -1;
@@ -647,7 +649,7 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
 
 std::optional<TaskStatus>
 TransferExecutionPool::GetStatus(const TaskID &id) const {
-  auto task_registry = task_registry_.lock();
+  auto task_registry = queue_.registry.lock();
   auto it = task_registry->find(id);
   if (it != task_registry->end() && it->second) {
     return it->second->GetStatus();
@@ -661,7 +663,7 @@ TransferExecutionPool::StopActive(const TaskID &id,
                                   int timeout_ms, int grace_period_ms) {
   TaskHandle existing = nullptr;
   {
-    auto task_registry = task_registry_.lock();
+    auto task_registry = queue_.registry.lock();
     auto it = task_registry->find(id);
     if (it != task_registry->end()) {
       existing = it->second;
@@ -690,8 +692,8 @@ TransferExecutionPool::StopActive(const TaskID &id,
     if (status_t == TaskStatus::Pending) {
       bool done_in_fast_path = false;
       {
-        std::lock_guard<std::mutex> queue_lock(queue_mtx_);
-        auto task_registry = task_registry_.lock();
+        std::lock_guard<std::mutex> queue_lock(queue_.mtx);
+        auto task_registry = queue_.registry.lock();
         auto it = task_registry->find(id);
         if (it != task_registry->end() && it->second &&
             it->second->GetStatus() == TaskStatus::Pending) {
@@ -701,10 +703,10 @@ TransferExecutionPool::StopActive(const TaskID &id,
           const TaskAssignType assign_type =
               task_info->Set.assign_type.load(std::memory_order_relaxed);
           if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
-              static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
-            affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);
+              static_cast<size_t>(affinity_thread) < queue_.affinity.size()) {
+            queue_.affinity[static_cast<size_t>(affinity_thread)].remove(id);
           } else {
-            public_queue_.remove(id);
+            queue_.public_queue.remove(id);
           }
           task_registry->erase(it);
           task_info->RequestPause(grace_period_ms > 0
@@ -715,7 +717,7 @@ TransferExecutionPool::StopActive(const TaskID &id,
           task_info->SetStatus(TaskStatus::Paused);
           task_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
           task_info->Time.finish.store(seconds(), std::memory_order_relaxed);
-          queue_cv_.notify_all();
+          queue_.cv.notify_all();
           existing = task_info;
           done_in_fast_path = true;
         }
@@ -745,8 +747,8 @@ TransferExecutionPool::StopActive(const TaskID &id,
           existing->Set.OnWhichThread.load(std::memory_order_relaxed);
       bool detached_from_worker = false;
       {
-        std::lock_guard<std::mutex> lock(conducting_mtx_);
-        detached_from_worker = !conducting_tasks_.contains(id);
+        std::lock_guard<std::mutex> lock(conducting_.mtx);
+        detached_from_worker = !conducting_.tasks.contains(id);
       }
       if (status_t == TaskStatus::Paused && on_thread < 0 &&
           detached_from_worker) {
@@ -763,8 +765,8 @@ TransferExecutionPool::StopActive(const TaskID &id,
   if (status_t == TaskStatus::Pending) {
     bool done_in_fast_path = false;
     {
-      std::lock_guard<std::mutex> queue_lock(queue_mtx_);
-      auto task_registry = task_registry_.lock();
+      std::lock_guard<std::mutex> queue_lock(queue_.mtx);
+      auto task_registry = queue_.registry.lock();
       auto it = task_registry->find(id);
       if (it != task_registry->end() && it->second &&
           it->second->GetStatus() == TaskStatus::Pending) {
@@ -774,10 +776,10 @@ TransferExecutionPool::StopActive(const TaskID &id,
         const TaskAssignType assign_type =
             task_info->Set.assign_type.load(std::memory_order_relaxed);
         if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
-            static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
-          affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);
+            static_cast<size_t>(affinity_thread) < queue_.affinity.size()) {
+          queue_.affinity[static_cast<size_t>(affinity_thread)].remove(id);
         } else {
-          public_queue_.remove(id);
+          queue_.public_queue.remove(id);
         }
         task_registry->erase(it);
         task_info->RequestInterrupt(grace_period_ms > 0
@@ -790,7 +792,7 @@ TransferExecutionPool::StopActive(const TaskID &id,
         task_info->SetStatus(TaskStatus::Finished);
         task_info->Time.finish.store(seconds(), std::memory_order_relaxed);
         task_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
-        queue_cv_.notify_all();
+        queue_.cv.notify_all();
         completed_without_wait = task_info;
         done_in_fast_path = true;
       }
@@ -825,12 +827,12 @@ TransferExecutionPool::Terminate(const TaskID &id, int timeout_ms,
 
 std::unordered_map<TaskID, TaskHandle>
 TransferExecutionPool::GetRegistryCopy() const {
-  auto task_registry = task_registry_.lock();
+  auto task_registry = queue_.registry.lock();
   return *task_registry;
 }
 
 TaskHandle TransferExecutionPool::GetActiveTask(const TaskID &id) const {
-  auto task_registry = task_registry_.lock();
+  auto task_registry = queue_.registry.lock();
   auto it = task_registry->find(id);
   if (it == task_registry->end()) {
     return nullptr;
@@ -846,7 +848,7 @@ TransferExecutionPool::GetAllActiveTasks() const {
 std::unordered_map<TaskID, TaskHandle>
 TransferExecutionPool::GetPendingTasks() const {
   std::unordered_map<TaskID, TaskHandle> out = {};
-  auto task_registry = task_registry_.lock();
+  auto task_registry = queue_.registry.lock();
   out.reserve(task_registry->size());
   for (const auto &[id, task] : *task_registry) {
     if (task && task->GetStatus() == TaskStatus::Pending) {
@@ -859,9 +861,9 @@ TransferExecutionPool::GetPendingTasks() const {
 std::unordered_map<TaskID, TaskHandle>
 TransferExecutionPool::GetConductingTasks() const {
   std::unordered_map<TaskID, TaskHandle> out = {};
-  std::lock_guard<std::mutex> lock(conducting_mtx_);
-  out.reserve(conducting_infos_.size());
-  for (const auto &task : conducting_infos_) {
+  std::lock_guard<std::mutex> lock(conducting_.mtx);
+  out.reserve(conducting_.infos.size());
+  for (const auto &task : conducting_.infos) {
     if (task && task->id != 0) {
       out.emplace(task->id, task);
     }

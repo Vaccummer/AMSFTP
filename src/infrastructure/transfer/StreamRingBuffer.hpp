@@ -1,6 +1,8 @@
 #pragma once
 
-#include "infrastructure/transfer/Common.hpp"
+#include <condition_variable>
+#include <functional>
+#include <span>
 
 namespace AMInfra::transfer {
 class StreamRingBuffer {
