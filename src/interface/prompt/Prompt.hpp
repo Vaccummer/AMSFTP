@@ -96,6 +96,13 @@ public:
   }
 
   void Print(const std::string &text);
+  /**
+   * @brief Print text via isocline without loading/changing any prompt profile.
+   *
+   * This is intended for bootstrap and non-interactive paths where
+   * PromptIOManager instances may not be initialized yet.
+   */
+  static void StaticPrint(const std::string &text, bool ensure_newline = true);
   void PrintOperationAbort();
 
   template <typename... Args> void FmtPrint(Args &&...args) {

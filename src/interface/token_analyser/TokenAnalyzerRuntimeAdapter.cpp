@@ -13,7 +13,7 @@ namespace {
 constexpr auto kTerminalSnapshotTtl = std::chrono::milliseconds(300);
 
 std::string NormalizePath_(const std::string &path) {
-  return AMDomain::filesystem::services::NormalizePath(AMStr::Strip(path));
+  return AMDomain::filesystem::service::NormalizePath(AMStr::Strip(path));
 }
 
 std::string ResolveWorkdir_(const AMDomain::host::ClientMetaData &metadata,
@@ -178,12 +178,12 @@ TokenAnalyzerRuntimeAdapter::ResolveTerminalSnapshot_(
   if ((terminal_result.rcm) && terminal_result.data) {
     snapshot.found = true;
     snapshot.status = terminal_result.data->GetSessionState().status;
-    const auto channels = terminal_result.data->GetCachedChannelNames();
-    for (const auto &channel : channels) {
-      auto state_opt = terminal_result.data->GetChannelState(channel);
-      const bool is_ok =
-          !state_opt.has_value() || state_opt->code == ErrorCode::Success;
-      snapshot.channel_ok[channel] = is_ok;
+    auto channels_result = terminal_result.data->ListChannels({}, {});
+    if (channels_result.rcm) {
+      for (const auto &[channel, channel_port] : channels_result.data.channels) {
+        snapshot.channel_ok[channel] =
+            channel_port != nullptr && !channel_port->GetState().closed;
+      }
     }
   }
   snapshot.updated_at = now;
@@ -258,7 +258,7 @@ TokenAnalyzerRuntimeAdapter::StatPath(AMDomain::client::ClientHandle client,
   if (!client) {
     return {PathInfo{}, Err(EC::InvalidHandle, "", "", "client is null")};
   }
-  auto control = AMDomain::client::ClientControlComponent(nullptr, timeout_ms);
+  auto control = ControlComponent(nullptr, timeout_ms);
   auto stat_result = client->IOPort().stat({abs_path, false}, control);
   return {stat_result.data.info, stat_result.rcm};
 }
@@ -369,4 +369,3 @@ std::string TokenAnalyzerRuntimeAdapter::ResolvePathHighlightStyle(
 }
 
 } // namespace AMInterface::parser
-

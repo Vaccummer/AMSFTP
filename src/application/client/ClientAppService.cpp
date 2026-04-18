@@ -8,7 +8,6 @@
 namespace AMApplication::client {
 namespace {
 using ClientStatus = AMDomain::client::ClientStatus;
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostConfig = AMDomain::host::HostConfig;
 using HostConfigManager = AMApplication::host::HostAppService;
 using AMDomain::host::HostService::IsLocalNickname;
@@ -101,8 +100,7 @@ ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
 }
 
 [[nodiscard]] bool MatchNickname_(const std::string &lhs,
-                                  const std::string &rhs,
-                                  bool case_sensitive) {
+                                  const std::string &rhs, bool case_sensitive) {
   if (case_sensitive) {
     return lhs == rhs;
   }
@@ -273,21 +271,20 @@ ECM AcquireTerminalLease_(const ClientHandle &client) {
     }
     bool retry_type_mismatch = false;
     bool retry_acquired = false;
-    meta.MutateNamedValue<bool>(kTerminalLeaseKey,
-                                [&](bool *leased, bool name_found,
-                                    bool type_match) {
-                                  if (!name_found) {
-                                    return;
-                                  }
-                                  if (!type_match || !leased) {
-                                    retry_type_mismatch = true;
-                                    return;
-                                  }
-                                  if (!*leased) {
-                                    *leased = true;
-                                  }
-                                  retry_acquired = true;
-                                });
+    meta.MutateNamedValue<bool>(
+        kTerminalLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
+          if (!name_found) {
+            return;
+          }
+          if (!type_match || !leased) {
+            retry_type_mismatch = true;
+            return;
+          }
+          if (!*leased) {
+            *leased = true;
+          }
+          retry_acquired = true;
+        });
     if (retry_type_mismatch) {
       return Err(EC::CommonFailure, "acquire_terminal_lease", "<client>",
                  "terminal.lease metadata type is invalid");
@@ -413,9 +410,8 @@ void ClientAppService::RegisterMaintainerCallbacks(
     std::optional<ConnectStateCallback> connect_state_cb,
     std::optional<KnownHostCallback> known_host_cb,
     std::optional<AuthCallback> auth_cb) {
-  ClientAppServiceBase::RegisterMaintainerCallbacks(disconnect_cb, trace_cb,
-                                                    connect_state_cb,
-                                                    known_host_cb, auth_cb);
+  ClientAppServiceBase::RegisterMaintainerCallbacks(
+      disconnect_cb, trace_cb, connect_state_cb, known_host_cb, auth_cb);
   if (maintainer_ && disconnect_cb.has_value()) {
     maintainer_->SetDisconnectCallback(*disconnect_cb);
   }
@@ -427,9 +423,8 @@ void ClientAppService::RegisterPublicCallbacks(
     std::optional<ConnectStateCallback> connect_state_cb,
     std::optional<KnownHostCallback> known_host_cb,
     std::optional<AuthCallback> auth_cb) {
-  ClientAppServiceBase::RegisterPublicCallbacks(disconnect_cb, trace_cb,
-                                                connect_state_cb,
-                                                known_host_cb, auth_cb);
+  ClientAppServiceBase::RegisterPublicCallbacks(
+      disconnect_cb, trace_cb, connect_state_cb, known_host_cb, auth_cb);
   if (maintainer_ && disconnect_cb.has_value()) {
     maintainer_->SetDisconnectCallback(*disconnect_cb);
   }
@@ -442,8 +437,7 @@ void ClientAppService::BindHostConfigManager(
 
 ECMData<ClientHandle>
 ClientAppService::CreateClient(const HostConfig &config,
-                               const ClientControlComponent &control,
-                               bool silent) {
+                               const ControlComponent &control, bool silent) {
   auto [callbacks, private_keys] = SnapshotCreateContext_(false);
 
   auto [create_rcm, client] = AMDomain::client::CreateClient(
@@ -479,7 +473,7 @@ ClientAppService::CreateClient(const HostConfig &config,
 
 ECMData<ClientHandle>
 ClientAppService::CreateClient(const std::string &nickname,
-                               const ClientControlComponent &control,
+                               const ControlComponent &control,
                                bool case_sensitive, bool silent) {
   auto config_result =
       ResolveHostConfig_(host_config_manager_, nickname, case_sensitive);
@@ -492,13 +486,13 @@ ClientAppService::CreateClient(const std::string &nickname,
 ECMData<ClientHandle>
 ClientAppService::EnsureClient(const std::string &nickname, bool case_sensitive,
                                bool silent) {
-  const ClientControlComponent control = GetControlComponent(std::nullopt, -1);
+  const ControlComponent control = GetControlComponent();
   return EnsureClient(nickname, control, case_sensitive, silent);
 }
 
 ECMData<ClientHandle>
 ClientAppService::EnsureClient(const std::string &nickname,
-                               const ClientControlComponent &control,
+                               const ControlComponent &control,
                                bool case_sensitive, bool silent) {
   auto client_result = GetClient(nickname, case_sensitive);
   if ((client_result.rcm) && client_result.data) {
@@ -535,8 +529,7 @@ ClientAppService::EnsureClient(const std::string &nickname,
 
 ECMData<ClientHandle>
 ClientAppService::ChangeClient(const std::string &nickname,
-                               const ClientControlComponent &control,
-                               bool silent) {
+                               const ControlComponent &control, bool silent) {
   const std::string current_nickname = GetCurrentNickname();
   if (!current_nickname.empty() && current_nickname == nickname) {
     ClientHandle current = GetCurrentClient();
@@ -602,13 +595,12 @@ ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
 
 std::optional<ECMData<CheckResult>> ClientAppService::CheckClient(
     const std::string &nickname, bool reconnect, bool update,
-    const std::optional<ClientControlComponent> &control_component,
-    int timeout_ms) {
+    const std::optional<ControlComponent> &control_component, int timeout_ms) {
   auto client_result = GetClient(nickname);
   if (!(client_result.rcm) || !client_result.data) {
     return std::nullopt;
   }
-  const ClientControlComponent resolved_control =
+  const ControlComponent resolved_control =
       control_component ? *control_component : BuildCheckControl_(timeout_ms);
   return CheckClientInternal_(client_result.data, reconnect, update,
                               resolved_control);
@@ -616,9 +608,9 @@ std::optional<ECMData<CheckResult>> ClientAppService::CheckClient(
 
 ECMData<CheckResult> ClientAppService::CheckClientHandle(
     const ClientHandle &client, bool reconnect, bool update,
-    const std::optional<ClientControlComponent> &control_component,
+    const std::optional<ControlComponent> &control_component,
     int timeout_ms) const {
-  const ClientControlComponent resolved_control =
+  const ControlComponent resolved_control =
       control_component ? *control_component : BuildCheckControl_(timeout_ms);
   return CheckClientInternal_(client, reconnect, update, resolved_control);
 }
@@ -662,8 +654,8 @@ ClientAppService::ListPublicClients(const std::vector<std::string> &nicknames,
       continue;
     }
     for (const auto &entry : bucket.second) {
-      out.push_back(PublicClientInstance{bucket.first, entry.first,
-                                         entry.second});
+      out.push_back(
+          PublicClientInstance{bucket.first, entry.first, entry.second});
     }
   }
   return out;
@@ -793,7 +785,7 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
       continue;
     }
 
-    candidate->TaskControlPort().ClearInterrupt();
+    candidate->InterruptPort().ClearInterrupt();
     auto check_result =
         CheckClientInternal_(candidate, false, true, BuildCheckControl_());
     if (!(check_result.rcm)) {
@@ -1093,8 +1085,7 @@ ClientAppService::ConnectHooks ClientAppService::SnapshotConnectHooks_() const {
   return connect_hooks_;
 }
 
-ClientControlComponent
-ClientAppService::BuildCheckControl_(int timeout_ms) const {
+ControlComponent ClientAppService::BuildCheckControl_(int timeout_ms) const {
   const ClientServiceArg init_arg = GetInitArg();
   const int configured_timeout_ms = init_arg.check_timeout_ms;
   const int resolved_timeout_ms =
@@ -1102,9 +1093,10 @@ ClientAppService::BuildCheckControl_(int timeout_ms) const {
   return GetControlComponent(std::nullopt, resolved_timeout_ms);
 }
 
-ECMData<CheckResult> ClientAppService::CheckClientInternal_(
-    const ClientHandle &client, bool reconnect, bool update,
-    const ClientControlComponent &control) const {
+ECMData<CheckResult>
+ClientAppService::CheckClientInternal_(const ClientHandle &client,
+                                       bool reconnect, bool update,
+                                       const ControlComponent &control) const {
   ECMData<CheckResult> result = {};
   if (!client) {
     result.data.status = ClientStatus::NullHandle;
@@ -1129,4 +1121,3 @@ ECMData<CheckResult> ClientAppService::CheckClientInternal_(
 }
 
 } // namespace AMApplication::client
-

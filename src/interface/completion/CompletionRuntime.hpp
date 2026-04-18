@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace AMInterface::completion {
-using TASKID = AMDomain::transfer::TaskInfo::ID;
+using AMDomain::transfer::TaskID;
 class ICompletionRuntime {
 public:
   enum class TerminalNameState {
@@ -56,7 +56,8 @@ public:
   [[nodiscard]] virtual std::vector<std::string>
   ListChannelNames(const std::string &terminal_nickname) const = 0;
   [[nodiscard]] virtual bool HostExists(const std::string &nickname) const = 0;
-  [[nodiscard]] virtual bool TerminalExists(const std::string &nickname) const = 0;
+  [[nodiscard]] virtual bool
+  TerminalExists(const std::string &nickname) const = 0;
   [[nodiscard]] virtual TerminalNameState
   QueryTerminalNameState(const std::string &nickname) const = 0;
   [[nodiscard]] virtual ChannelNameState
@@ -70,7 +71,7 @@ public:
   [[nodiscard]] virtual std::vector<AMDomain::var::VarInfo>
   ListVarsByDomain(const std::string &domain) const = 0;
 
-  [[nodiscard]] virtual std::vector<TASKID> ListTaskIds() const = 0;
+  [[nodiscard]] virtual std::vector<TaskID> ListTaskIDs() const = 0;
 
   [[nodiscard]] virtual PromptPathOptions
   ResolvePromptPathOptions(const std::string &nickname) const = 0;

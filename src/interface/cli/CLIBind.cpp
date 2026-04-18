@@ -661,6 +661,10 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
                          Sem::None,
                          "Transfer timeout in milliseconds (<=0 means no "
                          "timeout)");
+    wget_node->AddOption("-u", "--username", args.fs.wget.username, 1, 1,
+                         Sem::None, "Basic auth username");
+    wget_node->AddOption("-P", "--password", args.fs.wget.password, 1, 1,
+                         Sem::None, "Basic auth password");
     wget_node->AddOption("-b", "--bear", args.fs.wget.bear_token, 1, 1, Sem::None,
                          "Bearer token");
     wget_node->AddOption("-p", "--proxy", args.fs.wget.proxy, 1, 1, Sem::None,

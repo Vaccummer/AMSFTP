@@ -1,12 +1,15 @@
 #pragma once
 
 #include "domain/client/ClientModel.hpp"
+#include <map>
+#include <memory>
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace AMDomain::terminal {
+class IChannelPort;
 using ClientStatus = AMDomain::client::ClientStatus;
 
 struct ChannelOpenArgs {
@@ -53,10 +56,6 @@ struct ChannelListArgs {
 
 struct CheckSessionArgs {};
 
-struct ChannelCheckArgs {
-  std::optional<std::string> channel_name = std::nullopt;
-};
-
 struct ChannelOpenResult {
   bool opened = false;
   std::string channel_name = "";
@@ -96,7 +95,7 @@ struct ChannelRenameResult {
 };
 
 struct ChannelListResult {
-  std::vector<std::string> channel_names = {};
+  std::map<std::string, std::shared_ptr<IChannelPort>> channels = {};
   std::string current_channel = "";
 };
 
@@ -106,13 +105,6 @@ struct CheckSessionResult {
   bool can_resize = false;
   ClientStatus status = ClientStatus::NotInitialized;
   std::string current_channel = "";
-};
-
-struct ChannelCheckResult {
-  bool exists = false;
-  bool is_open = false;
-  bool is_active = false;
-  std::string channel_name = "";
 };
 
 } // namespace AMDomain::terminal

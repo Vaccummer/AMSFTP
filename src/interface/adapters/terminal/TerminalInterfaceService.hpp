@@ -67,46 +67,41 @@ public:
   void SetDefaultControlToken(const AMDomain::client::amf &token);
   [[nodiscard]] AMDomain::client::amf GetDefaultControlToken() const;
 
-  ECM ShellRun(const TerminalShellRunArg &arg,
-               const std::optional<AMDomain::client::ClientControlComponent>
-                   &control_opt = std::nullopt) const;
+  ECM ShellRun(
+      const TerminalShellRunArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
   ECM LaunchTerminal(
       const TerminalLaunchArg &arg = {},
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM AddTerminal(const TerminalAddArg &arg,
-                  const std::optional<AMDomain::client::ClientControlComponent>
-                      &control_opt = std::nullopt) const;
+  ECM AddTerminal(
+      const TerminalAddArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
   ECM ListTerminals(
       const TerminalListArg &arg = {},
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
   ECM RemoveTerminal(
       const TerminalRemoveArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM AddChannel(const ChannelAddArg &arg,
-                 const std::optional<AMDomain::client::ClientControlComponent>
-                     &control_opt = std::nullopt) const;
+  ECM AddChannel(
+      const ChannelAddArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM ListChannels(const ChannelListArg &arg,
-                   const std::optional<AMDomain::client::ClientControlComponent>
-                       &control_opt = std::nullopt) const;
+  ECM ListChannels(
+      const ChannelListArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
   ECM RemoveChannel(
       const ChannelRemoveArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
   ECM RenameChannel(
       const ChannelRenameArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
 private:
   struct SharedKeyboardMonitor_;

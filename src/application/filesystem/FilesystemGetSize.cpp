@@ -9,7 +9,7 @@
 namespace AMApplication::filesystem {
 namespace {
 
-ECM CurrentStopError_(const ClientControlComponent &control) {
+ECM CurrentStopError_(const ControlComponent &control) {
   if (control.IsInterrupted()) {
     return {EC::Terminate, "", "", "Operation interrupted"};
   }
@@ -51,7 +51,7 @@ PathTarget BuildCallbackPath_(const std::string &nickname,
 } // namespace
 
 ECMData<int64_t> FilesystemAppService::GetSize(
-    const PathTarget &path, const ClientControlComponent &control,
+    const PathTarget &path, const ControlComponent &control,
     std::function<bool(const PathTarget &, int64_t)> on_progress,
     std::function<void(const PathTarget &, ECM)> on_error) {
   int64_t total_size = 0;

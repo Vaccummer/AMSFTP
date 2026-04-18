@@ -252,7 +252,7 @@ std::vector<std::string> TermAppService::ListTerminalNames() const {
 ECMData<ChannelPortHandle>
 TermAppService::EnsureChannelPort(const std::string &terminal_nickname,
                                   const std::string &channel_name,
-                                  const ClientControlComponent &control) {
+                                  const ControlComponent &control) {
   const std::string terminal_key = NormalizeTerminalKey_(terminal_nickname);
   const std::string channel = AMStr::Strip(channel_name);
   if (terminal_key.empty()) {
@@ -274,7 +274,7 @@ TermAppService::EnsureChannelPort(const std::string &terminal_nickname,
 
 ECM TermAppService::DropChannelPort(const std::string &terminal_nickname,
                                     const std::string &channel_name,
-                                    const ClientControlComponent &control) {
+                                    const ControlComponent &control) {
   auto channel_result = EnsureChannelPort(terminal_nickname, channel_name, control);
   if (!(channel_result.rcm)) {
     if (channel_result.rcm.code == EC::ClientNotFound) {
@@ -289,7 +289,7 @@ ECM TermAppService::DropChannelPort(const std::string &terminal_nickname,
 }
 
 void TermAppService::DropAllTerminalChannelPortsByKey_(
-    const std::string &terminal_key, const ClientControlComponent &control) {
+    const std::string &terminal_key, const ControlComponent &control) {
   if (terminal_key.empty()) {
     return;
   }
@@ -303,20 +303,18 @@ void TermAppService::DropAllTerminalChannelPortsByKey_(
     return;
   }
 
-  for (const auto &name : list_result.data.channel_names) {
-    auto channel_result =
-        terminal_result.data->GetChannelPort(std::optional<std::string>(name),
-                                             control);
-    if (!(channel_result.rcm) || !channel_result.data) {
+  for (const auto &[name, channel_port] : list_result.data.channels) {
+    (void)name;
+    if (!channel_port) {
       continue;
     }
-    (void)channel_result.data->UnbindForeground();
+    (void)channel_port->UnbindForeground();
   }
 }
 
 ECM TermAppService::DropTerminalChannelPorts(
     const std::string &terminal_nickname,
-    const ClientControlComponent &control) {
+    const ControlComponent &control) {
   const std::string terminal_key = NormalizeTerminalKey_(terminal_nickname);
   if (terminal_key.empty()) {
     return Err(EC::InvalidArg, "terminal.channel.drop_all", "terminal",
@@ -327,7 +325,7 @@ ECM TermAppService::DropTerminalChannelPorts(
 }
 
 ECM TermAppService::RemoveTerminal(const std::string &nickname,
-                                   const ClientControlComponent &control) {
+                                   const ControlComponent &control) {
   const std::string key = NormalizeTerminalKey_(nickname);
   if (key.empty()) {
     return Err(EC::InvalidArg, "terminal.remove", nickname,
@@ -351,13 +349,12 @@ ECM TermAppService::RemoveTerminal(const std::string &nickname,
 
   auto list_for_detach = target->ListChannels({}, control);
   if (list_for_detach.rcm) {
-    for (const auto &name : list_for_detach.data.channel_names) {
-      auto channel_result =
-          target->GetChannelPort(std::optional<std::string>(name), control);
-      if (!(channel_result.rcm) || !channel_result.data) {
+    for (const auto &[name, channel_port] : list_for_detach.data.channels) {
+      (void)name;
+      if (!channel_port) {
         continue;
       }
-      (void)channel_result.data->UnbindForeground();
+      (void)channel_port->UnbindForeground();
     }
   }
 
@@ -374,14 +371,15 @@ ECM TermAppService::RemoveTerminal(const std::string &nickname,
     return list_result.rcm;
   }
 
-  const ClientControlComponent close_control =
+  const ControlComponent close_control =
       control.RemainingTimeMs().has_value()
           ? control
-          : ClientControlComponent(control.ControlToken(),
+          : ControlComponent(control.ControlToken(),
                                    kTerminalRemoveCloseTimeoutMs);
 
   ECM status = OK;
-  for (const auto &name : list_result.data.channel_names) {
+  for (const auto &[name, channel_port] : list_result.data.channels) {
+    (void)channel_port;
     auto close_result = target->CloseChannel({name, true}, close_control);
     if (!(close_result.rcm)) {
       if (IsConnectionBroken_(close_result.rcm.code)) {

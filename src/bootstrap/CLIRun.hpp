@@ -7,6 +7,7 @@
 #include "interface/cli/InteractiveLoop.hpp"
 #include "interface/cli/ParseErrorFormatter.hpp"
 #include "interface/parser/CommandTree.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include <atomic>
 #include <iostream>
 #include <string>
@@ -42,7 +43,7 @@ inline int RunCLI(BootstrapServices &runtime, int argc, char **argv) {
             argv_tokens, runtime.command_tree,
             runtime.managers.interfaces.style_service.Get());
         invalid_command_error.has_value()) {
-      std::cout << *invalid_command_error << std::endl;
+      AMInterface::prompt::PromptIOManager::StaticPrint(*invalid_command_error);
       return static_cast<int>(EC::InvalidArg);
     }
   }

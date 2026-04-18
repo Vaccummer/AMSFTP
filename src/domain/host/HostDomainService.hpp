@@ -1,6 +1,5 @@
 #pragma once
 #include "domain/host/HostModel.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include <map>
 #include <optional>
@@ -8,10 +7,7 @@
 #include <vector>
 
 namespace AMDomain::host {
-inline constexpr int DefaultSFTPPort = 22;
-inline constexpr int DefaultFTPPort = 21;
-inline constexpr int DefaultHTTPPort = 80;
-inline const std::string klocalname = "local";
+
 namespace HostService {
 using HostConfigMap = std::map<std::string, HostConfig>;
 
@@ -367,5 +363,3 @@ inline KnownHostKey BuildKnownHostKey(const KnownHostQuery &query) {
 
 } // namespace KnownHostRules
 } // namespace AMDomain::host
-
-

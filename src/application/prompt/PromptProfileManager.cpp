@@ -15,12 +15,12 @@ PromptProfileManager::PromptProfileManager(PromptProfileArg arg)
     : AMApplication::config::IConfigSyncPort(typeid(PromptProfileArg)),
       init_arg_(std::move(arg)) {
   auto guard = init_arg_.lock();
-  AMDomain::prompt::services::NormalizePromptProfileArg(&guard.get());
+  AMDomain::prompt::service::NormalizePromptProfileArg(&guard.get());
 }
 
 ECM PromptProfileManager::Init() {
   auto guard = init_arg_.lock();
-  AMDomain::prompt::services::NormalizePromptProfileArg(&guard.get());
+  AMDomain::prompt::service::NormalizePromptProfileArg(&guard.get());
   return OK;
 }
 
@@ -46,7 +46,7 @@ PromptProfileArg PromptProfileManager::ExportConfigSnapshot() const {
 }
 
 void PromptProfileManager::SetInitArg(PromptProfileArg arg) {
-  AMDomain::prompt::services::NormalizePromptProfileArg(&arg);
+  AMDomain::prompt::service::NormalizePromptProfileArg(&arg);
   init_arg_.lock().store(std::move(arg));
   MarkConfigDirty();
 }
@@ -69,7 +69,7 @@ PromptProfileManager::GetZoneProfile(const std::string &zone) const {
   auto fallback_it = set.find(AMDomain::prompt::kPromptProfileDefault);
   if (fallback_it == set.end()) {
     PromptProfileSettings default_profile = {};
-    AMDomain::prompt::services::NormalizePromptProfileSettings(
+    AMDomain::prompt::service::NormalizePromptProfileSettings(
         &default_profile);
     fallback_it = set.emplace(AMDomain::prompt::kPromptProfileDefault,
                               std::move(default_profile))

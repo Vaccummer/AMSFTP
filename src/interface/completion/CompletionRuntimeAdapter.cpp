@@ -15,7 +15,7 @@ namespace {
 constexpr auto kTerminalSnapshotTtl = std::chrono::milliseconds(300);
 
 std::string NormalizePath_(const std::string &path) {
-  return AMDomain::filesystem::services::NormalizePath(AMStr::Strip(path));
+  return AMDomain::filesystem::service::NormalizePath(AMStr::Strip(path));
 }
 
 std::string ResolveWorkdir_(const AMDomain::host::ClientMetaData &metadata,
@@ -37,10 +37,11 @@ std::string ResolveWorkdir_(const AMDomain::host::ClientMetaData &metadata,
 
 std::string NormalizeNicknameOrDefault_(const std::string &nickname,
                                         const std::string &fallback) {
-  std::string key = AMDomain::host::HostService::NormalizeNickname(
-      AMStr::Strip(nickname));
+  std::string key =
+      AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(nickname));
   if (key.empty()) {
-    key = AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(fallback));
+    key =
+        AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(fallback));
   }
   if (key.empty()) {
     key = "local";
@@ -110,7 +111,8 @@ bool CompletionRuntimeAdapter::HostExists(const std::string &nickname) const {
   return host_service_.HostExists(nickname);
 }
 
-bool CompletionRuntimeAdapter::TerminalExists(const std::string &nickname) const {
+bool CompletionRuntimeAdapter::TerminalExists(
+    const std::string &nickname) const {
   auto terminal = terminal_service_.GetTerminalByNickname(nickname, false);
   return (terminal.rcm) && terminal.data;
 }
@@ -118,7 +120,8 @@ bool CompletionRuntimeAdapter::TerminalExists(const std::string &nickname) const
 ICompletionRuntime::TerminalNameState
 CompletionRuntimeAdapter::QueryTerminalNameState(
     const std::string &nickname) const {
-  const std::string key = NormalizeNicknameOrDefault_(nickname, CurrentNickname());
+  const std::string key =
+      NormalizeNicknameOrDefault_(nickname, CurrentNickname());
   const auto snapshot = ResolveTerminalSnapshot_(key);
   if (!snapshot.found) {
     if (host_service_.HostExists(key)) {
@@ -140,9 +143,11 @@ CompletionRuntimeAdapter::QueryChannelNameState(
   const std::string key =
       NormalizeNicknameOrDefault_(terminal_nickname, CurrentNickname());
   const std::string channel = AMStr::Strip(channel_name);
-  const bool valid_literal = AMDomain::host::HostService::ValidateNickname(channel);
+  const bool valid_literal =
+      AMDomain::host::HostService::ValidateNickname(channel);
   if (channel.empty()) {
-    return allow_new ? ChannelNameState::InvalidNew : ChannelNameState::Nonexistent;
+    return allow_new ? ChannelNameState::InvalidNew
+                     : ChannelNameState::Nonexistent;
   }
 
   const auto snapshot = ResolveTerminalSnapshot_(key);
@@ -150,7 +155,8 @@ CompletionRuntimeAdapter::QueryChannelNameState(
     if (!allow_new) {
       return ChannelNameState::Nonexistent;
     }
-    if (!valid_literal || QueryTerminalNameState(key) == TerminalNameState::Nonexistent) {
+    if (!valid_literal ||
+        QueryTerminalNameState(key) == TerminalNameState::Nonexistent) {
       return ChannelNameState::InvalidNew;
     }
     return ChannelNameState::ValidNew;
@@ -193,12 +199,12 @@ CompletionRuntimeAdapter::ResolveTerminalSnapshot_(
   if ((terminal_result.rcm) && terminal_result.data) {
     snapshot.found = true;
     snapshot.status = terminal_result.data->GetSessionState().status;
-    const auto channels = terminal_result.data->GetCachedChannelNames();
-    for (const auto &channel : channels) {
-      auto state_opt = terminal_result.data->GetChannelState(channel);
-      const bool is_ok = !state_opt.has_value() ||
-                         state_opt->code == ErrorCode::Success;
-      snapshot.channel_ok[channel] = is_ok;
+    auto channels_result = terminal_result.data->ListChannels({}, {});
+    if (channels_result.rcm) {
+      for (const auto &[channel, channel_port] : channels_result.data.channels) {
+        snapshot.channel_ok[channel] =
+            channel_port != nullptr && !channel_port->GetState().closed;
+      }
     }
   }
   snapshot.updated_at = now;
@@ -258,9 +264,9 @@ CompletionRuntimeAdapter::ListVarsByDomain(const std::string &domain) const {
   return out;
 }
 
-std::vector<TASKID> CompletionRuntimeAdapter::ListTaskIds() const {
-  std::vector<TASKID> out = {};
-  std::unordered_set<TASKID> seen = {};
+std::vector<TaskID> CompletionRuntimeAdapter::ListTaskIDs() const {
+  std::vector<TaskID> out = {};
+  std::unordered_set<TaskID> seen = {};
   const auto add_ids = [&out, &seen](const auto &tasks) {
     for (const auto &[id, task] : tasks) {
       if (!task) {
@@ -334,5 +340,3 @@ CompletionRuntimeAdapter::FormatPath(const std::string &segment,
 }
 
 } // namespace AMInterface::completion
-
-

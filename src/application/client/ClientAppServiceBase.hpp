@@ -1,10 +1,9 @@
 #pragma once
 
-#include "domain/client/ClientPort.hpp"
 #include "application/config/ConfigAppService.hpp"
+#include "domain/client/ClientPort.hpp"
 
 #include <functional>
-#include <atomic>
 #include <optional>
 #include <string>
 #include <vector>
@@ -12,7 +11,6 @@
 namespace AMApplication::client {
 using ClientServiceArg = AMDomain::client::ClientServiceArg;
 using amf = AMDomain::client::amf;
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using TraceCallback = AMDomain::client::TraceCallback;
 using ConnectStateCallback = AMDomain::client::ConnectStateCallback;
 using AuthCallback = AMDomain::client::AuthCallback;
@@ -42,9 +40,9 @@ public:
   [[nodiscard]] virtual int HeartbeatIntervalS() const;
 
   void RegisterControlComponent(amf control_token);
-  [[nodiscard]] ClientControlComponent
+  [[nodiscard]] ControlComponent
   GetControlComponent(std::optional<amf> control_token = std::nullopt,
-                      int timeout_ms = -1) const;
+                      int timeout_ms = 0) const;
 
   void SetPrivateKeys(std::vector<std::string> private_keys);
   [[nodiscard]] std::vector<std::string> GetPrivateKeys() const;

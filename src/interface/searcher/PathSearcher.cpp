@@ -86,10 +86,8 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  auto list_result =
-      client->IOPort().listdir({path.dir_abs},
-                               AMDomain::client::ClientControlComponent(
-                                   ctx.control_token, timeout_ms));
+  auto list_result = client->IOPort().listdir(
+      {path.dir_abs}, ControlComponent(ctx.control_token, timeout_ms));
   if (list_result.rcm.code != EC::Success) {
     return result;
   }
@@ -113,30 +111,28 @@ AMPathSearchEngine::CreateTask(const AMCompletionContext &ctx) {
 void AMPathSearchEngine::SortCandidates(
     const AMCompletionContext &ctx, std::vector<AMCompletionCandidate> &items) {
   (void)ctx;
-  std::stable_sort(items.begin(), items.end(),
-                   [](const auto &lhs, const auto &rhs) {
-                     if (lhs.score != rhs.score) {
-                       return lhs.score < rhs.score;
-                     }
-                     const int lo = PathTypeOrder(lhs.path_type);
-                     const int ro = PathTypeOrder(rhs.path_type);
-                     if (lo != ro) {
-                       return lo < ro;
-                     }
-                     const std::string lname =
-                         LeafNameForSort_(lhs.insert_text);
-                     const std::string rname =
-                         LeafNameForSort_(rhs.insert_text);
-                     const bool ldot = StartsWithDot_(lname);
-                     const bool rdot = StartsWithDot_(rname);
-                     if (ldot != rdot) {
-                       return ldot;
-                     }
-                     if (lname != rname) {
-                       return lname < rname;
-                     }
-                     return lhs.insert_text < rhs.insert_text;
-                   });
+  std::stable_sort(
+      items.begin(), items.end(), [](const auto &lhs, const auto &rhs) {
+        if (lhs.score != rhs.score) {
+          return lhs.score < rhs.score;
+        }
+        const int lo = PathTypeOrder(lhs.path_type);
+        const int ro = PathTypeOrder(rhs.path_type);
+        if (lo != ro) {
+          return lo < ro;
+        }
+        const std::string lname = LeafNameForSort_(lhs.insert_text);
+        const std::string rname = LeafNameForSort_(rhs.insert_text);
+        const bool ldot = StartsWithDot_(lname);
+        const bool rdot = StartsWithDot_(rname);
+        if (ldot != rdot) {
+          return ldot;
+        }
+        if (lname != rname) {
+          return lname < rname;
+        }
+        return lhs.insert_text < rhs.insert_text;
+      });
 }
 
 /**
@@ -467,7 +463,8 @@ std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
     std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime) {
   std::vector<AMSearchEngineRegistration> out;
 
-  auto command_engine = std::make_shared<AMInterface::searcher::AMCommandSearchEngine>();
+  auto command_engine =
+      std::make_shared<AMInterface::searcher::AMCommandSearchEngine>();
   out.push_back(
       {{AMCompletionTarget::TopCommand, AMCompletionTarget::Subcommand,
         AMCompletionTarget::LongOption, AMCompletionTarget::ShortOption},
@@ -477,10 +474,9 @@ std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
       std::make_shared<AMInterface::searcher::AMInternalSearchEngine>(runtime);
   out.push_back(
       {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
-        AMCompletionTarget::PoolName,
-        AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
-        AMCompletionTarget::TaskId, AMCompletionTarget::VarZone,
-        AMCompletionTarget::TerminalName,
+        AMCompletionTarget::PoolName, AMCompletionTarget::HostNickname,
+        AMCompletionTarget::HostAttr, AMCompletionTarget::TaskId,
+        AMCompletionTarget::VarZone, AMCompletionTarget::TerminalName,
         AMCompletionTarget::ChannelTargetExisting,
         AMCompletionTarget::ChannelTargetNew,
         AMCompletionTarget::SshChannelTarget},

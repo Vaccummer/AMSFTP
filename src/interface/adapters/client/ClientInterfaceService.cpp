@@ -1546,24 +1546,24 @@ void ClientInterfaceService::BindInteractionCallbacks() {
   client_service_.SetConnectHooks(std::move(hooks));
 }
 
-ClientControlComponent ClientInterfaceService::ResolveControl_(
-    const std::optional<ClientControlComponent> &component) const {
+ControlComponent ClientInterfaceService::ResolveControl_(
+    const std::optional<ControlComponent> &component) const {
   if (component.has_value()) {
     return component.value();
   }
-  return {default_control_token_, -1};
+  return {default_control_token_, 0};
 }
 
 ECM ClientInterfaceService::Connect(
     const ConnectRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   if (request.nicknames.empty()) {
     return Err(EC::InvalidArg, "", "",
                "connect requires at least one nickname");
   }
   const std::vector<std::string> targets =
       AMStr::UniqueTargetsKeepOrder(request.nicknames);
-  const ClientControlComponent control = ResolveControl_(component);
+  const ControlComponent control = ResolveControl_(component);
   ECM status = OK;
 
   for (const auto &raw : targets) {
@@ -1674,8 +1674,8 @@ ECM ClientInterfaceService::Connect(
 
 ECM ClientInterfaceService::ChangeClient(
     const ChangeClientRequest &request,
-    const std::optional<ClientControlComponent> &component) {
-  const ClientControlComponent control = ResolveControl_(component);
+    const std::optional<ControlComponent> &component) {
+  const ControlComponent control = ResolveControl_(component);
   if (control.IsInterrupted()) {
     return Err(EC::Terminate, "change_client", request.nickname,
                "Interrupted by user");
@@ -1716,10 +1716,10 @@ ECM ClientInterfaceService::ChangeClient(
 
 ECM ClientInterfaceService::ConnectProtocol_(
     const ProtocolConnectRequest &request, ClientProtocol protocol,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   constexpr const char *kOp = "connect_protocol";
   std::string nickname = AMStr::Strip(request.nickname);
-  const ClientControlComponent control = ResolveControl_(component);
+  const ControlComponent control = ResolveControl_(component);
   std::string username = "";
   std::string hostname = "";
   if (protocol == ClientProtocol::LOCAL) {
@@ -1816,25 +1816,25 @@ ECM ClientInterfaceService::ConnectProtocol_(
 
 ECM ClientInterfaceService::ConnectSftp(
     const ProtocolConnectRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   return ConnectProtocol_(request, ClientProtocol::SFTP, component);
 }
 
 ECM ClientInterfaceService::ConnectFtp(
     const ProtocolConnectRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   return ConnectProtocol_(request, ClientProtocol::FTP, component);
 }
 
 ECM ClientInterfaceService::ConnectLocal(
     const ProtocolConnectRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   return ConnectProtocol_(request, ClientProtocol::LOCAL, component);
 }
 
 ECM ClientInterfaceService::RemoveClients(
     const RemoveClientsRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   constexpr const char *kOp = "remove_clients";
   if (request.nicknames.empty()) {
     const ECM rcm = Err(EC::InvalidArg, kOp, "<targets>", "Empty nickname");
@@ -1842,7 +1842,7 @@ ECM ClientInterfaceService::RemoveClients(
     return rcm;
   }
 
-  const ClientControlComponent control = ResolveControl_(component);
+  const ControlComponent control = ResolveControl_(component);
   if (control.IsInterrupted()) {
     return Err(EC::Terminate, kOp, "<control>", "Interrupted by user");
   }
@@ -1993,7 +1993,7 @@ ECM ClientInterfaceService::RemoveClients(
 
 ECM ClientInterfaceService::ListClients(
     const ListClientsRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   constexpr const char *kOp = "list_clients";
   if (request.check) {
     CheckClientsRequest check_request = {};
@@ -2002,7 +2002,7 @@ ECM ClientInterfaceService::ListClients(
     return CheckClients(check_request, component);
   }
 
-  const ClientControlComponent control = ResolveControl_(component);
+  const ControlComponent control = ResolveControl_(component);
   ECM status = OK;
   const std::vector<std::string> established_names =
       client_service_.GetClientNames();
@@ -2107,9 +2107,9 @@ ECM ClientInterfaceService::ListClients(
 
 ECM ClientInterfaceService::CheckClients(
     const CheckClientsRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   constexpr const char *kOp = "check_clients";
-  const ClientControlComponent control = ResolveControl_(component);
+  const ControlComponent control = ResolveControl_(component);
   ECM status = OK;
 
   const std::vector<std::string> established_names =
@@ -2191,9 +2191,9 @@ ECM ClientInterfaceService::CheckClients(
 
 ECM ClientInterfaceService::PoolLs(
     const ListPoolClientsRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   constexpr const char *kOp = "pool_ls";
-  const ClientControlComponent control = ResolveControl_(component);
+  const ControlComponent control = ResolveControl_(component);
   if (control.IsInterrupted()) {
     return Err(EC::Terminate, kOp, "<control>", "Interrupted by user");
   }
@@ -2345,7 +2345,7 @@ ECM ClientInterfaceService::PoolLs(
 
 ECM ClientInterfaceService::PoolCheck(
     const CheckPoolClientsRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   ListPoolClientsRequest ls_request = {};
   ls_request.nicknames = request.nicknames;
   ls_request.check = true;
@@ -2355,13 +2355,13 @@ ECM ClientInterfaceService::PoolCheck(
 
 ECM ClientInterfaceService::PoolRm(
     const RemovePoolClientsRequest &request,
-    const std::optional<ClientControlComponent> &component) {
+    const std::optional<ControlComponent> &component) {
   constexpr const char *kOp = "pool_rm";
   const std::string nickname = AMStr::Strip(request.nickname);
   if (nickname.empty()) {
     return Err(EC::InvalidArg, kOp, "<nickname>", "Pool nickname is empty");
   }
-  const ClientControlComponent control = ResolveControl_(component);
+  const ControlComponent control = ResolveControl_(component);
   if (control.IsInterrupted()) {
     return Err(EC::Terminate, kOp, "<control>", "Interrupted by user");
   }

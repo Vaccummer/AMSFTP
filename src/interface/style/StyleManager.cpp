@@ -138,7 +138,7 @@ std::string NormalizeStyleTag(const std::string &raw_tag) {
   if (trimmed.back() != ']') {
     trimmed.push_back(']');
   }
-  if (!AMDomain::style::services::IsStyleString(trimmed)) {
+  if (!AMDomain::style::service::IsStyleString(trimmed)) {
     return "";
   }
   return trimmed;

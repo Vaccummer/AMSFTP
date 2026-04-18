@@ -6,14 +6,12 @@
 #include "foundation/core/DataClass.hpp"
 
 #include <map>
-#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 namespace AMApplication::terminal {
 using ClientHandle = AMDomain::client::ClientHandle;
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using TerminalHandle = AMDomain::terminal::TerminalHandle;
 using ChannelPortHandle = AMDomain::terminal::ChannelPortHandle;
 
@@ -39,19 +37,19 @@ public:
   [[nodiscard]] std::vector<std::string> ListTerminalNames() const;
 
   ECM RemoveTerminal(const std::string &nickname,
-                     const ClientControlComponent &control = {});
+                     const ControlComponent &control = {});
 
   [[nodiscard]] ECMData<ChannelPortHandle>
   EnsureChannelPort(const std::string &terminal_nickname,
                     const std::string &channel_name,
-                    const ClientControlComponent &control = {});
+                    const ControlComponent &control = {});
 
   ECM DropChannelPort(const std::string &terminal_nickname,
                       const std::string &channel_name,
-                      const ClientControlComponent &control = {});
+                      const ControlComponent &control = {});
 
   ECM DropTerminalChannelPorts(const std::string &terminal_nickname,
-                               const ClientControlComponent &control = {});
+                               const ControlComponent &control = {});
 
 private:
   [[nodiscard]] static std::string BuildTerminalKey_(const ClientHandle &client,
@@ -64,7 +62,7 @@ private:
   QueryTerminal_(const std::string &terminal_key) const;
 
   void DropAllTerminalChannelPortsByKey_(const std::string &terminal_key,
-                                         const ClientControlComponent &control);
+                                         const ControlComponent &control);
 
 private:
   mutable std::mutex mutex_ = {};

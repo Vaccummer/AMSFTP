@@ -1,6 +1,5 @@
 #pragma once
 
-#include "domain/client/ClientPort.hpp"
 #include "domain/terminal/TerminalModel.hpp"
 #include "foundation/core/DataClass.hpp"
 
@@ -13,7 +12,9 @@
 #include <vector>
 
 namespace AMDomain::terminal {
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
+class IChannelPort;
+using ChannelOutputProcessor = std::function<void(std::string_view)>;
+using ChannelPortHandle = std::shared_ptr<IChannelPort>;
 
 enum class ScreenKind { Main, Alternate };
 
@@ -41,7 +42,6 @@ struct ChannelReadWrappedResult {
   bool hard_limit_hit = false;
   ECM last_error = OK;
 };
-
 
 struct ChannelCacheCopyResult {
   std::vector<OutputBlock> blocks = {};
@@ -79,10 +79,8 @@ struct ChannelInitArgs {
   std::string term = "xterm-256color";
 };
 
-using ChannelOutputProcessor = std::function<void(std::string_view)>;
-
 struct ChannelLoopStartArgs {
-  AMDomain::client::ClientControlComponent control = {};
+  ControlComponent control = {};
   int write_kick_timeout_ms = 0;
 };
 
@@ -90,7 +88,7 @@ struct ChannelForegroundBindArgs {
   ChannelOutputProcessor processor = {};
   std::intptr_t key_event_handle = -1;
   AMAtomic<std::vector<char>> *key_cache = nullptr;
-  AMDomain::client::ClientControlComponent control = {};
+  ControlComponent control = {};
   int write_kick_timeout_ms = 0;
 };
 
@@ -114,7 +112,7 @@ public:
   [[nodiscard]] virtual ECMData<std::intptr_t> GetWaitHandle() const = 0;
 
   virtual ECM Init(const ChannelInitArgs &init_args,
-                   const ClientControlComponent &control = {}) = 0;
+                   const ControlComponent &control = {}) = 0;
 
   virtual ECM Rename(const std::string &new_channel_name) = 0;
 
@@ -125,29 +123,31 @@ public:
 
   [[nodiscard]] virtual ECMData<ChannelReadWrappedResult>
   ReadWrapped(const ChannelReadArgs &read_args,
-              const ClientControlComponent &control = {}) = 0;
+              const ControlComponent &control = {}) = 0;
 
   [[nodiscard]] virtual ECMData<ChannelWriteResult>
   WriteRaw(const ChannelWriteArgs &write_args,
-           const ClientControlComponent &control = {}) = 0;
+           const ControlComponent &control = {}) = 0;
 
   [[nodiscard]] virtual ECMData<ChannelResizeResult>
   Resize(const ChannelResizeArgs &resize_args,
-         const ClientControlComponent &control = {}) = 0;
+         const ControlComponent &control = {}) = 0;
 
   [[nodiscard]] virtual ECMData<ChannelCloseResult>
-  Close(bool force, const ClientControlComponent &control = {}) = 0;
+  Close(bool force, const ControlComponent &control = {}) = 0;
 
   [[nodiscard]] virtual ChannelPortState GetState() const = 0;
 
-  [[nodiscard]] virtual ECMData<ChannelCacheCopyResult> GetCacheCopy() const = 0;
+  [[nodiscard]] virtual ECMData<ChannelCacheCopyResult>
+  GetCacheCopy() const = 0;
 
   virtual ECM ClearCache() = 0;
 
   [[nodiscard]] virtual ECMData<ChannelCacheTruncateResult>
   TruncateCache(const ChannelCacheTruncateArgs &truncate_args = {}) = 0;
 
-  virtual ECM EnsureLoopStarted(const ChannelLoopStartArgs &start_args = {}) = 0;
+  virtual ECM
+  EnsureLoopStarted(const ChannelLoopStartArgs &start_args = {}) = 0;
 
   [[nodiscard]] virtual ECMData<ChannelCacheReplayResult>
   BindForeground(const ChannelForegroundBindArgs &bind_args) = 0;
@@ -159,7 +159,4 @@ public:
   [[nodiscard]] virtual ChannelLoopState GetLoopState() const = 0;
 };
 
-using ChannelPortHandle = std::shared_ptr<IChannelPort>;
-
 } // namespace AMDomain::terminal
-

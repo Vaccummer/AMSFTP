@@ -34,4 +34,3 @@ private:
   AMAtomic<std::optional<AMProgressBarStyle>> progress_bar_style_ = {};
 };
 } // namespace AMInterface::style
-

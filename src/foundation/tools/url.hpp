@@ -103,4 +103,27 @@ inline std::string ExtractUsername(const std::string &url) {
   return auth.substr(0, colon);
 }
 
+inline std::string ExtractPassword(const std::string &url) {
+  const std::string trimmed = AMStr::Strip(url);
+  const size_t scheme_pos = trimmed.find("://");
+  if (scheme_pos == std::string::npos) {
+    return "";
+  }
+  const size_t auth_begin = scheme_pos + 3;
+  const size_t at = trimmed.find('@', auth_begin);
+  if (at == std::string::npos) {
+    return "";
+  }
+  const size_t slash = trimmed.find('/', auth_begin);
+  if (slash != std::string::npos && at > slash) {
+    return "";
+  }
+  const std::string auth = trimmed.substr(auth_begin, at - auth_begin);
+  const size_t colon = auth.find(':');
+  if (colon == std::string::npos || colon + 1 >= auth.size()) {
+    return "";
+  }
+  return auth.substr(colon + 1);
+}
+
 } // namespace AMUrl

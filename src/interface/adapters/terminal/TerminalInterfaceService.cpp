@@ -41,13 +41,11 @@
 
 namespace AMInterface::terminal {
 namespace {
-AMDomain::client::ControlComponent
+ControlComponent
 ResolveControl_(AMDomain::client::amf default_interrupt_flag,
-                const std::optional<AMDomain::client::ControlComponent>
-                    &control_opt) {
+                const std::optional<ControlComponent> &control_opt) {
   return control_opt.has_value() ? control_opt.value()
-                                  : AMDomain::client::ControlComponent(
-                                        default_interrupt_flag, 0);
+                                 : ControlComponent(default_interrupt_flag);
 }
 
 [[nodiscard]] ECM BuildTerminalUnsupportedError_(const std::string &nickname) {
@@ -155,11 +153,11 @@ JoinChannelSummary_(const std::vector<std::string> &channels) {
   return out;
 }
 
-[[nodiscard]] ECMData<std::string> BuildTerminalSummaryLine_(
-    const std::string &terminal_name,
-    AMDomain::terminal::ITerminalPort *terminal,
-    const AMDomain::client::ControlComponent &control,
-    AMInterface::style::AMStyleService &style_service) {
+[[nodiscard]] ECMData<std::string>
+BuildTerminalSummaryLine_(const std::string &terminal_name,
+                          AMDomain::terminal::ITerminalPort *terminal,
+                          const ControlComponent &control,
+                          AMInterface::style::AMStyleService &style_service) {
   if (terminal == nullptr) {
     const std::string styled_header = style_service.Format(
         "[" + terminal_name + "]",
@@ -186,12 +184,10 @@ JoinChannelSummary_(const std::vector<std::string> &channels) {
   }
 
   std::vector<std::string> styled_channels = {};
-  styled_channels.reserve(channels_result.data.channel_names.size());
-  for (const auto &channel_name : channels_result.data.channel_names) {
-    auto check_result = terminal->CheckChannel(
-        {std::optional<std::string>(channel_name)}, control);
-    const bool channel_ok = (check_result.rcm) && check_result.data.exists &&
-                            check_result.data.is_open;
+  styled_channels.reserve(channels_result.data.channels.size());
+  for (const auto &[channel_name, channel_port] : channels_result.data.channels) {
+    const bool channel_ok =
+        channel_port != nullptr && !channel_port->GetState().closed;
     const auto channel_style =
         channel_ok ? AMInterface::style::StyleIndex::ChannelName
                    : AMInterface::style::StyleIndex::DisconnectedChannelName;
@@ -1085,8 +1081,7 @@ AMDomain::client::amf TerminalInterfaceService::GetDefaultControlToken() const {
 
 ECM TerminalInterfaceService::ShellRun(
     const TerminalShellRunArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const std::string command = AMStr::Strip(arg.cmd);
   if (command.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "cmd cannot be empty");
@@ -1094,20 +1089,19 @@ ECM TerminalInterfaceService::ShellRun(
     return rcm;
   }
   if (arg.max_time_s < -1) {
-    const ECM rcm =
-        Err(EC::InvalidArg, "", "", "max_time_s must be >= -1");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "max_time_s must be >= -1");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
   const auto base_control =
       ResolveControl_(default_interrupt_flag_, control_opt);
-  AMDomain::client::ControlComponent run_control = base_control;
+  ControlComponent run_control = base_control;
   if (arg.max_time_s >= 0) {
     constexpr int kMaxSafeSeconds = std::numeric_limits<int>::max() / 1000;
     const int safe_seconds = std::min(arg.max_time_s, kMaxSafeSeconds);
-    run_control = AMDomain::client::ControlComponent(
-        base_control.ControlToken(), safe_seconds * 1000);
+    run_control =
+        ControlComponent(base_control.ControlToken(), safe_seconds * 1000);
   }
 
   std::string nickname = filesystem_service_.CurrentNickname();
@@ -1168,13 +1162,11 @@ ECM TerminalInterfaceService::ShellRun(
 
 ECM TerminalInterfaceService::LaunchTerminal(
     const TerminalLaunchArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const int send_timeout_ms =
       filesystem_service_.GetInitArg().terminal_send_timeout_ms;
-  const int write_kick_timeout_ms =
-      (send_timeout_ms < 0) ? 0 : send_timeout_ms;
+  const int write_kick_timeout_ms = (send_timeout_ms < 0) ? 0 : send_timeout_ms;
   std::string default_nickname = filesystem_service_.CurrentNickname();
   if (default_nickname.empty()) {
     default_nickname = AMDomain::host::klocalname;
@@ -1273,12 +1265,12 @@ ECM TerminalInterfaceService::LaunchTerminal(
   bool refresh_prompt_on_enter = false;
 
   if (!requested_channel.empty()) {
-    auto check_result = terminal_handle->CheckChannel(
-        {std::optional<std::string>(requested_channel)}, control);
-    if (!(check_result.rcm)) {
-      if (check_result.rcm.code != EC::ClientNotFound) {
-        prompt_io_manager_.ErrorFormat(check_result.rcm);
-        return check_result.rcm;
+    auto channel_port_result = terminal_handle->GetChannelPort(
+        std::optional<std::string>(requested_channel), control);
+    if (!(channel_port_result.rcm)) {
+      if (channel_port_result.rcm.code != EC::ClientNotFound) {
+        prompt_io_manager_.ErrorFormat(channel_port_result.rcm);
+        return channel_port_result.rcm;
       }
       auto open_result = terminal_handle->OpenChannel(
           BuildChannelOpenArgs_(requested_channel, geometry), control);
@@ -1288,7 +1280,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
         return open_result.rcm;
       }
     } else {
-      if (!check_result.data.exists || !check_result.data.is_open) {
+      if (!channel_port_result.data || channel_port_result.data->GetState().closed) {
         const ECM rcm = Err(EC::NoConnection, "", requested_channel,
                             "Target channel is not available");
         prompt_io_manager_.ErrorFormat(rcm);
@@ -1318,12 +1310,12 @@ ECM TerminalInterfaceService::LaunchTerminal(
       return rcm;
     }
 
-    auto check_result = terminal_handle->CheckChannel({std::nullopt}, control);
-    if (!(check_result.rcm)) {
-      prompt_io_manager_.ErrorFormat(check_result.rcm);
-      return check_result.rcm;
+    auto channel_port_result = terminal_handle->GetChannelPort(std::nullopt, control);
+    if (!(channel_port_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(channel_port_result.rcm);
+      return channel_port_result.rcm;
     }
-    if (!check_result.data.exists || !check_result.data.is_open) {
+    if (!channel_port_result.data || channel_port_result.data->GetState().closed) {
       const ECM rcm = Err(EC::NoConnection, "", current_channel,
                           "Current channel is not available");
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1331,9 +1323,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     }
 
     refresh_prompt_on_enter = true;
-    channel_name = check_result.data.channel_name.empty()
-                       ? current_channel
-                       : check_result.data.channel_name;
+    channel_name = current_channel;
   }
 
   auto channel_port_result = terminal_service_.EnsureChannelPort(
@@ -1348,8 +1338,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
   const auto channel_port = channel_port_result.data;
 
-  const ECM loop_rcm = channel_port->EnsureLoopStarted(
-      {control, write_kick_timeout_ms});
+  const ECM loop_rcm =
+      channel_port->EnsureLoopStarted({control, write_kick_timeout_ms});
   if (!(loop_rcm)) {
     prompt_io_manager_.ErrorFormat(loop_rcm);
     return loop_rcm;
@@ -1558,8 +1548,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
 }
 ECM TerminalInterfaceService::AddTerminal(
     const TerminalAddArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const auto nicknames = NormalizeTerminalNicknames_(arg.nicknames);
   if (nicknames.empty()) {
@@ -1604,10 +1593,9 @@ ECM TerminalInterfaceService::AddTerminal(
 
     auto client_result = client_service_.CreateClient(nickname, control, false);
     if (!(client_result.rcm) || !client_result.data) {
-      const ECM rcm = (client_result.rcm)
-                          ? Err(EC::InvalidHandle, "", nickname,
-                                "Created client is null")
-                          : client_result.rcm;
+      const ECM rcm = (client_result.rcm) ? Err(EC::InvalidHandle, "", nickname,
+                                                "Created client is null")
+                                          : client_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
       if ((status)) {
         status = rcm;
@@ -1635,8 +1623,7 @@ ECM TerminalInterfaceService::AddTerminal(
 
 ECM TerminalInterfaceService::ListTerminals(
     const TerminalListArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   (void)arg;
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const auto names = terminal_service_.ListTerminalNames();
@@ -1656,8 +1643,7 @@ ECM TerminalInterfaceService::ListTerminals(
 
 ECM TerminalInterfaceService::RemoveTerminal(
     const TerminalRemoveArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   if (arg.nicknames.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "<targets>",
@@ -1713,10 +1699,10 @@ ECM TerminalInterfaceService::RemoveTerminal(
     auto terminal_result =
         terminal_service_.GetTerminalByNickname(normalized, true);
     if (!(terminal_result.rcm) || !terminal_result.data) {
-      const ECM rcm = terminal_result.rcm
-                          ? Err(EC::ClientNotFound, "", normalized,
-                                "terminal not found")
-                          : terminal_result.rcm;
+      const ECM rcm =
+          terminal_result.rcm
+              ? Err(EC::ClientNotFound, "", normalized, "terminal not found")
+              : terminal_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
       if ((status)) {
         status = rcm;
@@ -1753,8 +1739,7 @@ ECM TerminalInterfaceService::RemoveTerminal(
       return Err(EC::Terminate, "", nickname, "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "", nickname,
-                 "Operation timed out");
+      return Err(EC::OperationTimeout, "", nickname, "Operation timed out");
     }
 
     const ECM rcm = terminal_service_.RemoveTerminal(nickname, control);
@@ -1772,8 +1757,7 @@ ECM TerminalInterfaceService::RemoveTerminal(
 
 ECM TerminalInterfaceService::AddChannel(
     const ChannelAddArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
       AMStr::Strip(filesystem_service_.CurrentNickname()));
@@ -1829,8 +1813,7 @@ ECM TerminalInterfaceService::AddChannel(
 
 ECM TerminalInterfaceService::ListChannels(
     const ChannelListArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string nickname =
       AMDomain::host::HostService::NormalizeNickname(arg.nickname);
@@ -1841,10 +1824,9 @@ ECM TerminalInterfaceService::ListChannels(
   auto terminal_result =
       terminal_service_.GetTerminalByNickname(nickname, false);
   if (!(terminal_result.rcm) || !terminal_result.data) {
-    const ECM rcm = terminal_result.rcm
-                        ? Err(EC::InvalidHandle, "", nickname,
-                              "Terminal handle is null")
-                        : terminal_result.rcm;
+    const ECM rcm = terminal_result.rcm ? Err(EC::InvalidHandle, "", nickname,
+                                              "Terminal handle is null")
+                                        : terminal_result.rcm;
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1861,8 +1843,7 @@ ECM TerminalInterfaceService::ListChannels(
 
 ECM TerminalInterfaceService::RemoveChannel(
     const ChannelRemoveArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
       AMStr::Strip(filesystem_service_.CurrentNickname()));
@@ -1922,8 +1903,7 @@ ECM TerminalInterfaceService::RemoveChannel(
 
 ECM TerminalInterfaceService::RenameChannel(
     const ChannelRenameArg &arg,
-    const std::optional<AMDomain::client::ControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
       AMStr::Strip(filesystem_service_.CurrentNickname()));
@@ -2000,5 +1980,3 @@ ECM TerminalInterfaceService::RenameChannel(
 }
 
 } // namespace AMInterface::terminal
-
-

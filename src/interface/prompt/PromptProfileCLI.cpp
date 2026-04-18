@@ -126,7 +126,7 @@ ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
     const auto profile_query =
         isocline_profile_manager_.profile_manager_.GetZoneProfile(target);
     PromptProfileSettings profile = profile_query.profile;
-    AMDomain::prompt::services::NormalizePromptProfileSettings(&profile);
+    AMDomain::prompt::service::NormalizePromptProfileSettings(&profile);
     if (!first) {
       Print("");
     }
@@ -145,10 +145,10 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
 
   PromptProfileSettings working =
       isocline_profile_manager_.profile_manager_.GetZoneProfile(target).profile;
-  AMDomain::prompt::services::NormalizePromptProfileSettings(&working);
+  AMDomain::prompt::service::NormalizePromptProfileSettings(&working);
 
   PromptProfileSettings defaults = {};
-  AMDomain::prompt::services::NormalizePromptProfileSettings(&defaults);
+  AMDomain::prompt::service::NormalizePromptProfileSettings(&defaults);
 
   const auto prompt_string = [this](const std::string &label,
                                     std::string *value) -> bool {
@@ -336,7 +336,7 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
   auto profile_document =
       isocline_profile_manager_.profile_manager_.GetInitArg();
   profile_document.set[target] = working;
-  AMDomain::prompt::services::NormalizePromptProfileArg(&profile_document);
+  AMDomain::prompt::service::NormalizePromptProfileArg(&profile_document);
   isocline_profile_manager_.profile_manager_.SetInitArg(
       std::move(profile_document));
 

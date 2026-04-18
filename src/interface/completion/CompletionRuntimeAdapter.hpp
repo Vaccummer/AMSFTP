@@ -4,8 +4,9 @@
 #include "application/host/HostAppService.hpp"
 #include "application/prompt/PromptProfileManager.hpp"
 #include "application/terminal/TermAppService.hpp"
-#include "application/var/VarAppService.hpp"
 #include "application/transfer/TransferAppService.hpp"
+#include "application/var/VarAppService.hpp"
+#include "domain/transfer/TransferDomainModel.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/completion/CompletionRuntime.hpp"
 #include "interface/style/StyleManager.hpp"
@@ -14,7 +15,7 @@
 #include <unordered_map>
 
 namespace AMInterface::completion {
-using TASKID = AMDomain::transfer::TaskInfo::ID;
+using AMDomain::transfer::TaskID;
 class CompletionRuntimeAdapter final : public ICompletionRuntime {
 public:
   CompletionRuntimeAdapter(
@@ -61,7 +62,7 @@ public:
   [[nodiscard]] std::vector<AMDomain::var::VarInfo>
   ListVarsByDomain(const std::string &domain) const override;
 
-  [[nodiscard]] std::vector<TASKID> ListTaskIds() const override;
+  [[nodiscard]] std::vector<int64_t> ListTaskIDs() const override;
 
   [[nodiscard]] PromptPathOptions
   ResolvePromptPathOptions(const std::string &nickname) const override;
@@ -104,4 +105,3 @@ private:
 };
 
 } // namespace AMInterface::completion
-

@@ -1,10 +1,11 @@
 #pragma once
-#include "foundation/core/Enum.hpp"
 #include <map>
 #include <string>
 
 namespace AMDomain::var {
+class ParsedVarToken;
 using VarSet = std::map<std::string, std::map<std::string, std::string>>;
+using VarRef = ParsedVarToken;
 inline constexpr const char *kRoot = "UserVars";
 inline constexpr const char *kPublic = "*";
 
@@ -37,5 +38,4 @@ struct ParsedVarToken {
   std::string varname = "";
 };
 
-using VarRef = ParsedVarToken;
 } // namespace AMDomain::var

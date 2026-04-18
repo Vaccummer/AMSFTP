@@ -1,8 +1,10 @@
 #include "interface/prompt/CLICorePrompt.hpp"
 #include "foundation/tools/string.hpp"
+#include "foundation/tools/terminal.hpp"
 #include "foundation/tools/time.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
@@ -16,7 +18,103 @@ ResolvePromptTemplate_(const AMInterface::style::AMStyleService &s) {
   if (!style.core_prompt.empty()) {
     return style.core_prompt;
   }
-  return "[nn]({$nickname})[/] [cwd]{$cwd}[/] [ds]> [/]";
+  return "return \"[nn](\" .. nickname .. \")[/] [cwd]\" .. cwd .. \"[/] [ds]> [/]\"";
+}
+
+std::string StripStyleForMeasure_(const std::string &text) {
+  auto is_style_tag = [](const std::string &tag) {
+    if (tag.empty()) {
+      return false;
+    }
+    if (tag.front() == '#' || tag.front() == '/' || tag.front() == '!') {
+      return true;
+    }
+    return std::all_of(tag.begin(), tag.end(), [](char ch) {
+      return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' ||
+             ch == '-';
+    });
+  };
+
+  std::string out = {};
+  out.reserve(text.size());
+  for (size_t i = 0; i < text.size(); ++i) {
+    const char ch = text[i];
+    if (ch == '\\' && i + 1 < text.size() &&
+        (text[i + 1] == '[' || text[i + 1] == ']')) {
+      out.push_back(text[i + 1]);
+      ++i;
+      continue;
+    }
+    if (ch == '[') {
+      const size_t close = text.find(']', i + 1);
+      if (close != std::string::npos) {
+        const std::string token = text.substr(i + 1, close - i - 1);
+        if (is_style_tag(token)) {
+          i = close;
+          continue;
+        }
+      }
+    }
+    out.push_back(ch);
+  }
+  return out;
+}
+
+std::string ExpandPaddingTabForLine_(const std::string &line, int cols) {
+  std::string out = line;
+  const size_t first_tab = out.find('\t');
+  if (first_tab == std::string::npos) {
+    return out;
+  }
+
+  const std::string left = out.substr(0, first_tab);
+  std::string right = out.substr(first_tab + 1);
+  right = AMStr::replace_all(right, "\t", "   ");
+
+  const std::string left_plain =
+      AMStr::replace_all(StripStyleForMeasure_(left), "\r", "");
+  const std::string right_plain =
+      AMStr::replace_all(StripStyleForMeasure_(right), "\r", "");
+
+  const size_t left_width = AMStr::DisplayWidthUtf8(left_plain);
+  const size_t right_width = AMStr::DisplayWidthUtf8(right_plain);
+  size_t pad_width = 3;
+  const size_t total_width = left_width + right_width;
+  if (cols > 0 && static_cast<size_t>(cols) > total_width) {
+    pad_width = static_cast<size_t>(cols) - total_width;
+  }
+  return left + std::string(pad_width, ' ') + right;
+}
+
+std::string NormalizePromptOutput_(const std::string &rendered) {
+  if (rendered.empty()) {
+    return rendered;
+  }
+
+  const int cols = std::max(1, AMTerminalTools::GetTerminalViewportInfo().cols);
+  std::string normalized = {};
+  normalized.reserve(rendered.size() + 16);
+
+  size_t start = 0;
+  while (start < rendered.size()) {
+    const size_t nl = rendered.find('\n', start);
+    const bool has_newline = (nl != std::string::npos);
+    const size_t end = has_newline ? nl : rendered.size();
+    std::string line = rendered.substr(start, end - start);
+    line = ExpandPaddingTabForLine_(line, cols);
+    line = AMStr::replace_all(line, "\t", "   ");
+    normalized += line;
+    if (has_newline) {
+      normalized.push_back('\n');
+    }
+    start = has_newline ? (nl + 1) : rendered.size();
+  }
+
+  while (!normalized.empty() &&
+         (normalized.back() == '\n' || normalized.back() == '\r')) {
+    normalized.pop_back();
+  }
+  return normalized;
 }
 
 } // namespace
@@ -48,20 +146,34 @@ std::string CLIPromtRender::Render(const RenderArg &arg) {
   if (state_.compiled_template.empty()) {
     state_.cached_render.clear();
     state_.has_cached_render = false;
+    state_.render_ok = true;
+    state_.render_error.clear();
     return "";
   }
 
   if (!state_.parse_ok) {
-    state_.cached_render = BuildFallbackPrompt_(arg);
+    state_.render_ok = false;
+    state_.render_error = "core prompt template parse failed";
+    if (!state_.diagnostics.items.empty()) {
+      state_.render_error = state_.diagnostics.items.front().message;
+    }
+    state_.cached_render = NormalizePromptOutput_(BuildFallbackPrompt_(arg));
     state_.has_cached_render = true;
     return state_.cached_render;
   }
 
   const auto rendered = RenderPromptFormat_(arg);
   if (!(rendered.rcm)) {
-    state_.cached_render = BuildFallbackPrompt_(arg);
+    state_.render_ok = false;
+    state_.render_error = rendered.rcm.msg();
+    if (state_.render_error.empty()) {
+      state_.render_error = std::string(magic_enum::enum_name(rendered.rcm.code));
+    }
+    state_.cached_render = NormalizePromptOutput_(BuildFallbackPrompt_(arg));
   } else {
-    state_.cached_render = rendered.data;
+    state_.render_ok = true;
+    state_.render_error.clear();
+    state_.cached_render = NormalizePromptOutput_(rendered.data);
   }
   state_.has_cached_render = true;
   return state_.cached_render;
@@ -73,8 +185,9 @@ void CLIPromtRender::InvalidateCache() {
   state_.cached_render.clear();
   state_.has_cached_render = false;
   state_.parse_ok = false;
+  state_.render_ok = true;
+  state_.render_error.clear();
   state_.parsed_context = {};
-  state_.required_vars.clear();
   state_.diagnostics = {};
 }
 
@@ -109,6 +222,7 @@ void CLIPromtRender::RegisterDefaultGetters_() {
   RegisterGetter("cwd", []() { return "/"; });
   RegisterGetter("task_pending", []() { return "0"; });
   RegisterGetter("task_running", []() { return "0"; });
+  RegisterGetter("task_paused", []() { return "0"; });
   RegisterGetter("time_now", []() {
     return FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
   });
@@ -178,11 +292,20 @@ std::string CLIPromtRender::ResolveCorePromptFormat_() const {
 
 ECMData<std::string>
 CLIPromtRender::RenderPromptFormat_(const RenderArg &arg) const {
-  PromptVarMap vars = state_.required_vars;
-  for (auto &entry : vars) {
-    entry.second = ResolveKeywordValue_(entry.first, arg);
-  }
+  const PromptVarMap vars = BuildRenderVars_(arg);
   return interpreter_.Render(state_.parsed_context, vars);
+}
+
+PromptVarMap CLIPromtRender::BuildRenderVars_(const RenderArg &arg) const {
+  PromptVarMap vars = {};
+  for (const auto &entry : getters_) {
+    vars[entry.first] = ResolveKeywordValue_(entry.first, arg);
+  }
+  for (const std::string &builtin :
+       {"nickname", "elapsed", "success", "ec_name"}) {
+    vars[builtin] = ResolveKeywordValue_(builtin, arg);
+  }
+  return vars;
 }
 
 std::string CLIPromtRender::BuildFallbackPrompt_(const RenderArg &arg) const {
@@ -202,11 +325,13 @@ void CLIPromtRender::RefreshTemplateCache_() {
   state_.compiled_template = fmt;
   state_.cached_render.clear();
   state_.has_cached_render = false;
+  state_.render_ok = true;
+  state_.render_error.clear();
 
   auto parsed = interpreter_.Parse(fmt);
   state_.parse_ok = (parsed.rcm) && !parsed.data.diagnostics.HasError();
   state_.parsed_context = std::move(parsed.data.context);
-  state_.required_vars = std::move(parsed.data.required_vars);
+  state_.compiled_template = state_.parsed_context.source;
   state_.diagnostics = std::move(parsed.data.diagnostics);
 }
 
