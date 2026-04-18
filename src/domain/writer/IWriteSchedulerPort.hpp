@@ -38,8 +38,3 @@ public:
   [[nodiscard]] virtual bool IsRunning() const = 0;
 };
 } // namespace AMDomain::writer
-
-/**
- * @brief Global convenience alias for the domain write scheduler port.
- */
-using IWriteSchedulerPort = AMDomain::writer::IWriteSchedulerPort;

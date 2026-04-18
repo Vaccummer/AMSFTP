@@ -3,10 +3,10 @@
 #include <string>
 
 namespace AMDomain::log {
-using TraceLevel = AMDomain::client::TraceLevel;
-using TraceSource = AMDomain::client::TraceSource;
-using TraceInfo = AMDomain::client::TraceInfo;
-using ConRequest = AMDomain::host::ConRequest;
+using AMDomain::client::TraceInfo;
+using AMDomain::client::TraceLevel;
+using AMDomain::client::TraceSource;
+using AMDomain::host::ConRequest;
 
 /**
  * @brief Typed logger selector for one registered writer channel.

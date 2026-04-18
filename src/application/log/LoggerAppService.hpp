@@ -11,9 +11,10 @@
 #include <unordered_map>
 
 namespace AMApplication::log {
-
+using AMDomain::writer::IWriteSchedulerPort;
 /**
- * @brief Logger application service with async scheduling and writer routing.
+ * @brief Logger application service with async scheduling and writer
+ * routing.
  */
 class LoggerAppService final : public NonCopyableNonMovable {
 public:

@@ -14,7 +14,7 @@ public:
    * @brief Construct writer with optional initial output path.
    */
   explicit AMInfraFileLoggerWriter(
-      const std::filesystem::path &path = std::filesystem::path());
+      std::filesystem::path path = std::filesystem::path());
 
   /**
    * @brief Flush and close stream resources.

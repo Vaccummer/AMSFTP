@@ -103,8 +103,3 @@ private:
 };
 
 } // namespace AMInfra::signal
-
-/**
- * @brief Backward-compatible alias for legacy call sites.
- */
-using AMInfraCliSignalMonitor = AMInfra::signal::SignalMonitorImpl;

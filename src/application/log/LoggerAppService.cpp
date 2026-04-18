@@ -1,6 +1,5 @@
 #include "application/log/LoggerAppService.hpp"
 #include "domain/log/LoggerDomainService.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 #include <sstream>
@@ -9,6 +8,7 @@
 namespace AMApplication::log {
 namespace {
 using AMDomain::log::service::kDefaultTraceLevel;
+using AMDomain::writer::IWriteSchedulerPort;
 } // namespace
 
 LoggerAppService::LoggerAppService(
@@ -90,7 +90,8 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
     std::lock_guard<std::mutex> lock(mtx_);
     auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
-      return Err(EC::InvalidArg, "", "", AMStr::fmt("Logger writer {} is not registered", logger_type));
+      return Err(EC::InvalidArg, "", "",
+                 AMStr::fmt("Logger writer {} is not registered", logger_type));
     }
     writer = writer_iter->second;
     scheduler = scheduler_;
@@ -137,7 +138,7 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
 ECM LoggerAppService::WriteLine(AMDomain::log::LoggerType logger_type,
                                 const std::string &line) {
   WriterPtr writer = nullptr;
-  std::shared_ptr<IWriteSchedulerPort> scheduler = nullptr;
+  std::shared_ptr<AMDomain::writer::IWriteSchedulerPort> scheduler = nullptr;
   ErrorReporter reporter = {};
   {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -243,5 +244,3 @@ void LoggerAppService::ReportError_(const ErrorReporter &reporter,
 }
 
 } // namespace AMApplication::log
-
-
