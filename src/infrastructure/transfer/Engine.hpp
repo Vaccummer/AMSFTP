@@ -3,6 +3,9 @@
 #include "infrastructure/transfer/Common.hpp"
 #include "infrastructure/transfer/RuntimeProgress.hpp"
 
+#include <deque>
+#include <future>
+
 namespace AMInfra::transfer {
 class TransferExecutionEngine final : NonCopyableNonMovable {
 public:

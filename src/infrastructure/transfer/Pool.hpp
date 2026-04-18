@@ -1,5 +1,5 @@
 #pragma once
-
+#include "domain/transfer/TransferPort.hpp"
 #include "infrastructure/transfer/Engine.hpp"
 
 namespace AMInfra::transfer {
@@ -15,8 +15,7 @@ public:
   size_t ThreadCount(size_t new_count = 0) override;
   size_t MaxThreadCount(size_t new_max = 0) override;
 
-  [[nodiscard]] std::unordered_map<size_t, bool>
-  GetThreadIDs() const override;
+  [[nodiscard]] std::unordered_map<size_t, bool> GetThreadIDs() const override;
 
   ECM Submit(TaskHandle task_info) override;
 
@@ -42,6 +41,49 @@ public:
                                        int grace_period_ms = 1500) override;
 
 private:
+  struct PoolControlState_ {
+    std::atomic<bool> running{true};
+    std::atomic<bool> is_deconstruct{false};
+    std::atomic<size_t> desired_thread_count{0};
+    std::atomic<size_t> max_thread_count{1};
+  };
+
+  struct WorkerRuntime_ {
+    std::vector<std::jthread> threads = {};
+    mutable std::mutex mtx = {};
+    std::vector<std::unique_ptr<TransferExecutionEngine>> engines = {};
+  };
+
+  struct HeartbeatRuntime_ {
+    std::jthread thread = {};
+    std::atomic<bool> running{false};
+    std::atomic<int> interval_s{0};
+    std::atomic<int> timeout_ms{100};
+    mutable std::mutex wait_mtx = {};
+    std::condition_variable cv = {};
+  };
+
+  struct QueueRuntime_ {
+    mutable std::mutex mtx = {};
+    std::condition_variable cv = {};
+    std::vector<std::list<TaskID>> affinity = {};
+    std::list<TaskID> public_queue = {};
+    mutable TaskRegistry registry = {};
+  };
+
+  struct ConductingRuntime_ {
+    mutable std::mutex mtx = {};
+    std::condition_variable cv = {};
+    std::unordered_set<TaskID> tasks = {};
+    std::vector<TaskID> by_thread = {};
+    std::vector<TaskHandle> infos = {};
+  };
+
+  struct PoolConfig_ {
+    AMDomain::transfer::TransferManagerArg manager_arg = {};
+  };
+
+private:
   void CancelPendingTasksOnExit_(
       const std::string &reason = "Task canceled while shutting down");
   void RegisterTask(const TaskHandle &task_info, TaskAssignType assign_type,
@@ -65,29 +107,11 @@ private:
   [[nodiscard]] std::unordered_map<TaskID, TaskHandle> GetRegistryCopy() const;
 
 private:
-  std::atomic<bool> running_{true};
-  std::atomic<size_t> desired_thread_count_{0};
-  std::atomic<size_t> max_thread_count_{1};
-  std::vector<std::jthread> worker_threads_ = {};
-  mutable std::mutex worker_mtx_ = {};
-  std::jthread heartbeat_thread_ = {};
-  std::atomic<bool> heartbeat_running_{false};
-  std::atomic<int> heartbeat_interval_s_{0};
-  std::atomic<int> heartbeat_timeout_ms_{100};
-  mutable std::mutex heartbeat_wait_mtx_ = {};
-  std::condition_variable heartbeat_cv_ = {};
-  mutable std::mutex queue_mtx_ = {};
-  std::condition_variable queue_cv_ = {};
-  std::vector<std::list<TaskID>> affinity_queues_ = {};
-  std::list<TaskID> public_queue_ = {};
-  mutable TaskRegistry task_registry_ = {};
-  mutable std::mutex conducting_mtx_ = {};
-  std::condition_variable conducting_cv_ = {};
-  std::unordered_set<TaskID> conducting_tasks_ = {};
-  std::vector<TaskID> conducting_by_thread_ = {};
-  std::vector<TaskHandle> conducting_infos_ = {};
-  AMDomain::transfer::TransferManagerArg manager_arg_ = {};
-  std::vector<std::unique_ptr<TransferExecutionEngine>> engines_ = {};
-  std::atomic<bool> is_deconstruct{false};
+  PoolControlState_ control_ = {};
+  WorkerRuntime_ workers_ = {};
+  HeartbeatRuntime_ heartbeat_ = {};
+  QueueRuntime_ queue_ = {};
+  ConductingRuntime_ conducting_ = {};
+  PoolConfig_ config_ = {};
 };
 } // namespace AMInfra::transfer

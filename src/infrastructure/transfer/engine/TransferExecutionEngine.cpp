@@ -1,4 +1,3 @@
-#include "domain/client/ClientModel.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/http/HTTP.hpp"
@@ -105,11 +104,13 @@ ECM TransferExecutionEngine::TransferSignleFile(
     return {EC::InvalidArg, "", "", "Invalid transfer input"};
   }
   {
-    const ECM src_guard = detail::EnsureTransferClientReady(src_client, __func__);
+    const ECM src_guard =
+        detail::EnsureTransferClientReady(src_client, __func__);
     if (!(src_guard)) {
       return src_guard;
     }
-    const ECM dst_guard = detail::EnsureTransferClientReady(dst_client, __func__);
+    const ECM dst_guard =
+        detail::EnsureTransferClientReady(dst_client, __func__);
     if (!(dst_guard)) {
       return dst_guard;
     }
@@ -179,8 +180,8 @@ ECM TransferExecutionEngine::TransferSignleFile(
   const size_t begin_transferred = task->transferred;
   std::future<ECM> read_future = EnqueueReadJob_(src_client, task_info, &pd);
   const ECM write_rcm = detail::ExecuteBufferToSink(dst_client, task_info, pd);
-  if (write_rcm.code != EC::Success && (!task->rcm.has_value() ||
-                                        task->rcm->code == EC::Success)) {
+  if (write_rcm.code != EC::Success &&
+      (!task->rcm.has_value() || task->rcm->code == EC::Success)) {
     task->rcm = write_rcm;
   }
   if (read_future.valid()) {
@@ -197,7 +198,8 @@ ECM TransferExecutionEngine::TransferSignleFile(
   if (task_info->Core.control.IsTimeout()) {
     return {EC::OperationTimeout, "", "", "Task timeout"};
   }
-  if (detail::IsTaskHardInterrupted(task_info) && !task_info->IsPauseRequested()) {
+  if (detail::IsTaskHardInterrupted(task_info) &&
+      !task_info->IsPauseRequested()) {
     return {EC::Terminate, "", "", "Task terminated by user"};
   }
   if (pd.io_abort.load(std::memory_order_relaxed) &&
@@ -513,12 +515,13 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
     return;
   }
 
-  const bool terminated_requested =
-      detail::IsTaskHardInterrupted(task_info) && !task_info->IsPauseRequested();
+  const bool terminated_requested = detail::IsTaskHardInterrupted(task_info) &&
+                                    !task_info->IsPauseRequested();
   if (terminated_requested) {
     const ECM terminate_rcm = {EC::Terminate, "", "",
                                "Task terminated by user"};
-    detail::MarkUnfinishedTransferEntries(task_info, terminate_rcm, record_error);
+    detail::MarkUnfinishedTransferEntries(task_info, terminate_rcm,
+                                          record_error);
   }
 
   if (task_info->Core.control.IsTimeout()) {

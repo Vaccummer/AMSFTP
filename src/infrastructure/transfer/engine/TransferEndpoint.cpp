@@ -1,7 +1,6 @@
 #include "domain/client/ClientModel.hpp"
 #include "domain/transfer/TransferDomainModel.hpp"
 #include "foundation/core/DataClass.hpp"
-#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/ftp/FTP.hpp"
@@ -11,12 +10,10 @@
 #include "infrastructure/transfer/engine/TransferExecutionDetail.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <curl/curl.h>
 #include <mutex>
-#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -1315,7 +1312,6 @@ private:
       SignalTaskIoAbort_(*pd);
     }
   }
-
 };
 } // namespace
 
@@ -1356,14 +1352,13 @@ size_t ClampBufferSizeByPolicy(size_t requested,
 }
 
 ClientHandle ResolveTaskClient(const TransferClientContainer &clients,
-                               const std::string &nickname,
-                               bool use_dst_role) {
+                               const std::string &nickname, bool use_dst_role) {
   return ResolveTaskClientHelper(clients, nickname, use_dst_role);
 }
 
 ECM ExecuteSourceToBuffer(const ClientHandle &client,
-                         const TaskHandle &task_info,
-                         TransferRuntimeProgress &progress) {
+                          const TaskHandle &task_info,
+                          TransferRuntimeProgress &progress) {
   if (!client || !task_info) {
     return Err(EC::InvalidArg, "", "", "Invalid source transfer input");
   }
@@ -1376,8 +1371,7 @@ ECM ExecuteSourceToBuffer(const ClientHandle &client,
   return OK;
 }
 
-ECM ExecuteBufferToSink(const ClientHandle &client,
-                        const TaskHandle &task_info,
+ECM ExecuteBufferToSink(const ClientHandle &client, const TaskHandle &task_info,
                         TransferRuntimeProgress &progress) {
   if (!client || !task_info) {
     return Err(EC::InvalidArg, "", "", "Invalid sink transfer input");
