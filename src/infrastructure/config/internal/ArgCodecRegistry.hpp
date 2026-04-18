@@ -28,19 +28,19 @@ public:
   /**
    * @brief Decode one JSON root into output payload.
    */
-  [[nodiscard]] virtual bool Decode(const Json &root, void *out,
+  [[nodiscard]] virtual bool Decode(const AMJson::Json &root, void *out,
                                     std::string *error) const = 0;
 
   /**
    * @brief Encode one payload into JSON root.
    */
-  [[nodiscard]] virtual bool Encode(const void *in, Json *root,
+  [[nodiscard]] virtual bool Encode(const void *in, AMJson::Json *root,
                                     std::string *error) const = 0;
 
   /**
    * @brief Erase one payload subtree from JSON root.
    */
-  [[nodiscard]] virtual bool Erase(const void *in, Json *root,
+  [[nodiscard]] virtual bool Erase(const void *in, AMJson::Json *root,
                                    std::string *error) const = 0;
 };
 
@@ -56,8 +56,7 @@ public:
   /**
    * @brief Lookup codec by RTTI key.
    */
-  [[nodiscard]] const IArgCodec *
-  Find(const std::type_index &type_key) const;
+  [[nodiscard]] const IArgCodec *Find(const std::type_index &type_key) const;
 
 private:
   std::unordered_map<std::type_index, const IArgCodec *> map_ = {};
@@ -74,22 +73,20 @@ BuildCodecMap();
  */
 [[nodiscard]] bool DecodeArg(const ArgCodecRegistry &registry,
                              const std::type_index &type_key,
-                             const Json &root, void *out,
+                             const AMJson::Json &root, void *out,
                              std::string *error = nullptr);
 
 /**
  * @brief Encode one typed payload into JSON root by RTTI key.
  */
 [[nodiscard]] bool EncodeArg(const ArgCodecRegistry &registry,
-                             const std::type_index &type_key,
-                             const void *in, Json *root,
-                             std::string *error = nullptr);
+                             const std::type_index &type_key, const void *in,
+                             AMJson::Json *root, std::string *error = nullptr);
 
 /**
  * @brief Erase one typed payload subtree from JSON root by RTTI key.
  */
 [[nodiscard]] bool EraseArg(const ArgCodecRegistry &registry,
-                            const std::type_index &type_key,
-                            const void *in, Json *root,
-                            std::string *error = nullptr);
+                            const std::type_index &type_key, const void *in,
+                            AMJson::Json *root, std::string *error = nullptr);
 } // namespace AMInfra::config

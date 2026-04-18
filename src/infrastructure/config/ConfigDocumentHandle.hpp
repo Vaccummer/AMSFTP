@@ -51,11 +51,11 @@ public:
   /**
    * @brief Return a copy of in-memory JSON document.
    */
-  [[nodiscard]] virtual bool GetJson(Json *out) const = 0;
+  [[nodiscard]] virtual bool GetJson(AMJson::Json *out) const = 0;
 
   /**
    * @brief Replace the in-memory JSON document.
    */
-  virtual bool SetJson(const Json &json) = 0;
+  virtual bool SetJson(const AMJson::Json &json) = 0;
 };
 } // namespace AMInfra::config
