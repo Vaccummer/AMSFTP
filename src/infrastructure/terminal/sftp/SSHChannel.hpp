@@ -1,5 +1,7 @@
 #pragma once
 
+#include "domain/host/HostDomainService.hpp"
+#include "domain/host/HostModel.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/client/sftp/SFTP.hpp"
 #include "infrastructure/terminal/ChannelCachePort.hpp"
@@ -7,7 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <limits>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -21,16 +23,127 @@
 #endif
 
 namespace AMInfra::terminal::SFTP {
+using AMDomain::client::ClientHandle;
+using AMInfra::client::SFTP::ChannelHandle;
 namespace AMT = AMDomain::terminal;
 namespace AMSFTP = AMInfra::client::SFTP;
 
+namespace detail {
+
+struct ChannelBinding_ {
+  ClientHandle owner_client = nullptr;
+  AMSFTP::AMSFTPIOCore *sftp_core = nullptr;
+};
+
+struct ChannelIdentity_ {
+  std::string terminal_key = {};
+  std::string channel_name = {};
+};
+
+struct ChannelRuntimeAttrs_ {
+  ChannelHandle channel_holder = {};
+  bool eof = false;
+  int exit_status = -1;
+  ECM state = OK;
+  int window_cols = 80;
+  int window_rows = 24;
+  int window_width = 0;
+  int window_height = 0;
+  std::string term = "xterm-256color";
+};
+
+struct ChannelForegroundAttrs_ {
+  std::string send_buffer = {};
+  int last_cols = -1;
+  int last_rows = -1;
+  bool foreground_bound = false;
+  bool detach_requested = false;
+  bool closed = false;
+  ECM last_error = OK;
+  std::intptr_t key_event_handle = -1;
+  AMAtomic<std::vector<char>> *key_cache = nullptr;
+  int write_kick_timeout_ms = 0;
+  AMDomain::client::amf control_token = nullptr;
+};
+
+#ifdef _WIN32
+struct ChannelLoopEvents_ {
+  SOCKET remote_socket = INVALID_SOCKET;
+  WSAEVENT socket_event = WSA_INVALID_EVENT;
+  HANDLE wake_event = nullptr;
+  HANDLE stop_event = nullptr;
+  HANDLE state_event = nullptr;
+  HANDLE interrupt_event = nullptr;
+  std::unique_ptr<AMDomain::client::InterruptWakeupSafeGuard>
+      foreground_wake_guard = nullptr;
+};
+#endif
+
+[[nodiscard]] inline std::string
+ResolveTerminalKey_(const ClientHandle &owner_client) {
+  if (!owner_client) {
+    return {};
+  }
+  auto const &config = owner_client->ConfigPort();
+  std::string const raw_nickname =
+      AMStr::Strip(config.GetNickname().empty() ? config.GetRequest().nickname
+                                                : config.GetNickname());
+  if (raw_nickname.empty()) {
+    return {};
+  }
+  return AMDomain::host::HostService::NormalizeNickname(raw_nickname);
+}
+
+[[nodiscard]] inline ChannelBinding_
+ResolveChannelBinding_(const ClientHandle &owner_client) {
+  ChannelBinding_ binding = {};
+  binding.owner_client = owner_client;
+  if (!owner_client) {
+    return binding;
+  }
+  if (owner_client->ConfigPort().GetProtocol() !=
+      AMDomain::host::ClientProtocol::SFTP) {
+    return binding;
+  }
+  binding.sftp_core =
+      dynamic_cast<AMSFTP::AMSFTPIOCore *>(&owner_client->IOPort());
+  return binding;
+}
+
+[[nodiscard]] inline ECM ValidateChannelBinding_(const ChannelBinding_ &binding,
+                                                 const char *operation,
+                                                 const std::string &target) {
+  if (!binding.owner_client) {
+    return Err(EC::InvalidHandle, operation, target, "Client handle is null");
+  }
+  if (binding.owner_client->ConfigPort().GetProtocol() !=
+      AMDomain::host::ClientProtocol::SFTP) {
+    return Err(EC::OperationUnsupported, operation, target,
+               "Client protocol is not SFTP");
+  }
+  if (binding.sftp_core == nullptr) {
+    return Err(EC::InvalidHandle, operation, target,
+               "Client IOPort is not compatible with AMSFTPIOCore");
+  }
+  return OK;
+}
+
+[[nodiscard]] inline ECM ContextualizeRCM_(ECM rcm, std::string operation,
+                                           const std::string &target) {
+  rcm.operation = std::move(operation);
+  rcm.target = target;
+  return rcm;
+}
+
+} // namespace detail
+
 class RealtimeSSHChannelPort final : public AMT::IChannelPort {
 public:
-  RealtimeSSHChannelPort(std::string terminal_key, std::string channel_name,
-                         AMSFTP::AMSFTPIOCore *sftp_core, std::string host)
-      : terminal_key_(std::move(terminal_key)),
-        channel_name_(std::move(channel_name)), cache_(channel_name_),
-        sftp_core_(sftp_core), host_(std::move(host)) {}
+  RealtimeSSHChannelPort(ClientHandle owner_client, std::string channel_name)
+      : binding_(detail::ResolveChannelBinding_(std::move(owner_client))),
+        identity_(detail::ResolveTerminalKey_(binding_.owner_client),
+                  AMStr::Strip(channel_name)),
+        cache_(identity_.channel_name) {}
 
   ~RealtimeSSHChannelPort() override {
     RequestStop_();
@@ -39,20 +152,20 @@ public:
   }
 
   [[nodiscard]] std::string GetTerminalKey() const override {
-    return terminal_key_;
+    return identity_.terminal_key;
   }
 
   [[nodiscard]] std::string GetChannelName() const override {
-    return channel_name_;
+    return identity_.channel_name;
   }
 
-  [[nodiscard]] ECMData<std::intptr_t> GetWaitHandle() const override {
-    if (sftp_core_ == nullptr) {
-      return {static_cast<std::intptr_t>(-1),
-              Err(EC::NoSession, "terminal.channel.wait_handle",
-                  GetChannelName(), "SFTP IO core is unavailable")};
+  [[nodiscard]] ECMData<SOCKET> GetWaitHandle() const override {
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.wait_handle", GetChannelName());
+    if (!binding_rcm) {
+      return {INVALID_SOCKET, binding_rcm};
     }
-    std::intptr_t const handle = sftp_core_->RemoteSocketHandle();
+    auto const handle = binding_.sftp_core->Socket();
     if (handle < 0) {
       return {handle, Err(EC::NoConnection, "terminal.channel.wait_handle",
                           GetChannelName(), "Remote socket is unavailable")};
@@ -62,94 +175,100 @@ public:
 
   ECM Init(const AMT::ChannelInitArgs &init_args,
            const ControlComponent &control = {}) override {
-    if (sftp_core_ == nullptr) {
-      return Err(EC::NoSession, "terminal.channel.init", GetChannelName(),
-                 "SFTP IO core is unavailable");
+    if (identity_.channel_name.empty()) {
+      return {EC::InvalidArg, "terminal.channel.init", identity_.channel_name,
+              "channel_name is empty"};
     }
 
-    std::lock_guard<std::recursive_mutex> lock(sftp_core_->TransferMutex());
-    LIBSSH2_SESSION *session = sftp_core_->Session();
+    binding_ = detail::ResolveChannelBinding_(binding_.owner_client);
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.init", GetChannelName());
+    if (!binding_rcm) {
+      return binding_rcm;
+    }
+    identity_.terminal_key = detail::ResolveTerminalKey_(binding_.owner_client);
+
+    std::lock_guard<std::recursive_mutex> lock(
+        binding_.sftp_core->TransferMutex());
+    LIBSSH2_SESSION *session = binding_.sftp_core->Session();
     if (session == nullptr) {
-      return Err(EC::NoConnection, "terminal.channel.init", GetChannelName(),
-                 "Client session is not connected");
+      return {EC::NoConnection, "terminal.channel.init", GetChannelName(),
+              "Client session is not connected"};
     }
 
-    if (channel_holder_ && channel_holder_->channel &&
-        !channel_holder_->closed && !eof_) {
-      return Err(EC::TargetAlreadyExists, "terminal.channel.init",
-                 GetChannelName(), "Channel is already initialized");
+    if (runtime_.channel_holder && runtime_.channel_holder->IsOpen() &&
+        !runtime_.eof) {
+      return {EC::TargetAlreadyExists, "terminal.channel.init",
+              GetChannelName(), "Channel is already initialized"};
     }
 
-    window_cols_ = std::max(1, init_args.cols);
-    window_rows_ = std::max(1, init_args.rows);
-    window_width_ = std::max(0, init_args.width);
-    window_height_ = std::max(0, init_args.height);
-    term_ = init_args.term.empty() ? "xterm-256color" : init_args.term;
+    runtime_.window_cols = std::max(1, init_args.cols);
+    runtime_.window_rows = std::max(1, init_args.rows);
+    runtime_.window_width = std::max(0, init_args.width);
+    runtime_.window_height = std::max(0, init_args.height);
+    runtime_.term = init_args.term.empty() ? "xterm-256color" : init_args.term;
 
-    channel_holder_ = std::make_unique<AMSFTP::detail::SafeChannel>();
-    eof_ = false;
-    exit_status_ = -1;
-    state_ = OK;
-
-    const AMDomain::client::amf control_token = control.ControlToken();
-    auto is_interrupted = [control_token]() -> bool {
-      return control_token && control_token->IsInterrupted();
-    };
-
-    ECM init_ecm =
-        channel_holder_->Init(session, std::move(is_interrupted),
-                              TimeoutMs_(control), AMTime::miliseconds());
-    if (init_ecm.code != ErrorCode::Success) {
-      channel_holder_.reset();
-      eof_ = true;
-      state_ = init_ecm;
-      return init_ecm;
+    runtime_.eof = false;
+    runtime_.exit_status = -1;
+    runtime_.state = OK;
+    auto create_res = binding_.sftp_core->CreateChannel(control);
+    if (!(create_res.rcm)) {
+      runtime_.channel_holder.reset();
+      runtime_.eof = true;
+      runtime_.state = create_res.rcm;
+      return create_res.rcm;
     }
+    runtime_.channel_holder = std::move(create_res.data);
 
     libssh2_session_set_blocking(session, 0);
-    auto pty_res = sftp_core_->NBPerform(control, [&]() {
+    auto pty_res = binding_.sftp_core->NBPerform(control, [&]() {
       return libssh2_channel_request_pty_ex(
-          channel_holder_->channel, term_.c_str(),
-          static_cast<unsigned int>(term_.size()), nullptr, 0, window_cols_,
-          window_rows_, window_width_, window_height_);
+          runtime_.channel_holder->Raw(), runtime_.term.c_str(),
+          static_cast<unsigned int>(runtime_.term.size()), nullptr, 0,
+          runtime_.window_cols, runtime_.window_rows, runtime_.window_width,
+          runtime_.window_height);
     });
     if (!pty_res) {
-      ECM ecm = ContextualizeRCM_(pty_res.rcm, "terminal.channel.init.pty");
-      channel_holder_.reset();
-      eof_ = true;
-      state_ = ecm;
+      ECM ecm = detail::ContextualizeRCM_(
+          pty_res.rcm, "terminal.channel.init.pty", GetChannelName());
+      runtime_.channel_holder.reset();
+      runtime_.eof = true;
+      runtime_.state = ecm;
       return ecm;
     }
     if (pty_res.value != 0) {
-      ECM ecm = Err(LastEC_(), "terminal.channel.init.pty", GetChannelName(),
-                    LastError_());
-      channel_holder_.reset();
-      eof_ = true;
-      state_ = ecm;
+      ECM ecm =
+          Err(binding_.sftp_core->GetLastEC(), "terminal.channel.init.pty",
+              GetChannelName(), binding_.sftp_core->GetLastErrorMsg());
+      runtime_.channel_holder.reset();
+      runtime_.eof = true;
+      runtime_.state = ecm;
       return ecm;
     }
 
-    auto shell_res = sftp_core_->NBPerform(control, [&]() {
-      return libssh2_channel_shell(channel_holder_->channel);
+    auto shell_res = binding_.sftp_core->NBPerform(control, [&]() {
+      return libssh2_channel_shell(runtime_.channel_holder->Raw());
     });
     if (!shell_res) {
-      ECM ecm = ContextualizeRCM_(shell_res.rcm, "terminal.channel.init.shell");
-      channel_holder_.reset();
-      eof_ = true;
-      state_ = ecm;
+      ECM ecm = detail::ContextualizeRCM_(
+          shell_res.rcm, "terminal.channel.init.shell", GetChannelName());
+      runtime_.channel_holder.reset();
+      runtime_.eof = true;
+      runtime_.state = ecm;
       return ecm;
     }
     if (shell_res.value != 0) {
-      ECM ecm = Err(LastEC_(), "terminal.channel.init.shell", GetChannelName(),
-                    LastError_());
-      channel_holder_.reset();
-      eof_ = true;
-      state_ = ecm;
+      ECM ecm =
+          Err(binding_.sftp_core->GetLastEC(), "terminal.channel.init.shell",
+              GetChannelName(), binding_.sftp_core->GetLastErrorMsg());
+      runtime_.channel_holder.reset();
+      runtime_.eof = true;
+      runtime_.state = ecm;
       return ecm;
     }
 
-    state_ = OK;
-    eof_ = false;
+    runtime_.state = OK;
+    runtime_.eof = false;
     return OK;
   }
 
@@ -159,8 +278,8 @@ public:
       return Err(EC::InvalidArg, "terminal.channel.rename", GetChannelName(),
                  "new channel name is empty");
     }
-    channel_name_ = renamed;
-    cache_.SetChannelName(channel_name_);
+    identity_.channel_name = renamed;
+    cache_.SetChannelName(identity_.channel_name);
     return OK;
   }
 
@@ -191,12 +310,12 @@ public:
     if (!(close_result.rcm)) {
       cache_.MarkChannelClosed(close_result.rcm);
       std::lock_guard<std::mutex> lock(mutex_);
-      last_error_ = close_result.rcm;
-      closed_ = true;
+      foreground_.last_error = close_result.rcm;
+      foreground_.closed = true;
     } else {
       cache_.MarkChannelClosed(OK);
       std::lock_guard<std::mutex> lock(mutex_);
-      closed_ = true;
+      foreground_.closed = true;
     }
     NotifyState_();
     return close_result;
@@ -211,11 +330,12 @@ public:
 
   [[nodiscard]] AMT::ChannelPortState GetState() const override {
     auto state = cache_.GetState();
-    if (closed_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (foreground_.closed) {
       state.closed = true;
     }
-    if (!(state_)) {
-      state.last_error = state_;
+    if (!(runtime_.state)) {
+      state.last_error = runtime_.state;
     }
     return state;
   }
@@ -236,18 +356,14 @@ public:
       const AMT::ChannelLoopStartArgs &start_args = {}) override {
 #ifdef _WIN32
     auto socket_result = GetWaitHandle();
-    if (!(socket_result.rcm) || socket_result.data < 0) {
+    if (!socket_result.rcm || socket_result.data != INVALID_SOCKET) {
       return socket_result.rcm
                  ? Err(EC::NoConnection, "terminal.channel.loop.start",
                        GetChannelName(), "Remote socket is invalid")
                  : socket_result.rcm;
     }
 
-    remote_socket_ = static_cast<SOCKET>(socket_result.data);
-    if (remote_socket_ == INVALID_SOCKET) {
-      return Err(EC::NoConnection, "terminal.channel.loop.start",
-                 GetChannelName(), "Remote socket is invalid");
-    }
+    loop_events_.remote_socket = socket_result.data;
 
     if (!EnsureLoopEvents_()) {
       return Err(EC::CommonFailure, "terminal.channel.loop.start",
@@ -257,7 +373,7 @@ public:
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (start_args.write_kick_timeout_ms >= 0) {
-        write_kick_timeout_ms_ = start_args.write_kick_timeout_ms;
+        foreground_.write_kick_timeout_ms = start_args.write_kick_timeout_ms;
       }
     }
 
@@ -266,8 +382,8 @@ public:
     }
 
     stop_requested_.store(false, std::memory_order_release);
-    (void)ResetEvent(stop_event_);
-    (void)ResetEvent(wake_event_);
+    (void)ResetEvent(loop_events_.stop_event);
+    (void)ResetEvent(loop_events_.wake_event);
     loop_thread_ = std::jthread(
         [this](std::stop_token stop_token) { RunLoop_(stop_token); });
     loop_started_.store(true, std::memory_order_release);
@@ -304,19 +420,22 @@ public:
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      foreground_bound_ = true;
-      detach_requested_ = false;
-      key_event_handle_ = bind_args.key_event_handle;
-      key_cache_ = bind_args.key_cache;
-      write_kick_timeout_ms_ = std::max(0, bind_args.write_kick_timeout_ms);
+      foreground_.foreground_bound = true;
+      foreground_.detach_requested = false;
+      foreground_.key_event_handle = bind_args.key_event_handle;
+      foreground_.key_cache = bind_args.key_cache;
+      foreground_.write_kick_timeout_ms =
+          std::max(0, bind_args.write_kick_timeout_ms);
       key_ctrl_state_.store(false, std::memory_order_release);
-      control_token_ = bind_args.control.ControlToken();
+      foreground_.control_token = bind_args.control.ControlToken();
 #ifdef _WIN32
-      foreground_wake_guard_.reset();
-      if (interrupt_event_ != nullptr && control_token_) {
-        foreground_wake_guard_ =
+      loop_events_.foreground_wake_guard.reset();
+      if (loop_events_.interrupt_event != nullptr &&
+          foreground_.control_token) {
+        loop_events_.foreground_wake_guard =
             std::make_unique<AMDomain::client::InterruptWakeupSafeGuard>(
-                control_token_, [this]() { (void)SetEvent(interrupt_event_); });
+                foreground_.control_token,
+                [this]() { (void)SetEvent(loop_events_.interrupt_event); });
       }
 #endif
     }
@@ -328,13 +447,15 @@ public:
   ECM UnbindForeground() override {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      foreground_bound_ = false;
-      detach_requested_ = false;
-      key_event_handle_ = -1;
-      key_cache_ = nullptr;
-      control_token_ = nullptr;
+      foreground_.foreground_bound = false;
+      foreground_.detach_requested = false;
+      foreground_.key_event_handle = -1;
+      foreground_.key_cache = nullptr;
+      foreground_.control_token = nullptr;
       key_ctrl_state_.store(false, std::memory_order_release);
-      foreground_wake_guard_.reset();
+#ifdef _WIN32
+      loop_events_.foreground_wake_guard.reset();
+#endif
     }
     (void)DetachConsumer();
     NotifyWake_();
@@ -345,13 +466,15 @@ public:
   ECM RequestForegroundDetach() override {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      foreground_bound_ = false;
-      detach_requested_ = true;
-      key_event_handle_ = -1;
-      key_cache_ = nullptr;
-      control_token_ = nullptr;
+      foreground_.foreground_bound = false;
+      foreground_.detach_requested = true;
+      foreground_.key_event_handle = -1;
+      foreground_.key_cache = nullptr;
+      foreground_.control_token = nullptr;
       key_ctrl_state_.store(false, std::memory_order_release);
-      foreground_wake_guard_.reset();
+#ifdef _WIN32
+      loop_events_.foreground_wake_guard.reset();
+#endif
     }
     (void)DetachConsumer();
     NotifyWake_();
@@ -363,13 +486,14 @@ public:
     AMT::ChannelLoopState out = {};
     std::lock_guard<std::mutex> lock(mutex_);
     out.loop_running = loop_running_.load(std::memory_order_acquire);
-    out.foreground_bound = foreground_bound_;
-    out.closed = closed_;
-    out.detach_requested = detach_requested_;
-    out.last_error = last_error_;
-    out.has_error = !(last_error_);
+    out.foreground_bound = foreground_.foreground_bound;
+    out.closed = foreground_.closed;
+    out.detach_requested = foreground_.detach_requested;
+    out.last_error = foreground_.last_error;
+    out.has_error = !(foreground_.last_error);
 #ifdef _WIN32
-    out.state_wait_handle = reinterpret_cast<std::intptr_t>(state_event_);
+    out.state_wait_handle =
+        reinterpret_cast<std::intptr_t>(loop_events_.state_event);
 #else
     out.state_wait_handle = -1;
 #endif
@@ -377,80 +501,49 @@ public:
   }
 
 private:
-  [[nodiscard]] bool HasBinding_() const { return sftp_core_ != nullptr; }
-
-  [[nodiscard]] ErrorCode LastEC_() const {
-    if (sftp_core_ == nullptr) {
-      return ErrorCode::NoSession;
-    }
-    return sftp_core_->GetLastEC();
-  }
-
-  [[nodiscard]] std::string LastError_() const {
-    if (sftp_core_ == nullptr) {
-      return "Session not initialized";
-    }
-    return sftp_core_->GetLastErrorMsg();
-  }
-
-  [[nodiscard]] static int TimeoutMs_(ControlComponent const &control) {
-    auto const remain_opt = control.RemainingTimeMs();
-    if (!remain_opt.has_value()) {
-      return -1;
-    }
-    return static_cast<int>(std::min<unsigned int>(
-        *remain_opt,
-        static_cast<unsigned int>((std::numeric_limits<int>::max)())));
-  }
-
-  [[nodiscard]] ECM ContextualizeRCM_(ECM rcm, std::string operation) const {
-    rcm.operation = std::move(operation);
-    rcm.target = GetChannelName();
-    return rcm;
-  }
-
   [[nodiscard]] ECM WaitUntilReadable_(ControlComponent const &control) {
-    if (!HasBinding_()) {
-      return Err(EC::InvalidHandle, "terminal.channel.read", GetChannelName(),
-                 "Channel binding is invalid");
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.read", GetChannelName());
+    if (!binding_rcm) {
+      return binding_rcm;
     }
-    auto &holder = channel_holder_;
-    if (!holder || !holder->channel || sftp_core_ == nullptr) {
+    auto &holder = runtime_.channel_holder;
+    if (!holder || !holder->IsOpen()) {
       return Err(EC::NoConnection, "terminal.channel.read", GetChannelName(),
                  "Channel is closed");
     }
 
-    auto wait_res = sftp_core_->NBPerform(control, [&]() {
-      if (libssh2_channel_eof(holder->channel) != 0) {
+    auto wait_res = binding_.sftp_core->NBPerform(control, [&]() {
+      if (libssh2_channel_eof(holder->Raw()) != 0) {
         return 1;
       }
-      if (libssh2_poll_channel_read(holder->channel, 0) > 0 ||
-          libssh2_poll_channel_read(holder->channel, 1) > 0) {
+      if (libssh2_poll_channel_read(holder->Raw(), 0) > 0 ||
+          libssh2_poll_channel_read(holder->Raw(), 1) > 0) {
         return 1;
       }
       return LIBSSH2_ERROR_EAGAIN;
     });
     if (!wait_res) {
-      return ContextualizeRCM_(wait_res.rcm, "terminal.channel.read");
+      return detail::ContextualizeRCM_(wait_res.rcm, "terminal.channel.read",
+                                       GetChannelName());
     }
     return OK;
   }
 
   [[nodiscard]] bool IsChannelAliveUnlocked_() {
-    if (!HasBinding_()) {
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.state", GetChannelName());
+    if (!binding_rcm) {
       return false;
     }
-    auto &holder = channel_holder_;
-    if (!holder || !holder->channel) {
+    auto &holder = runtime_.channel_holder;
+    if (!holder || !holder->IsOpen()) {
+      runtime_.eof = true;
       return false;
     }
-    if (holder->closed) {
-      eof_ = true;
-      return false;
-    }
-    if (libssh2_channel_eof(holder->channel) != 0) {
-      eof_ = true;
-      exit_status_ = libssh2_channel_get_exit_status(holder->channel);
+    if (libssh2_channel_eof(holder->Raw()) != 0) {
+      runtime_.eof = true;
+      runtime_.exit_status = holder->ExitStatus();
       return false;
     }
     return true;
@@ -459,12 +552,17 @@ private:
   [[nodiscard]] ECM ReadChunk_(std::string *output, size_t max_bytes,
                                ssize_t (*reader)(LIBSSH2_CHANNEL *, char *,
                                                  size_t)) {
-    if (!HasBinding_() || output == nullptr) {
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.read", GetChannelName());
+    if (!binding_rcm) {
+      return binding_rcm;
+    }
+    if (output == nullptr) {
       return Err(EC::InvalidArg, "terminal.channel.read", GetChannelName(),
                  "Invalid read state");
     }
-    auto &holder = channel_holder_;
-    if (!holder || !holder->channel) {
+    auto &holder = runtime_.channel_holder;
+    if (!holder || !holder->IsOpen()) {
       return Err(EC::NoConnection, "terminal.channel.read", GetChannelName(),
                  "Channel is closed");
     }
@@ -473,23 +571,23 @@ private:
     while (output->size() < max_bytes) {
       size_t const left = max_bytes - output->size();
       size_t const cap = std::min(buffer.size(), left);
-      ssize_t const rc = reader(holder->channel, buffer.data(), cap);
+      ssize_t const rc = reader(holder->Raw(), buffer.data(), cap);
       if (rc > 0) {
-        if (sftp_core_ != nullptr) {
-          sftp_core_->TouchLastIO();
+        if (binding_.sftp_core != nullptr) {
+          binding_.sftp_core->TouchLastIO();
         }
         output->append(buffer.data(), static_cast<size_t>(rc));
         continue;
       }
       if (rc == 0 || rc == LIBSSH2_ERROR_EAGAIN) {
-        eof_ = libssh2_channel_eof(holder->channel) != 0;
-        if (eof_) {
-          exit_status_ = libssh2_channel_get_exit_status(holder->channel);
+        runtime_.eof = libssh2_channel_eof(holder->Raw()) != 0;
+        if (runtime_.eof) {
+          runtime_.exit_status = holder->ExitStatus();
         }
         return OK;
       }
-      return Err(LastEC_(), "terminal.channel.read", GetChannelName(),
-                 LastError_());
+      return Err(binding_.sftp_core->GetLastEC(), "terminal.channel.read",
+                 GetChannelName(), binding_.sftp_core->GetLastErrorMsg());
     }
     return OK;
   }
@@ -500,14 +598,16 @@ private:
     ECMData<AMT::ChannelReadResult> out = {};
     out.data.channel_name = GetChannelName();
 
-    if (!HasBinding_()) {
-      out.rcm = Err(EC::InvalidHandle, "terminal.channel.read",
-                    GetChannelName(), "Channel binding is invalid");
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.read", GetChannelName());
+    if (!binding_rcm) {
+      out.rcm = binding_rcm;
       out.data.eof = true;
       return out;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(sftp_core_->TransferMutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        binding_.sftp_core->TransferMutex());
     if (!IsChannelAliveUnlocked_()) {
       out.rcm = Err(EC::NoConnection, "terminal.channel.read", GetChannelName(),
                     "Interactive channel not initialized");
@@ -528,7 +628,7 @@ private:
       if (!(read_rcm)) {
         return read_rcm;
       }
-      if (out.data.output.size() >= max_bytes || eof_) {
+      if (out.data.output.size() >= max_bytes || runtime_.eof) {
         return OK;
       }
       ECM stderr_rcm =
@@ -544,25 +644,25 @@ private:
 
     out.rcm = drain_output();
     if (!(out.rcm)) {
-      out.data.eof = eof_;
+      out.data.eof = runtime_.eof;
       return out;
     }
 
-    if (!out.data.output.empty() || eof_) {
-      out.data.eof = eof_;
+    if (!out.data.output.empty() || runtime_.eof) {
+      out.data.eof = runtime_.eof;
       return out;
     }
 
     if (control.RemainingTimeMs().has_value()) {
       out.rcm = WaitUntilReadable_(control);
       if (!(out.rcm)) {
-        out.data.eof = eof_;
+        out.data.eof = runtime_.eof;
         return out;
       }
       out.rcm = drain_output();
     }
 
-    out.data.eof = eof_;
+    out.data.eof = runtime_.eof;
     return out;
   }
 
@@ -572,29 +672,32 @@ private:
     ECMData<AMT::ChannelWriteResult> out = {};
     out.data.channel_name = GetChannelName();
 
-    if (!HasBinding_()) {
-      out.rcm = Err(EC::InvalidHandle, "terminal.channel.write",
-                    GetChannelName(), "Channel binding is invalid");
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.write", GetChannelName());
+    if (!binding_rcm) {
+      out.rcm = binding_rcm;
       return out;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(sftp_core_->TransferMutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        binding_.sftp_core->TransferMutex());
     if (!IsChannelAliveUnlocked_()) {
       out.rcm = Err(EC::NoConnection, "terminal.channel.write",
                     GetChannelName(), "Interactive channel not initialized");
       return out;
     }
 
-    auto &holder = channel_holder_;
+    auto &holder = runtime_.channel_holder;
     size_t offset = 0;
     while (offset < write_args.input.size()) {
-      auto write_res = sftp_core_->NBPerform(control, [&]() {
+      auto write_res = binding_.sftp_core->NBPerform(control, [&]() {
         return libssh2_channel_write(
-            holder->channel, write_args.input.data() + offset,
+            holder->Raw(), write_args.input.data() + offset,
             static_cast<int>(write_args.input.size() - offset));
       });
       if (!write_res) {
-        out.rcm = ContextualizeRCM_(write_res.rcm, "terminal.channel.write");
+        out.rcm = detail::ContextualizeRCM_(
+            write_res.rcm, "terminal.channel.write", GetChannelName());
         out.data.bytes_written = offset;
         return out;
       }
@@ -602,8 +705,8 @@ private:
         offset += static_cast<size_t>(write_res.value);
         continue;
       }
-      out.rcm = Err(LastEC_(), "terminal.channel.write", GetChannelName(),
-                    LastError_());
+      out.rcm = Err(binding_.sftp_core->GetLastEC(), "terminal.channel.write",
+                    GetChannelName(), binding_.sftp_core->GetLastErrorMsg());
       out.data.bytes_written = offset;
       return out;
     }
@@ -619,17 +722,19 @@ private:
     ECMData<AMT::ChannelResizeResult> out = {};
     out.data.channel_name = GetChannelName();
 
-    if (!HasBinding_()) {
-      out.rcm = Err(EC::InvalidHandle, "terminal.channel.resize",
-                    GetChannelName(), "Channel binding is invalid");
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.resize", GetChannelName());
+    if (!binding_rcm) {
+      out.rcm = binding_rcm;
       return out;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(sftp_core_->TransferMutex());
-    window_cols_ = resize_args.cols;
-    window_rows_ = resize_args.rows;
-    window_width_ = resize_args.width;
-    window_height_ = resize_args.height;
+    std::lock_guard<std::recursive_mutex> lock(
+        binding_.sftp_core->TransferMutex());
+    runtime_.window_cols = resize_args.cols;
+    runtime_.window_rows = resize_args.rows;
+    runtime_.window_width = resize_args.width;
+    runtime_.window_height = resize_args.height;
 
     if (!IsChannelAliveUnlocked_()) {
       out.rcm = OK;
@@ -637,20 +742,21 @@ private:
       return out;
     }
 
-    auto &holder = channel_holder_;
-    auto resize_res = sftp_core_->NBPerform(control, [&]() {
-      return libssh2_channel_request_pty_size_ex(holder->channel, window_cols_,
-                                                 window_rows_, window_width_,
-                                                 window_height_);
+    auto &holder = runtime_.channel_holder;
+    auto resize_res = binding_.sftp_core->NBPerform(control, [&]() {
+      return libssh2_channel_request_pty_size_ex(
+          holder->Raw(), runtime_.window_cols, runtime_.window_rows,
+          runtime_.window_width, runtime_.window_height);
     });
     if (!resize_res) {
-      out.rcm = ContextualizeRCM_(resize_res.rcm, "terminal.channel.resize");
+      out.rcm = detail::ContextualizeRCM_(
+          resize_res.rcm, "terminal.channel.resize", GetChannelName());
       out.data.resized = false;
       return out;
     }
     if (resize_res.value != 0) {
-      out.rcm = Err(LastEC_(), "terminal.channel.resize", GetChannelName(),
-                    LastError_());
+      out.rcm = Err(binding_.sftp_core->GetLastEC(), "terminal.channel.resize",
+                    GetChannelName(), binding_.sftp_core->GetLastErrorMsg());
       out.data.resized = false;
       return out;
     }
@@ -660,47 +766,30 @@ private:
     return out;
   }
 
-  void BindCloseControl_(AMSFTP::detail::SafeChannel *channel,
-                         ControlComponent const &control) {
-    if (channel == nullptr) {
-      return;
-    }
-    auto const control_token = control.ControlToken();
-    auto is_interrupted = [control_token]() -> bool {
-      return control_token && control_token->IsInterrupted();
-    };
-    int const timeout_ms = TimeoutMs_(control);
-    channel->SetControlContext(std::move(is_interrupted),
-                               timeout_ms >= 0 ? timeout_ms
-                                               : kDefaultCloseTimeoutMs_,
-                               AMTime::miliseconds());
-  }
-
   [[nodiscard]] ECMData<AMT::ChannelCloseResult>
   RawClose_(bool force, ControlComponent const &control) {
     ECMData<AMT::ChannelCloseResult> out = {};
     out.data.channel_name = GetChannelName();
 
-    if (!HasBinding_()) {
-      out.rcm = Err(EC::InvalidHandle, "terminal.channel.close",
-                    GetChannelName(), "Channel binding is invalid");
+    ECM const binding_rcm = detail::ValidateChannelBinding_(
+        binding_, "terminal.channel.close", GetChannelName());
+    if (!binding_rcm) {
+      out.rcm = binding_rcm;
       return out;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(sftp_core_->TransferMutex());
-    auto &holder = channel_holder_;
-    if (holder && holder->channel) {
-      exit_status_ = libssh2_channel_get_exit_status(holder->channel);
-      BindCloseControl_(holder.get(), control);
-      out.rcm = holder->graceful_exit(!force, 50, true);
-      holder->closed = true;
-      holder.reset();
+    std::lock_guard<std::recursive_mutex> lock(
+        binding_.sftp_core->TransferMutex());
+    auto &holder = runtime_.channel_holder;
+    if (holder && holder->Raw() != nullptr) {
+      runtime_.exit_status = holder->ExitStatus();
+      out.rcm = binding_.sftp_core->CloseChannel(holder, force, control);
     } else {
       out.rcm = OK;
     }
 
-    eof_ = true;
-    out.data.exit_code = exit_status_;
+    runtime_.eof = true;
+    out.data.exit_code = runtime_.exit_status;
     out.data.closed = true;
 
     if (out.rcm.code == ErrorCode::Success ||
@@ -710,10 +799,10 @@ private:
     }
 
     if (out.rcm) {
-      state_ = Err(EC::NoConnection, "terminal.channel.state", GetChannelName(),
-                   "Channel is closed");
+      runtime_.state = Err(EC::NoConnection, "terminal.channel.state",
+                           GetChannelName(), "Channel is closed");
     } else {
-      state_ = out.rcm;
+      runtime_.state = out.rcm;
     }
     return out;
   }
@@ -721,59 +810,62 @@ private:
 private:
 #ifdef _WIN32
   bool EnsureLoopEvents_() {
-    if (state_event_ == nullptr) {
-      state_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (loop_events_.state_event == nullptr) {
+      loop_events_.state_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     }
-    if (wake_event_ == nullptr) {
-      wake_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (loop_events_.wake_event == nullptr) {
+      loop_events_.wake_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     }
-    if (stop_event_ == nullptr) {
-      stop_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (loop_events_.stop_event == nullptr) {
+      loop_events_.stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     }
-    if (interrupt_event_ == nullptr) {
-      interrupt_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (loop_events_.interrupt_event == nullptr) {
+      loop_events_.interrupt_event =
+          CreateEventW(nullptr, FALSE, FALSE, nullptr);
     }
-    if (socket_event_ == WSA_INVALID_EVENT) {
-      socket_event_ = WSACreateEvent();
+    if (loop_events_.socket_event == WSA_INVALID_EVENT) {
+      loop_events_.socket_event = WSACreateEvent();
     }
-    return state_event_ != nullptr && wake_event_ != nullptr &&
-           stop_event_ != nullptr && interrupt_event_ != nullptr &&
-           socket_event_ != WSA_INVALID_EVENT;
+    return loop_events_.state_event != nullptr &&
+           loop_events_.wake_event != nullptr &&
+           loop_events_.stop_event != nullptr &&
+           loop_events_.interrupt_event != nullptr &&
+           loop_events_.socket_event != WSA_INVALID_EVENT;
   }
 
   void CloseLoopEvents_() {
-    foreground_wake_guard_.reset();
-    if (socket_event_ != WSA_INVALID_EVENT) {
-      (void)WSACloseEvent(socket_event_);
-      socket_event_ = WSA_INVALID_EVENT;
+    loop_events_.foreground_wake_guard.reset();
+    if (loop_events_.socket_event != WSA_INVALID_EVENT) {
+      (void)WSACloseEvent(loop_events_.socket_event);
+      loop_events_.socket_event = WSA_INVALID_EVENT;
     }
-    if (interrupt_event_ != nullptr) {
-      (void)CloseHandle(interrupt_event_);
-      interrupt_event_ = nullptr;
+    if (loop_events_.interrupt_event != nullptr) {
+      (void)CloseHandle(loop_events_.interrupt_event);
+      loop_events_.interrupt_event = nullptr;
     }
-    if (stop_event_ != nullptr) {
-      (void)CloseHandle(stop_event_);
-      stop_event_ = nullptr;
+    if (loop_events_.stop_event != nullptr) {
+      (void)CloseHandle(loop_events_.stop_event);
+      loop_events_.stop_event = nullptr;
     }
-    if (wake_event_ != nullptr) {
-      (void)CloseHandle(wake_event_);
-      wake_event_ = nullptr;
+    if (loop_events_.wake_event != nullptr) {
+      (void)CloseHandle(loop_events_.wake_event);
+      loop_events_.wake_event = nullptr;
     }
-    if (state_event_ != nullptr) {
-      (void)CloseHandle(state_event_);
-      state_event_ = nullptr;
+    if (loop_events_.state_event != nullptr) {
+      (void)CloseHandle(loop_events_.state_event);
+      loop_events_.state_event = nullptr;
     }
   }
 
   void NotifyState_() const {
-    if (state_event_ != nullptr) {
-      (void)SetEvent(state_event_);
+    if (loop_events_.state_event != nullptr) {
+      (void)SetEvent(loop_events_.state_event);
     }
   }
 
   void NotifyWake_() const {
-    if (wake_event_ != nullptr) {
-      (void)SetEvent(wake_event_);
+    if (loop_events_.wake_event != nullptr) {
+      (void)SetEvent(loop_events_.wake_event);
     }
   }
 
@@ -782,8 +874,8 @@ private:
     if (loop_thread_.joinable()) {
       loop_thread_.request_stop();
     }
-    if (stop_event_ != nullptr) {
-      (void)SetEvent(stop_event_);
+    if (loop_events_.stop_event != nullptr) {
+      (void)SetEvent(loop_events_.stop_event);
     }
     NotifyWake_();
   }
@@ -808,32 +900,34 @@ private:
       int write_kick_timeout_ms = 0;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        fg = foreground_bound_;
-        key_handle = key_event_handle_;
-        key_cache = key_cache_;
-        write_kick_timeout_ms = write_kick_timeout_ms_;
-        if (closed_) {
+        fg = foreground_.foreground_bound;
+        key_handle = foreground_.key_event_handle;
+        key_cache = foreground_.key_cache;
+        write_kick_timeout_ms = foreground_.write_kick_timeout_ms;
+        if (foreground_.closed) {
           break;
         }
       }
 
       long mask = FD_READ | FD_CLOSE;
-      if (!send_buffer_.empty()) {
+      if (!foreground_.send_buffer.empty()) {
         mask |= FD_WRITE;
       }
-      if (WSAEventSelect(remote_socket_, socket_event_, mask) == SOCKET_ERROR) {
+      if (WSAEventSelect(loop_events_.remote_socket, loop_events_.socket_event,
+                         mask) == SOCKET_ERROR) {
         std::lock_guard<std::mutex> lock(mutex_);
-        last_error_ =
+        foreground_.last_error =
             Err(EC::SocketRecvError, "terminal.channel.loop.wait_mask",
                 GetChannelName(),
                 AMStr::fmt("WSAEventSelect failed: {}", WSAGetLastError()));
-        closed_ = true;
+        foreground_.closed = true;
         break;
       }
 
-      std::array<HANDLE, 5> handles = {stop_event_, wake_event_,
-                                       reinterpret_cast<HANDLE>(socket_event_),
-                                       nullptr, nullptr};
+      std::array<HANDLE, 5> handles = {
+          loop_events_.stop_event, loop_events_.wake_event,
+          reinterpret_cast<HANDLE>(loop_events_.socket_event), nullptr,
+          nullptr};
       DWORD count = 3;
       DWORD key_idx = static_cast<DWORD>(-1);
       DWORD interrupt_idx = static_cast<DWORD>(-1);
@@ -841,19 +935,19 @@ private:
         key_idx = count;
         handles[count++] = reinterpret_cast<HANDLE>(key_handle);
       }
-      if (fg && interrupt_event_ != nullptr) {
+      if (fg && loop_events_.interrupt_event != nullptr) {
         interrupt_idx = count;
-        handles[count++] = interrupt_event_;
+        handles[count++] = loop_events_.interrupt_event;
       }
 
       DWORD const wait_rc =
           WaitForMultipleObjects(count, handles.data(), FALSE, INFINITE);
       if (wait_rc == WAIT_FAILED) {
         std::lock_guard<std::mutex> lock(mutex_);
-        last_error_ = Err(
+        foreground_.last_error = Err(
             EC::CommonFailure, "terminal.channel.loop.wait", GetChannelName(),
             AMStr::fmt("WaitForMultipleObjects failed: {}", GetLastError()));
-        closed_ = true;
+        foreground_.closed = true;
         break;
       }
       DWORD const idx = wait_rc - WAIT_OBJECT_0;
@@ -872,21 +966,23 @@ private:
       }
 
       bool const socket_ready =
-          (idx == 2U) || (WSAWaitForMultipleEvents(1, &socket_event_, FALSE, 0,
-                                                   FALSE) == WSA_WAIT_EVENT_0);
+          (idx == 2U) ||
+          (WSAWaitForMultipleEvents(1, &loop_events_.socket_event, FALSE, 0,
+                                    FALSE) == WSA_WAIT_EVENT_0);
       if (!socket_ready) {
         continue;
       }
 
       WSANETWORKEVENTS events = {};
-      if (WSAEnumNetworkEvents(remote_socket_, socket_event_, &events) ==
-          SOCKET_ERROR) {
+      if (WSAEnumNetworkEvents(loop_events_.remote_socket,
+                               loop_events_.socket_event,
+                               &events) == SOCKET_ERROR) {
         std::lock_guard<std::mutex> lock(mutex_);
-        last_error_ = Err(
+        foreground_.last_error = Err(
             EC::SocketRecvError, "terminal.channel.loop.socket_events",
             GetChannelName(),
             AMStr::fmt("WSAEnumNetworkEvents failed: {}", WSAGetLastError()));
-        closed_ = true;
+        foreground_.closed = true;
         break;
       }
 
@@ -896,25 +992,25 @@ private:
       if (read_ready) {
         DrainRemote_();
       }
-      if (write_ready && !send_buffer_.empty()) {
+      if (write_ready && !foreground_.send_buffer.empty()) {
         FlushSend_();
       }
     }
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      foreground_bound_ = false;
-      key_event_handle_ = -1;
-      key_cache_ = nullptr;
-      control_token_ = nullptr;
+      foreground_.foreground_bound = false;
+      foreground_.key_event_handle = -1;
+      foreground_.key_cache = nullptr;
+      foreground_.control_token = nullptr;
       key_ctrl_state_.store(false, std::memory_order_release);
-      closed_ = true;
-      foreground_wake_guard_.reset();
+      foreground_.closed = true;
+      loop_events_.foreground_wake_guard.reset();
     }
     (void)DetachConsumer();
     loop_running_.store(false, std::memory_order_release);
     loop_started_.store(false, std::memory_order_release);
-    cache_.MarkChannelClosed(last_error_);
+    cache_.MarkChannelClosed(foreground_.last_error);
     NotifyState_();
   }
 
@@ -927,14 +1023,14 @@ private:
         }
         std::lock_guard<std::mutex> lock(mutex_);
         if (!(r.rcm)) {
-          last_error_ = r.rcm;
+          foreground_.last_error = r.rcm;
         } else if (!(r.data.last_error)) {
-          last_error_ = r.data.last_error;
+          foreground_.last_error = r.data.last_error;
         }
         if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
-          closed_ = true;
+          foreground_.closed = true;
           stop_requested_.store(true, std::memory_order_release);
-          (void)SetEvent(stop_event_);
+          (void)SetEvent(loop_events_.stop_event);
           NotifyState_();
         }
         return;
@@ -961,31 +1057,32 @@ private:
     if (cols <= 0 || rows <= 0) {
       return;
     }
-    if (cols == last_cols_ && rows == last_rows_) {
+    if (cols == foreground_.last_cols && rows == foreground_.last_rows) {
       return;
     }
     auto resize_result = Resize({cols, rows, 0, 0}, {});
     if (resize_result.rcm) {
-      last_cols_ = cols;
-      last_rows_ = rows;
+      foreground_.last_cols = cols;
+      foreground_.last_rows = rows;
     }
   }
 
   void FlushSend_() {
-    for (int i = 0; i < 16 && !send_buffer_.empty(); ++i) {
+    for (int i = 0; i < 16 && !foreground_.send_buffer.empty(); ++i) {
       HandleResizeBeforeWrite_();
-      size_t const n = std::min<size_t>(32U * 1024U, send_buffer_.size());
-      std::string const chunk(send_buffer_.data(), n);
+      size_t const n =
+          std::min<size_t>(32U * 1024U, foreground_.send_buffer.size());
+      std::string const chunk(foreground_.send_buffer.data(), n);
       auto w = WriteRaw({chunk}, {});
       if (!(w.rcm)) {
         std::lock_guard<std::mutex> lock(mutex_);
-        last_error_ = w.rcm;
+        foreground_.last_error = w.rcm;
         if (w.rcm.code == EC::NoConnection ||
             w.rcm.code == EC::ConnectionLost || w.rcm.code == EC::NoSession ||
             w.rcm.code == EC::ClientNotFound) {
-          closed_ = true;
+          foreground_.closed = true;
           stop_requested_.store(true, std::memory_order_release);
-          (void)SetEvent(stop_event_);
+          (void)SetEvent(loop_events_.stop_event);
           NotifyState_();
         }
         return;
@@ -995,7 +1092,7 @@ private:
       if (consumed == 0U) {
         return;
       }
-      send_buffer_.erase(0, consumed);
+      foreground_.send_buffer.erase(0, consumed);
       if (consumed < chunk.size()) {
         return;
       }
@@ -1024,7 +1121,7 @@ private:
           key_ctrl_state_.store(true, std::memory_order_release);
           continue;
         }
-        send_buffer_.push_back(ch);
+        foreground_.send_buffer.push_back(ch);
         continue;
       }
 
@@ -1034,19 +1131,21 @@ private:
       }
 
       key_ctrl_state_.store(false, std::memory_order_release);
-      send_buffer_.push_back(ch);
+      foreground_.send_buffer.push_back(ch);
     }
 
-    if (send_buffer_.empty()) {
+    if (foreground_.send_buffer.empty()) {
       return;
     }
 
     if (kick_timeout_ms > 0) {
       long const mask = FD_READ | FD_CLOSE | FD_WRITE;
-      (void)WSAEventSelect(remote_socket_, socket_event_, mask);
-      std::array<HANDLE, 4> waiters = {stop_event_, wake_event_,
-                                       reinterpret_cast<HANDLE>(socket_event_),
-                                       interrupt_event_};
+      (void)WSAEventSelect(loop_events_.remote_socket,
+                           loop_events_.socket_event, mask);
+      std::array<HANDLE, 4> waiters = {
+          loop_events_.stop_event, loop_events_.wake_event,
+          reinterpret_cast<HANDLE>(loop_events_.socket_event),
+          loop_events_.interrupt_event};
       DWORD const kick_rc = WaitForMultipleObjects(
           static_cast<DWORD>(waiters.size()), waiters.data(), FALSE,
           static_cast<DWORD>(kick_timeout_ms));
@@ -1064,24 +1163,11 @@ private:
   void NotifyWake_() const {}
 #endif
 
-private:
-  static constexpr int kDefaultCloseTimeoutMs_ = 1500;
-
-  std::string terminal_key_ = {};
-  std::string channel_name_ = {};
+  detail::ChannelBinding_ binding_ = {};
+  detail::ChannelIdentity_ identity_ = {};
   ChannelCacheStore cache_;
-  AMSFTP::AMSFTPIOCore *sftp_core_ = nullptr;
-  std::string host_ = {};
-
-  std::unique_ptr<AMSFTP::detail::SafeChannel> channel_holder_ = {};
-  bool eof_ = false;
-  int exit_status_ = -1;
-  ECM state_ = OK;
-  int window_cols_ = 80;
-  int window_rows_ = 24;
-  int window_width_ = 0;
-  int window_height_ = 0;
-  std::string term_ = "xterm-256color";
+  detail::ChannelRuntimeAttrs_ runtime_ = {};
+  detail::ChannelForegroundAttrs_ foreground_ = {};
 
   mutable std::mutex mutex_ = {};
 
@@ -1089,30 +1175,10 @@ private:
   std::atomic<bool> loop_started_ = false;
   std::atomic<bool> loop_running_ = false;
   std::atomic<bool> stop_requested_ = false;
-
-  std::string send_buffer_ = {};
   std::atomic<bool> key_ctrl_state_ = false;
-  int last_cols_ = -1;
-  int last_rows_ = -1;
-
-  bool foreground_bound_ = false;
-  bool detach_requested_ = false;
-  bool closed_ = false;
-  ECM last_error_ = OK;
-  std::intptr_t key_event_handle_ = -1;
-  AMAtomic<std::vector<char>> *key_cache_ = nullptr;
-  int write_kick_timeout_ms_ = 0;
-  AMDomain::client::amf control_token_ = nullptr;
 
 #ifdef _WIN32
-  SOCKET remote_socket_ = INVALID_SOCKET;
-  WSAEVENT socket_event_ = WSA_INVALID_EVENT;
-  HANDLE wake_event_ = nullptr;
-  HANDLE stop_event_ = nullptr;
-  HANDLE state_event_ = nullptr;
-  HANDLE interrupt_event_ = nullptr;
-  std::unique_ptr<AMDomain::client::InterruptWakeupSafeGuard>
-      foreground_wake_guard_ = nullptr;
+  detail::ChannelLoopEvents_ loop_events_ = {};
 #endif
 };
 

@@ -46,7 +46,7 @@ public:
   [[nodiscard]] virtual std::optional<ECM>
   GetChannelState(const std::string &channel_name) const = 0;
 
-  [[nodiscard]] virtual ECMData<std::intptr_t> GetChannelWaitHandle(
+  [[nodiscard]] virtual ECMData<SOCKET> GetChannelWaitHandle(
       const std::optional<std::string> &channel_name) const = 0;
 };
 
@@ -75,9 +75,9 @@ public:
     return channel_name_;
   }
 
-  [[nodiscard]] ECMData<std::intptr_t> GetWaitHandle() const override {
+  [[nodiscard]] ECMData<SOCKET> GetWaitHandle() const override {
     if (owner_ == nullptr) {
-      return {static_cast<std::intptr_t>(-1),
+      return {INVALID_SOCKET,
               Err(EC::InvalidHandle, "terminal.channel.wait_handle",
                   channel_name_, "Local channel owner is null")};
     }

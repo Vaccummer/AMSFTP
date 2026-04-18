@@ -1323,41 +1323,41 @@ public:
     return it->second;
   }
 
-  ECMData<std::intptr_t>
+  ECMData<SOCKET>
   GetChannelWaitHandle(const std::optional<std::string> &channel_name) const {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const std::string target_name = ResolveTargetChannelName_(channel_name);
     if (target_name.empty()) {
-      return {static_cast<std::intptr_t>(-1),
+      return {INVALID_SOCKET,
               Err(EC::NoConnection, "terminal.channel.wait_handle",
                   request_.nickname, "No active channel available")};
     }
     auto it = channel_runtimes_.find(target_name);
     if (it == channel_runtimes_.end()) {
-      return {static_cast<std::intptr_t>(-1),
+      return {INVALID_SOCKET,
               Err(EC::NoConnection, "terminal.channel.wait_handle",
                   request_.nickname, "Target channel not found")};
     }
 #ifdef _WIN32
     if (it->second.output_read == INVALID_HANDLE_VALUE) {
-      return {static_cast<std::intptr_t>(-1),
+      return {INVALID_SOCKET,
               Err(EC::NoConnection, "terminal.channel.wait_handle",
                   request_.nickname, "Channel output handle is unavailable")};
     }
-    return {static_cast<std::intptr_t>(
+    return {static_cast<SOCKET>(
                 reinterpret_cast<std::intptr_t>(it->second.output_read)),
             OK};
 #else
     if (it->second.master_fd < 0) {
-      return {static_cast<std::intptr_t>(-1),
+      return {INVALID_SOCKET,
               Err(EC::NoConnection, "terminal.channel.wait_handle",
                   request_.nickname, "Channel PTY fd is unavailable")};
     }
-    return {static_cast<std::intptr_t>(it->second.master_fd), OK};
+    return {static_cast<SOCKET>(it->second.master_fd), OK};
 #endif
   }
 
-  ECMData<std::intptr_t> GetRemoteSocketHandle() const {
+  ECMData<SOCKET> GetRemoteSocketHandle() const {
     return GetChannelWaitHandle(std::nullopt);
   }
 };

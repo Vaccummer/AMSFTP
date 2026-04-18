@@ -66,6 +66,8 @@ inline int closesocket(SOCKET s) { return close(s); }
 #endif
 
 namespace AMInfra::client::SFTP {
+class SafeChannel;
+using ChannelHandle = sptr<SafeChannel>;
 using TraceLevel = AMDomain::client::TraceLevel;
 using KnownHostQuery = AMDomain::host::KnownHostQuery;
 using KnownHostCallback = AMDomain::client::KnownHostCallback;
@@ -816,16 +818,19 @@ inline int ResolveTimeoutMs_(const ControlComponent &control) {
                                                 : kMaxPollTimeoutMs;
 }
 
+} // namespace detail
+
 class SafeChannel {
 public:
-  LIBSSH2_CHANNEL *channel = nullptr;
-  bool closed = false; // Mark whether it has been closed normally
-  bool is_init = false;
-  std::function<bool()> init_is_interrupted_cb;
+  enum class State { Open, Closing, Closed };
+
+private:
+  LIBSSH2_CHANNEL *channel_ = nullptr;
+  std::atomic<State> state_{State::Closed};
+  std::function<bool()> init_is_interrupted_cb = {};
   int64_t init_start_time = -1;
   int init_timeout_ms = -1;
 
-private:
   /**
    * @brief Persist initialization context used by retryable operations.
    */
@@ -850,7 +855,42 @@ private:
     return OK;
   }
 
+  void MarkOpen_() { state_.store(State::Open, std::memory_order_release); }
+
+  void MarkClosed_() { state_.store(State::Closed, std::memory_order_release); }
+
+  void ReopenAfterCloseFailure_() {
+    if (channel_ != nullptr) {
+      state_.store(State::Open, std::memory_order_release);
+      return;
+    }
+    MarkClosed_();
+  }
+
+  bool TryBeginClose_() {
+    State expected = State::Open;
+    return state_.compare_exchange_strong(expected, State::Closing,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_acquire);
+  }
+
 public:
+  [[nodiscard]] LIBSSH2_CHANNEL *Raw() const { return channel_; }
+
+  [[nodiscard]] bool IsOpen() const {
+    return channel_ != nullptr &&
+           state_.load(std::memory_order_acquire) == State::Open;
+  }
+
+  [[nodiscard]] bool IsClosed() const {
+    return channel_ == nullptr ||
+           state_.load(std::memory_order_acquire) == State::Closed;
+  }
+
+  [[nodiscard]] int ExitStatus() const {
+    return channel_ == nullptr ? -1 : libssh2_channel_get_exit_status(channel_);
+  }
+
   /**
    * @brief Update control context used by close/retry operations.
    */
@@ -860,55 +900,60 @@ public:
   }
 
   ~SafeChannel() {
-    if (channel) {
-      if (!closed) {
+    if (channel_ != nullptr) {
+      if (state_.load(std::memory_order_acquire) == State::Open) {
         // Best-effort graceful stop before releasing the channel handle.
         (void)graceful_exit(true, 50, true);
       }
-      libssh2_channel_free(channel);
-      channel = nullptr;
+      libssh2_channel_free(channel_);
+      channel_ = nullptr;
     }
-    is_init = false;
+    MarkClosed_();
   }
 
   // Close channel normally (blocking mode)
   // Return true on success, false on failure
   bool close() {
-    if (!channel || closed) {
-      is_init = false;
-      return closed;
+    if (channel_ == nullptr) {
+      MarkClosed_();
+      return true;
     }
-    if (libssh2_channel_close(channel) == 0 &&
-        libssh2_channel_wait_closed(channel) == 0) {
-      closed = true;
-      is_init = false;
+    if (!TryBeginClose_()) {
+      return IsClosed();
     }
-    return closed;
+    if (libssh2_channel_close(channel_) == 0 &&
+        libssh2_channel_wait_closed(channel_) == 0) {
+      MarkClosed_();
+      return true;
+    }
+    ReopenAfterCloseFailure_();
+    return false;
   }
 
   // Send exit signal (do not wait for close)
   void request_exit() {
-    if (!channel) {
+    if (channel_ == nullptr) {
       return;
     }
-    libssh2_channel_send_eof(channel);
-    libssh2_channel_signal(channel, "TERM");
+    libssh2_channel_send_eof(channel_);
+    libssh2_channel_signal(channel_, "TERM");
   }
 
   // Non-blocking close; use with wait_for_socket
   // Return values: 0=success, EAGAIN=wait required, <0=error
   int close_nonblock() {
-    if (!channel)
+    if (channel_ == nullptr) {
+      MarkClosed_();
       return -1;
-    if (closed)
+    }
+    if (state_.load(std::memory_order_acquire) == State::Closed)
       return 0;
 
-    int rc = libssh2_channel_close(channel);
+    int rc = libssh2_channel_close(channel_);
     if (rc == 0) {
-      rc = libssh2_channel_wait_closed(channel);
+      rc = libssh2_channel_wait_closed(channel_);
       if (rc == 0) {
-        closed = true;
-        is_init = false;
+        MarkClosed_();
       }
     }
     return rc;
@@ -922,10 +967,13 @@ public:
   explicit SafeChannel(LIBSSH2_CHANNEL *existing_channel,
                        std::function<bool()> is_interrupted_cb = {},
                        int timeout_ms = -1, int64_t start_time = -1) {
-    channel = existing_channel;
-    closed = false;
-    is_init = existing_channel != nullptr;
+    channel_ = existing_channel;
     StoreInitContext_(std::move(is_interrupted_cb), timeout_ms, start_time);
+    if (existing_channel != nullptr) {
+      MarkOpen_();
+    } else {
+      MarkClosed_();
+    }
   }
 
   /**
@@ -942,45 +990,43 @@ public:
            int64_t start_time = -1) {
     StoreInitContext_(std::move(is_interrupted_cb), timeout_ms, start_time);
     if (!session) {
-      is_init = false;
+      MarkClosed_();
       return {EC::NoSession, "", "", "Session is null"};
     }
-    if (channel) {
-      if (!closed) {
+    if (channel_ != nullptr) {
+      if (state_.load(std::memory_order_acquire) == State::Open) {
         (void)graceful_exit(true, 50, true);
       }
-      libssh2_channel_free(channel);
-      channel = nullptr;
-      closed = false;
-      is_init = false;
+      libssh2_channel_free(channel_);
+      channel_ = nullptr;
+      MarkClosed_();
     }
 
     while (true) {
       ECM control_retry = CheckControlState_("Channel init");
       if (control_retry.code != EC::Success) {
-        is_init = false;
+        MarkClosed_();
         return control_retry;
       }
 
-      channel =
+      channel_ =
           libssh2_channel_open_ex(session, "session", sizeof("session") - 1,
                                   4 * AMMB, 32 * AMKB, nullptr, 0);
-      if (channel) {
-        closed = false;
-        is_init = true;
+      if (channel_ != nullptr) {
+        MarkOpen_();
         return OK;
       }
 
       const int err = libssh2_session_last_errno(session);
       if (err != LIBSSH2_ERROR_EAGAIN) {
-        is_init = false;
+        MarkClosed_();
         return {EC::NoConnection, "channel.init", "<channel>",
                 AMStr::fmt("libssh2 error {}", err),
                 RawError{RawErrorSource::Libssh2, err}};
       }
       ECM control = CheckControlState_("Channel init");
       if (control.code != EC::Success) {
-        is_init = false;
+        MarkClosed_();
         return control;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -997,8 +1043,11 @@ public:
    */
   ECM graceful_exit(bool send_exit = true, int term_wait_ms = 50,
                     bool force_kill = true) {
-    if (!channel || closed) {
-      is_init = false;
+    if (channel_ == nullptr) {
+      MarkClosed_();
+      return OK;
+    }
+    if (!TryBeginClose_()) {
       return OK;
     }
 
@@ -1023,18 +1072,20 @@ public:
 
     if (send_exit) {
       ECM eof_rcm = run_nonblocking_op(
-          [this]() { return libssh2_channel_send_eof(channel); },
+          [this]() { return libssh2_channel_send_eof(channel_); },
           "channel send eof");
       if (eof_rcm.code != EC::Success && eof_rcm.code != EC::Terminate &&
           eof_rcm.code != EC::OperationTimeout) {
+        ReopenAfterCloseFailure_();
         return eof_rcm;
       }
 
       ECM term_rcm = run_nonblocking_op(
-          [this]() { return libssh2_channel_signal(channel, "TERM"); },
+          [this]() { return libssh2_channel_signal(channel_, "TERM"); },
           "channel signal TERM");
       if (term_rcm.code != EC::Success && term_rcm.code != EC::Terminate &&
           term_rcm.code != EC::OperationTimeout) {
+        ReopenAfterCloseFailure_();
         return term_rcm;
       }
 
@@ -1046,21 +1097,25 @@ public:
     ECM close_rcm = run_nonblocking_op([this]() { return close_nonblock(); },
                                        "channel close");
     if (close_rcm.code == EC::Success) {
+      MarkClosed_();
       return close_rcm;
     }
 
-    if (force_kill && send_exit && channel && !closed) {
+    if (force_kill && send_exit && channel_ != nullptr) {
       (void)run_nonblocking_op(
-          [this]() { return libssh2_channel_signal(channel, "KILL"); },
+          [this]() { return libssh2_channel_signal(channel_, "KILL"); },
           "channel signal KILL");
       close_rcm = run_nonblocking_op([this]() { return close_nonblock(); },
                                      "channel close");
+      if (close_rcm.code == EC::Success) {
+        MarkClosed_();
+        return close_rcm;
+      }
     }
+    ReopenAfterCloseFailure_();
     return close_rcm;
   }
 };
-
-} // namespace detail
 
 class SFTPSessionBase : public ClientIOBase {
 protected:
@@ -1400,6 +1455,52 @@ public:
    * execution helpers.
    */
   std::recursive_mutex &TransferMutex() { return mtx; }
+
+  [[nodiscard]] ECMData<ChannelHandle>
+  CreateChannel(const ControlComponent &control = {}) {
+    ECMData<ChannelHandle> out = {};
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (session == nullptr || sock == INVALID_SOCKET) {
+      out.rcm = {EC::NoConnection, "channel.init", "<channel>",
+                 "SFTP session not initialized"};
+      return out;
+    }
+
+    auto channel = std::make_shared<SafeChannel>();
+    const auto control_token = control.ControlToken();
+    auto is_interrupted = [control_token]() -> bool {
+      return control_token && control_token->IsInterrupted();
+    };
+
+    out.rcm = channel->Init(session, std::move(is_interrupted),
+                            detail::ResolveTimeoutMs_(control),
+                            AMTime::miliseconds());
+    if (!(out.rcm)) {
+      return out;
+    }
+
+    out.data = std::move(channel);
+    return out;
+  }
+
+  ECM CloseChannel(ChannelHandle &channel_handle, bool force,
+                   const ControlComponent &control = {}) {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!channel_handle) {
+      return OK;
+    }
+
+    const auto control_token = control.ControlToken();
+    auto is_interrupted = [control_token]() -> bool {
+      return control_token && control_token->IsInterrupted();
+    };
+    channel_handle->SetControlContext(std::move(is_interrupted),
+                                      detail::ResolveTimeoutMs_(control),
+                                      AMTime::miliseconds());
+    ECM close_rcm = channel_handle->graceful_exit(!force, 50, true);
+    channel_handle.reset();
+    return close_rcm;
+  }
 
   SFTPSessionBase(AMDomain::client::IClientConfigPort *config_port,
                   InterruptControl *control_port,
@@ -2025,9 +2126,7 @@ public:
 
   ~AMSFTPIOCore() override = default;
 
-  [[nodiscard]] std::intptr_t RemoteSocketHandle() const {
-    return static_cast<std::intptr_t>(sock);
-  }
+  [[nodiscard]] SOCKET Socket() const { return sock; }
 
 public:
   ECMData<AMFSI::UpdateOSTypeResult>
@@ -2214,7 +2313,6 @@ public:
   ECMData<AMFSI::RunResult>
   ConductCmd(const AMFSI::ConductCmdArgs &args,
              const ControlComponent &control) override {
-    const int max_time_ms = detail::ResolveTimeoutMs_(control);
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (auto stop_rcm = control.BuildECM("ConductCmd", args.cmd);
         stop_rcm.has_value()) {
@@ -2228,7 +2326,6 @@ public:
     enum class CmdStage { BeforeSend, AwaitOutput, ReadingOutput, AwaitExit };
     CmdStage stage = CmdStage::BeforeSend;
 
-    int64_t time_start = AMTime::miliseconds();
     int exit_status = -1;
     bool has_output = false;
     std::string output;
@@ -2237,24 +2334,21 @@ public:
     ssize_t nbytes = 0;
     NBResult<int> exec_res{0, OK};
     NBResult<ssize_t> read_res{0, OK};
-    NBResult<int> close_res{0, OK};
 
     libssh2_session_set_blocking(session, 0);
 
-    detail::SafeChannel sf;
-    ECM init_rcm = sf.Init(
-        session, [&control]() { return control.BuildECM().has_value(); },
-        max_time_ms, time_start);
-    if (init_rcm.code != EC::Success) {
-      return {{std::string{}, -1}, std::move(init_rcm)};
+    auto channel_res = CreateChannel(control);
+    if (!(channel_res.rcm)) {
+      return {{std::string{}, -1}, std::move(channel_res.rcm)};
     }
+    ChannelHandle channel = std::move(channel_res.data);
 
     auto graceful_exit = [&](bool send_exit) {
-      (void)sf.graceful_exit(send_exit, 50, true);
+      (void)CloseChannel(channel, !send_exit, {});
     };
 
     exec_res = NBPerform(control, [&] {
-      return libssh2_channel_exec(sf.channel, args.cmd.c_str());
+      return libssh2_channel_exec(channel->Raw(), args.cmd.c_str());
     });
     if (!exec_res) {
       wait_rcm = exec_res.rcm;
@@ -2268,7 +2362,7 @@ public:
 
     while (true) {
       read_res = NBPerform(control, [&] {
-        return libssh2_channel_read(sf.channel, buffer.data(),
+        return libssh2_channel_read(channel->Raw(), buffer.data(),
                                     buffer.size() - 1);
       });
       if (!read_res) {
@@ -2299,17 +2393,11 @@ public:
       output.pop_back();
     }
 
-    close_res = NBPerform(control, [&] { return sf.close_nonblock(); });
-    if (!close_res) {
-      wait_rcm = close_res.rcm;
+    exit_status = channel->ExitStatus();
+    wait_rcm = CloseChannel(channel, false, control);
+    if (!(wait_rcm)) {
       goto cleanup;
     }
-    if (close_res.value < 0) {
-      return {{output, -1},
-              ECM{GetLastEC(), "channel.close", args.cmd, GetLastErrorMsg()}};
-    }
-
-    exit_status = libssh2_channel_get_exit_status(sf.channel);
     return {{output, exit_status}, OK};
 
   cleanup:
