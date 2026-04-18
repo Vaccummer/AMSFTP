@@ -13,7 +13,7 @@ using AMDomain::var::VarInfo;
 
 namespace AMInterface::searcher {
 namespace {
-using TASKID = AMDomain::transfer::TaskInfo::ID;
+using AMDomain::transfer::TaskID;
 enum class VarZonePrefixMode {
   Plain = 0,
   Dollar,
@@ -118,8 +118,9 @@ struct TerminalChannelTarget_ {
   std::string insert_header = "";
 };
 
-TerminalChannelTarget_ ParseTerminalChannelTarget_(
-    const std::string &raw_prefix, const std::string &current_nickname) {
+TerminalChannelTarget_
+ParseTerminalChannelTarget_(const std::string &raw_prefix,
+                            const std::string &current_nickname) {
   TerminalChannelTarget_ out = {};
   out.terminal_name = AMDomain::host::HostService::NormalizeNickname(
       AMStr::Strip(current_nickname));
@@ -250,11 +251,14 @@ AMInterface::style::StyleIndex TerminalStyleKey_(
   switch (state) {
   case AMInterface::completion::ICompletionRuntime::TerminalNameState::OK:
     return AMInterface::style::StyleIndex::TerminalName;
-  case AMInterface::completion::ICompletionRuntime::TerminalNameState::Disconnected:
+  case AMInterface::completion::ICompletionRuntime::TerminalNameState::
+      Disconnected:
     return AMInterface::style::StyleIndex::DisconnectedTerminalName;
-  case AMInterface::completion::ICompletionRuntime::TerminalNameState::Unestablished:
+  case AMInterface::completion::ICompletionRuntime::TerminalNameState::
+      Unestablished:
     return AMInterface::style::StyleIndex::UnestablishedTerminalName;
-  case AMInterface::completion::ICompletionRuntime::TerminalNameState::Nonexistent:
+  case AMInterface::completion::ICompletionRuntime::TerminalNameState::
+      Nonexistent:
   default:
     return AMInterface::style::StyleIndex::NonexistentTerminalName;
   }
@@ -265,13 +269,16 @@ AMInterface::style::StyleIndex ChannelStyleKey_(
   switch (state) {
   case AMInterface::completion::ICompletionRuntime::ChannelNameState::OK:
     return AMInterface::style::StyleIndex::ChannelName;
-  case AMInterface::completion::ICompletionRuntime::ChannelNameState::Disconnected:
+  case AMInterface::completion::ICompletionRuntime::ChannelNameState::
+      Disconnected:
     return AMInterface::style::StyleIndex::DisconnectedChannelName;
-  case AMInterface::completion::ICompletionRuntime::ChannelNameState::Nonexistent:
+  case AMInterface::completion::ICompletionRuntime::ChannelNameState::
+      Nonexistent:
     return AMInterface::style::StyleIndex::NonexistentChannelName;
   case AMInterface::completion::ICompletionRuntime::ChannelNameState::ValidNew:
     return AMInterface::style::StyleIndex::ValidNewChannelName;
-  case AMInterface::completion::ICompletionRuntime::ChannelNameState::InvalidNew:
+  case AMInterface::completion::ICompletionRuntime::ChannelNameState::
+      InvalidNew:
   default:
     return AMInterface::style::StyleIndex::InvalidNewChannelName;
   }
@@ -513,7 +520,8 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       AMCompletionCandidate candidate;
       candidate.insert_text = name_item.name;
       const auto state = runtime->QueryTerminalNameState(name_item.name);
-      candidate.display = runtime->Format(name_item.name, TerminalStyleKey_(state));
+      candidate.display =
+          runtime->Format(name_item.name, TerminalStyleKey_(state));
       candidate.kind = AMCompletionKind::TerminalName;
       const int host_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + host_bias;
@@ -565,11 +573,11 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       return result;
     }
 
-    const TargetSemantics_ semantics = channel_existing_target
-                                           ? TargetSemantics_::ExistingOnly
-                                           : (channel_new_target
-                                                  ? TargetSemantics_::NewOnly
-                                                  : TargetSemantics_::ExistingOrNew);
+    const TargetSemantics_ semantics =
+        channel_existing_target
+            ? TargetSemantics_::ExistingOnly
+            : (channel_new_target ? TargetSemantics_::NewOnly
+                                  : TargetSemantics_::ExistingOrNew);
     const TerminalChannelTarget_ target =
         ParseTerminalChannelTarget_(prefix, runtime->CurrentNickname());
 
@@ -586,12 +594,14 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       auto state = runtime->QueryChannelNameState(target.terminal_name,
                                                   channel_name, false);
       if (semantics == TargetSemantics_::ExistingOnly &&
-          state == AMInterface::completion::ICompletionRuntime::ChannelNameState::Nonexistent) {
+          state == AMInterface::completion::ICompletionRuntime::
+                       ChannelNameState::Nonexistent) {
         continue;
       }
       AMCompletionCandidate candidate;
       candidate.insert_text = target.insert_header + channel_name;
-      candidate.display = runtime->Format(channel_name, ChannelStyleKey_(state));
+      candidate.display =
+          runtime->Format(channel_name, ChannelStyleKey_(state));
       candidate.kind = AMCompletionKind::ChannelName;
       candidate.score = match.score_bias;
       result.items.push_back(std::move(candidate));
@@ -621,14 +631,14 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget(ctx, AMCompletionTarget::TaskId)) {
-    auto ids = runtime->ListTaskIds();
+    auto ids = runtime->ListTaskIDs();
     std::vector<std::string> keys = {};
     keys.reserve(ids.size());
     for (const auto &id : ids) {
       keys.push_back(AMStr::ToString(id));
     }
     for (const auto &match : BuildGeneralMatch(keys, prefix)) {
-      const TASKID &id = ids[match.index];
+      const TaskID &id = ids[match.index];
       AMCompletionCandidate candidate;
       candidate.insert_text = AMStr::ToString(id);
       candidate.display = AMStr::ToString(id);

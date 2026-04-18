@@ -13,6 +13,8 @@
 
 namespace AMApplication::filesystem {
 
+using AMDomain::filesystem::SearchType;
+
 namespace {
 using ClientMetaData = AMDomain::host::ClientMetaData;
 enum SegmentKind { Literal = 0, Pattern = 1, DoubleStar = 2 };
@@ -29,7 +31,7 @@ struct Cursor {
 
 ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     const PathTarget &path, SearchType type,
-    const ClientControlComponent &control,
+    const ControlComponent &control,
     std::function<void(const PathTarget &)> on_enter_dir,
     std::function<void(const PathTarget &, ECM)> on_error,
     std::function<bool(const PathTarget &)> on_match) {
@@ -152,20 +154,20 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   const auto workdir_from_meta = [](const ClientMetaData &meta,
                                     const std::string &home) -> std::string {
     const std::string normalized_cwd =
-        AMDomain::filesystem::services::NormalizePath(AMStr::Strip(meta.cwd));
+        AMDomain::filesystem::service::NormalizePath(AMStr::Strip(meta.cwd));
     if (!normalized_cwd.empty()) {
       return normalized_cwd;
     }
 
     const std::string normalized_login_dir =
-        AMDomain::filesystem::services::NormalizePath(
+        AMDomain::filesystem::service::NormalizePath(
             AMStr::Strip(meta.login_dir));
     if (!normalized_login_dir.empty()) {
       return normalized_login_dir;
     }
 
     const std::string normalized_home =
-        AMDomain::filesystem::services::NormalizePath(AMStr::Strip(home));
+        AMDomain::filesystem::service::NormalizePath(AMStr::Strip(home));
     if (!normalized_home.empty()) {
       return normalized_home;
     }

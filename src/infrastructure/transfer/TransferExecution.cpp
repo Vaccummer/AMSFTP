@@ -131,6 +131,73 @@ using TaskRegistry = AMAtomic<std::unordered_map<TaskID, TaskHandle>>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TransferBufferPolicy = AMInfra::transfer::TransferBufferPolicy;
 constexpr const char *kHttpUserAgent = "amsftp-wget/1.0";
+constexpr const char *kHttpProxyKey = "http.proxy";
+constexpr const char *kHttpMaxRedirectTimesKey = "http.max_redirect_times";
+constexpr const char *kHttpBearerTokenKey = "http.bear_token";
+
+struct HttpTransferRuntime {
+  std::string proxy = {};
+  std::string bear_token = {};
+  std::string username = {};
+  std::string password = {};
+  int max_redirect_times = 0;
+};
+
+HttpTransferRuntime LoadHttpTransferRuntime_(const ClientHandle &client) {
+  HttpTransferRuntime runtime = {};
+  if (!client) {
+    return runtime;
+  }
+
+  bool proxy_found = false;
+  bool redirect_found = false;
+  bool token_found = false;
+
+  const auto proxy_q =
+      client->MetaDataPort().QueryNamedValue<std::string>(kHttpProxyKey);
+  if (proxy_q.name_found && proxy_q.type_match && proxy_q.value.has_value()) {
+    runtime.proxy = AMStr::Strip(*proxy_q.value);
+    proxy_found = true;
+  }
+
+  const auto redirect_q =
+      client->MetaDataPort().QueryNamedValue<int>(kHttpMaxRedirectTimesKey);
+  if (redirect_q.name_found && redirect_q.type_match &&
+      redirect_q.value.has_value()) {
+    runtime.max_redirect_times = std::max(0, *redirect_q.value);
+    redirect_found = true;
+  }
+
+  const auto token_q =
+      client->MetaDataPort().QueryNamedValue<std::string>(kHttpBearerTokenKey);
+  if (token_q.name_found && token_q.type_match && token_q.value.has_value()) {
+    runtime.bear_token = AMStr::Strip(*token_q.value);
+    token_found = true;
+  }
+
+  if (auto *http_io = dynamic_cast<AMHTTPIOCore *>(&client->IOPort());
+      http_io != nullptr) {
+    if (!proxy_found) {
+      runtime.proxy = AMStr::Strip(http_io->Proxy());
+    }
+    if (!redirect_found) {
+      runtime.max_redirect_times = std::max(0, http_io->MaxRedirectTimes());
+    }
+    if (!token_found) {
+      runtime.bear_token = AMStr::Strip(http_io->BearerToken());
+    }
+  }
+  const auto request = client->ConfigPort().GetRequest();
+  runtime.username = AMStr::Strip(request.username);
+  runtime.password = request.password;
+
+  runtime.proxy = AMStr::Strip(runtime.proxy);
+  runtime.bear_token = AMStr::Strip(runtime.bear_token);
+  if (runtime.max_redirect_times < 0) {
+    runtime.max_redirect_times = 0;
+  }
+  return runtime;
+}
 
 [[nodiscard]] ECM ContextualizeTransferRCM_(ECM rcm, std::string operation,
                                             const std::string &target) {
@@ -651,7 +718,7 @@ public:
 
     if (auto *client_http = dynamic_cast<AMHTTPIOCore *>(&client->IOPort());
         client_http != nullptr) {
-      ReadHttpToBuffer_(client_http, *task, pd);
+      ReadHttpToBuffer_(client, *task, pd);
       return;
     }
 
@@ -749,9 +816,9 @@ private:
     return !IsTaskInterrupted_(pd);
   }
 
-  void ReadHttpToBuffer_(AMHTTPIOCore *client_http, const TransferTask &task,
+  void ReadHttpToBuffer_(const ClientHandle &client, const TransferTask &task,
                          RuntimeProgress &pd) const {
-    HTTPDownloadSet(client_http, task.src, &pd);
+    HTTPDownloadSet(LoadHttpTransferRuntime_(client), task.src, &pd);
   }
 
   void ReadSftpToBuffer_(AMSFTPIOCore *client_sftp, TransferTask &task,
@@ -962,9 +1029,9 @@ private:
     return 0;
   }
 
-  static void HTTPDownloadSet(AMHTTPIOCore *client_http, const std::string &src,
-                              RuntimeProgress *pd) {
-    if (!client_http || !pd) {
+  static void HTTPDownloadSet(const HttpTransferRuntime &runtime,
+                              const std::string &src, RuntimeProgress *pd) {
+    if (!pd) {
       return;
     }
     TransferTask *cur_task = pd->GetCurrentTask();
@@ -989,18 +1056,20 @@ private:
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, HTTPProgressWk);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, pd);
-    const std::string proxy = client_http->Proxy();
-    if (!proxy.empty()) {
-      curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+    if (!runtime.proxy.empty()) {
+      curl_easy_setopt(curl, CURLOPT_PROXY, runtime.proxy.c_str());
     }
 
     struct curl_slist *headers = nullptr;
-    const std::string bearer_token = client_http->BearerToken();
-    if (!bearer_token.empty()) {
+    if (!runtime.bear_token.empty()) {
       headers = curl_slist_append(
           headers,
-          AMStr::fmt("Authorization: Bearer {}", bearer_token).c_str());
+          AMStr::fmt("Authorization: Bearer {}", runtime.bear_token).c_str());
       curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    } else if (!runtime.username.empty() || !runtime.password.empty()) {
+      curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+      curl_easy_setopt(curl, CURLOPT_USERNAME, runtime.username.c_str());
+      curl_easy_setopt(curl, CURLOPT_PASSWORD, runtime.password.c_str());
     }
 
     const size_t resume_offset = cur_task->transferred;

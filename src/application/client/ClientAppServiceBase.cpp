@@ -1,5 +1,5 @@
 #include "application/client/ClientAppServiceBase.hpp"
-#include "foundation/tools/enum_related.hpp"
+
 namespace AMApplication::client {
 ClientAppServiceBase::ClientAppServiceBase(ClientServiceArg arg)
     : AMApplication::config::IConfigSyncPort(typeid(ClientServiceArg)),
@@ -51,11 +51,14 @@ void ClientAppServiceBase::RegisterControlComponent(amf control_token) {
   control_token_.lock().store(std::move(control_token));
 }
 
-ClientControlComponent
+ControlComponent
 ClientAppServiceBase::GetControlComponent(std::optional<amf> control_token,
                                           int timeout_ms) const {
   amf token = control_token ? *control_token : control_token_.lock().load();
-  return {std::move(token), timeout_ms};
+  if (timeout_ms > 0) {
+    return {token, timeout_ms};
+  }
+  return {token, 0};
 }
 
 void ClientAppServiceBase::SetPrivateKeys(
@@ -129,4 +132,3 @@ ClientAppServiceBase::GetPublicCallbacks() const {
   return public_callbacks_.lock().load();
 }
 } // namespace AMApplication::client
-

@@ -1,29 +1,29 @@
 #pragma once
 
 #include "domain/client/ClientDomainService.hpp"
+#include "foundation/tools/string.hpp"
 #include "foundation/tools/url.hpp"
 #include "infrastructure/client/common/Base.hpp"
+#include <atomic>
+#include <cstdint>
 #include <curl/curl.h>
 #include <optional>
 #include <string>
 
 namespace AMInfra::client::HTTP {
+inline constexpr const char kTransientHttpNickname[] = "__wget_http__";
+inline constexpr const char kHttpProxyMetaKey[] = "http.proxy";
+inline constexpr const char kHttpMaxRedirectTimesMetaKey[] =
+    "http.max_redirect_times";
+inline constexpr const char kHttpBearTokenMetaKey[] = "http.bear_token";
 namespace {
 using ClientStatus = AMDomain::client::ClientStatus;
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using ConRequest = AMDomain::host::ConRequest;
 using ClientProtocol = AMDomain::host::ClientProtocol;
+using OS_TYPE = AMDomain::client::OS_TYPE;
 namespace AMFSI = AMDomain::filesystem;
-constexpr long kMaxRedirects = 10L;
+constexpr long kMaxRedirects = 20L;
 constexpr const char *kHttpUserAgent = "AMSFTP/1.0 (HTTP Downloader)";
-
-struct HttpRuntimeMetadata {
-  bool transient = true;
-  std::string source_url = {};
-  std::string effective_url = {};
-  std::string proxy = {};
-  int redirect_times = 0;
-};
 
 struct HttpHeaderProbe {
   std::optional<int64_t> content_length = std::nullopt;
@@ -32,19 +32,6 @@ struct HttpHeaderProbe {
   std::optional<std::string> location_url = std::nullopt;
   bool accept_ranges_bytes = false;
 };
-
-struct CurlStopContext {
-  const ClientControlComponent *control = nullptr;
-};
-
-inline static std::optional<int64_t>
-ParsePositiveInt64_(const std::string &text) {
-  int64_t value = 0;
-  if (!AMStr::GetNumber(AMStr::Strip(text), &value) || value < 0) {
-    return std::nullopt;
-  }
-  return value;
-}
 
 inline static size_t ProbeHeaderWk_(char *buffer, size_t size, size_t nitems,
                                     void *userdata) {
@@ -66,9 +53,9 @@ inline static size_t ProbeHeaderWk_(char *buffer, size_t size, size_t nitems,
   };
 
   if (const std::string v = pick_value("content-length:"); !v.empty()) {
-    auto parsed = ParsePositiveInt64_(v);
-    if (parsed.has_value()) {
-      probe->content_length = *parsed;
+    int64_t value = 0;
+    if (AMStr::GetNumber<int64_t>(v, &value)) {
+      probe->content_length = value;
     }
   } else if (const std::string v = pick_value("accept-ranges:"); !v.empty()) {
     const std::string lower_v = AMStr::lowercase(v);
@@ -78,9 +65,10 @@ inline static size_t ProbeHeaderWk_(char *buffer, size_t size, size_t nitems,
   } else if (const std::string v = pick_value("content-range:"); !v.empty()) {
     const size_t slash = v.find('/');
     if (slash != std::string::npos && slash + 1 < v.size()) {
-      auto parsed = ParsePositiveInt64_(v.substr(slash + 1));
-      if (parsed.has_value()) {
-        probe->content_range_total = *parsed;
+      int64_t value = 0;
+      if (AMStr::GetNumber<int64_t>(v.substr(slash + 1), &value) &&
+          value >= 0) {
+        probe->content_range_total = value;
       }
     }
   } else if (const std::string v = pick_value("x-raw-download:"); !v.empty()) {
@@ -104,21 +92,13 @@ inline static size_t DiscardWriteWk_(char *ptr, size_t size, size_t nmemb,
   return size * nmemb;
 }
 
-inline static int CurlStopWk_(void *clientp, curl_off_t dltotal,
-                              curl_off_t dlnow, curl_off_t ultotal,
-                              curl_off_t ulnow) {
-  (void)dltotal;
-  (void)dlnow;
-  (void)ultotal;
-  (void)ulnow;
-  auto *ctx = static_cast<CurlStopContext *>(clientp);
-  if (!ctx || !ctx->control) {
-    return 0;
+[[nodiscard]] inline static std::optional<ECM>
+BuildStopRCM_(const ControlComponent &control, const std::string &action,
+              const std::string &target) {
+  if (auto stop_rcm = control.BuildECM(action, target); stop_rcm.has_value()) {
+    return stop_rcm;
   }
-  if (ctx->control->IsInterrupted() || ctx->control->IsTimeout()) {
-    return 1;
-  }
-  return 0;
+  return control.BuildRequestECM(action, target);
 }
 
 inline static ECM MapHttpResponse_(long http_code, const std::string &action,
@@ -156,9 +136,152 @@ inline static ECM BuildCurlError_(CURLcode code, const std::string &action,
   return Err(EC::NetworkError, action, target, curl_easy_strerror(code),
              RawError{RawErrorSource::Curl, static_cast<int>(code)});
 }
+
+inline static ECM BuildCurlMultiError_(CURLMcode code,
+                                       const std::string &action,
+                                       const std::string &target) {
+  return Err(EC::NetworkError, action, target, curl_multi_strerror(code),
+             RawError{RawErrorSource::Curl, static_cast<int>(code)});
+}
 } // namespace
 
-class AMHTTPIOCore final : public ClientIOBase {
+class AMHTTPReadOnlyIOBase : public ClientIOBase {
+protected:
+  AMHTTPReadOnlyIOBase(AMDomain::client::IClientConfigPort *config,
+                       InterruptControl *control)
+      : ClientIOBase(config, control) {}
+
+  [[nodiscard]] std::string ClientTarget_() const {
+    if (!config_part_) {
+      return "<http-client>";
+    }
+    const ConRequest req = config_part_->GetRequest();
+    if (!AMStr::Strip(req.nickname).empty()) {
+      return req.nickname;
+    }
+    if (!AMStr::Strip(req.hostname).empty()) {
+      return req.hostname;
+    }
+    return "<http-client>";
+  }
+
+  template <typename T>
+  [[nodiscard]] ECMData<T>
+  UnsupportedResult_(T data, const ControlComponent &control,
+                     const std::string &action,
+                     const std::string &message) const {
+    const std::string target = ClientTarget_();
+    if (auto stop_rcm = BuildStopRCM_(control, action, target);
+        stop_rcm.has_value()) {
+      return {std::move(data), std::move(*stop_rcm)};
+    }
+    return {std::move(data),
+            Err(EC::OperationUnsupported, action, target, message)};
+  }
+
+public:
+  ECMData<AMFSI::UpdateOSTypeResult>
+  UpdateOSType(const AMFSI::UpdateOSTypeArgs &args = {},
+               const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::UpdateOSTypeResult{OS_TYPE::Unknown},
+                              control, "http.update_ostype",
+                              "HTTP source does not support OS detection");
+  }
+
+  ECMData<AMFSI::ConnectResult>
+  Connect(const AMFSI::ConnectArgs &args = {},
+          const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::ConnectResult{ClientStatus::OK}, control,
+                              "http.connect",
+                              "HTTP source is temporary and does not connect");
+  }
+
+  ECMData<AMFSI::UpdateHomeDirResult>
+  UpdateHomeDir(const AMFSI::UpdateHomeDirArgs &args = {},
+                const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::UpdateHomeDirResult{""}, control,
+                              "http.update_home",
+                              "HTTP source has no home directory");
+  }
+
+  ECMData<AMFSI::RTTResult>
+  GetRTT(const AMFSI::GetRTTArgs &args = {},
+         const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::RTTResult{-1.0}, control, "http.rtt",
+                              "HTTP source does not support RTT test");
+  }
+
+  ECMData<AMFSI::RunResult>
+  ConductCmd(const AMFSI::ConductCmdArgs &args,
+             const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::RunResult("", -1), control, "http.cmd",
+                              "HTTP source does not support shell command");
+  }
+
+  ECMData<AMFSI::ListResult>
+  listdir(const AMFSI::ListdirArgs &args,
+          const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::ListResult{}, control, "http.listdir",
+                              "HTTP source does not support directory listing");
+  }
+
+  ECMData<AMFSI::ListNamesResult>
+  listnames(const AMFSI::ListNamesArgs &args,
+            const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::ListNamesResult{}, control,
+                              "http.listnames",
+                              "HTTP source does not support directory listing");
+  }
+
+  ECMData<AMFSI::MkdirResult>
+  mkdir(const AMFSI::MkdirArgs &args,
+        const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::MkdirResult{}, control, "http.mkdir",
+                              "HTTP source is read-only");
+  }
+
+  ECMData<AMFSI::MkdirsResult>
+  mkdirs(const AMFSI::MkdirsArgs &args,
+         const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::MkdirsResult{}, control, "http.mkdirs",
+                              "HTTP source is read-only");
+  }
+
+  ECMData<AMFSI::RMResult>
+  rmdir(const AMFSI::RmdirArgs &args,
+        const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::RMResult{}, control, "http.rmdir",
+                              "HTTP source is read-only");
+  }
+
+  ECMData<AMFSI::RMResult>
+  rmfile(const AMFSI::RmfileArgs &args,
+         const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::RMResult{}, control, "http.rmfile",
+                              "HTTP source is read-only");
+  }
+
+  ECMData<AMFSI::MoveResult>
+  rename(const AMFSI::RenameArgs &args,
+         const ControlComponent &control = {}) override {
+    (void)args;
+    return UnsupportedResult_(AMFSI::MoveResult{}, control, "http.rename",
+                              "HTTP source does not support rename");
+  }
+};
+
+class AMHTTPIOCore final : public AMHTTPReadOnlyIOBase {
 public:
   struct HeadProbeResult {
     long response_code = 0;
@@ -181,109 +304,257 @@ public:
     std::string raw_download_url = {};
   };
 
-  AMHTTPIOCore(AMDomain::client::IClientConfigPort *config,
-               AMDomain::client::IClientControlToken *control,
-               AMDomain::client::IClientMetaDataPort *metadata = nullptr)
-      : ClientIOBase(config, control), metadata_part_(metadata) {}
+  AMHTTPIOCore(AMDomain::client::IClientMetaDataPort *metadata,
+               AMDomain::client::IClientConfigPort *config,
+               InterruptControl *control)
+      : AMHTTPReadOnlyIOBase(config, control), metadata_part_(metadata) {}
+
+  void SetProxy(const std::string &proxy) {
+    SetNamedMetadata_(kHttpProxyMetaKey, AMStr::Strip(proxy));
+  }
+
+  void SetMaxRedirectTimes(int max_redirect_times) {
+    const int normalized = max_redirect_times < 0 ? 0 : max_redirect_times;
+    SetNamedMetadata_(kHttpMaxRedirectTimesMetaKey, normalized);
+  }
+
+  void SetBearerToken(const std::string &bear_token) {
+    SetNamedMetadata_(kHttpBearTokenMetaKey, AMStr::Strip(bear_token));
+  }
 
   [[nodiscard]] bool SupportsRange() const {
     return supports_range_.load(std::memory_order_acquire);
   }
+
   [[nodiscard]] bool HasKnownSize() const {
     return has_known_size_.load(std::memory_order_acquire);
   }
 
-  [[nodiscard]] std::string Proxy() const { return ResolveProxy_(); }
+  [[nodiscard]] std::string Proxy() const {
+    if (const auto value = QueryNamedMetadata_<std::string>(kHttpProxyMetaKey);
+        value.has_value()) {
+      return *value;
+    }
+    return {};
+  }
+
   [[nodiscard]] std::string BearerToken() const {
     return ResolveBearerToken_();
   }
 
-  [[nodiscard]] ECMData<HeadProbeResult>
-  ProbeHead(const std::string &url,
-            const ClientControlComponent &control) const {
-    if (!AMUrl::IsHttpUrl(url) || AMUrl::IsDirectoryUrl(url)) {
-      return {HeadProbeResult{},
-              Err(EC::InvalidArg, "http.head", url, "Invalid HTTP URL")};
+  [[nodiscard]] std::string BasicUsername() const {
+    if (!config_part_) {
+      return {};
     }
-    const std::string proxy = ResolveProxy_();
-    const std::string bear_token = ResolveBearerToken_();
+    return AMStr::Strip(config_part_->GetRequest().username);
+  }
+
+  [[nodiscard]] std::string BasicPassword() const {
+    if (!config_part_) {
+      return {};
+    }
+    return config_part_->GetRequest().password;
+  }
+
+  [[nodiscard]] int MaxRedirectTimes() const {
+    if (const auto value =
+            QueryNamedMetadata_<int>(kHttpMaxRedirectTimesMetaKey);
+        value.has_value()) {
+      return *value;
+    }
+    return static_cast<int>(kMaxRedirects);
+  }
+
+  [[nodiscard]] long CurlMaxRedirects() const {
+    const int max_redirects = MaxRedirectTimes();
+    if (max_redirects < 0) {
+      return 0L;
+    }
+    const long as_long = static_cast<long>(max_redirects);
+    return as_long > kMaxRedirects ? kMaxRedirects : as_long;
+  }
+
+  template <typename ConfigureFn>
+  [[nodiscard]] ECMData<CURLcode>
+  NBPerform(const std::string &action, const std::string &target,
+            const ControlComponent &control, long *response_code,
+            ConfigureFn &&configure) const {
+    if (auto stop_rcm = BuildStopRCM_(control, action, target);
+        stop_rcm.has_value()) {
+      return {CURLE_ABORTED_BY_CALLBACK, std::move(*stop_rcm)};
+    }
 
     CURL *curl = curl_easy_init();
     if (!curl) {
-      return {HeadProbeResult{}, Err(EC::InvalidHandle, "http.head", url,
-                                     "curl_easy_init failed")};
+      return {CURLE_FAILED_INIT,
+              Err(EC::InvalidHandle, action, target, "curl_easy_init failed")};
     }
 
-    CurlStopContext stop_ctx = {&control};
-    HttpHeaderProbe probe = {};
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlStopWk_);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &stop_ctx);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
-    if (!proxy.empty()) {
-      curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+    struct CurlHandleGuard {
+      CURL *curl = nullptr;
+      struct curl_slist *headers = nullptr;
+      CURLM *multi = nullptr;
+      bool attached = false;
+      ~CurlHandleGuard() {
+        if (attached && multi && curl) {
+          curl_multi_remove_handle(multi, curl);
+        }
+        if (multi) {
+          curl_multi_cleanup(multi);
+        }
+        if (headers) {
+          curl_slist_free_all(headers);
+        }
+        if (curl) {
+          curl_easy_cleanup(curl);
+        }
+      }
+    } guard{curl, nullptr, nullptr, false};
+
+    configure(curl, &guard.headers);
+    guard.multi = curl_multi_init();
+    if (!guard.multi) {
+      return {CURLE_FAILED_INIT,
+              Err(EC::InvalidHandle, action, target, "curl_multi_init failed")};
+    }
+    if (CURLMcode add_rcm = curl_multi_add_handle(guard.multi, curl);
+        add_rcm != CURLM_OK) {
+      return {CURLE_FAILED_INIT, BuildCurlMultiError_(add_rcm, action, target)};
+    }
+    guard.attached = true;
+
+    int running = 0;
+    CURLMcode multi_rcm = curl_multi_perform(guard.multi, &running);
+    while (multi_rcm == CURLM_OK && running > 0) {
+      if (auto stop_rcm = BuildStopRCM_(control, action, target);
+          stop_rcm.has_value()) {
+        return {CURLE_ABORTED_BY_CALLBACK, std::move(*stop_rcm)};
+      }
+      int numfds = 0;
+      multi_rcm = curl_multi_poll(guard.multi, nullptr, 0, 100, &numfds);
+      if (multi_rcm != CURLM_OK) {
+        break;
+      }
+      multi_rcm = curl_multi_perform(guard.multi, &running);
     }
 
-    struct curl_slist *headers = nullptr;
-    if (!bear_token.empty()) {
-      headers = curl_slist_append(
-          headers, AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    }
-
-    CURLcode curl_rcm = curl_easy_perform(curl);
     long response = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
-    const bool need_get_fallback =
-        (curl_rcm != CURLE_OK || response == 405 || response == 501);
-    if (need_get_fallback) {
-      probe = {};
-      curl_easy_reset(curl);
-      curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    if (response_code != nullptr) {
+      (void)curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
+      *response_code = response;
+    }
+
+    if (auto stop_rcm = BuildStopRCM_(control, action, target);
+        stop_rcm.has_value()) {
+      return {CURLE_ABORTED_BY_CALLBACK, std::move(*stop_rcm)};
+    }
+    if (multi_rcm != CURLM_OK) {
+      return {CURLE_FAILED_INIT,
+              BuildCurlMultiError_(multi_rcm, action, target)};
+    }
+
+    int msgs_left = 0;
+    CURLcode curl_rcm = CURLE_OK;
+    while (CURLMsg *msg = curl_multi_info_read(guard.multi, &msgs_left)) {
+      if (msg->msg == CURLMSG_DONE) {
+        curl_rcm = msg->data.result;
+        break;
+      }
+    }
+    if (curl_rcm == CURLE_OK) {
+      (void)curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
+      if (response_code != nullptr) {
+        *response_code = response;
+      }
+    }
+    return {curl_rcm, OK};
+  }
+
+  [[nodiscard]] ECMData<HeadProbeResult>
+  ProbeHead(const std::string &url, const ControlComponent &control) const {
+    const std::string normalized = ResolveHttpUrl_(url);
+    if (!AMUrl::IsHttpUrl(normalized) || AMUrl::IsDirectoryUrl(normalized)) {
+      return {HeadProbeResult{},
+              Err(EC::InvalidArg, "http.head", normalized, "Invalid HTTP URL")};
+    }
+    const std::string proxy = Proxy();
+    const std::string bear_token = BearerToken();
+    const std::string basic_username = BasicUsername();
+    const std::string basic_password = BasicPassword();
+    HttpHeaderProbe probe = {};
+    long response = 0;
+    const auto configure = [&](CURL *curl, struct curl_slist **headers) {
+      curl_easy_setopt(curl, CURLOPT_URL, normalized.c_str());
       curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
-      curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
-      curl_easy_setopt(curl, CURLOPT_RANGE, "bytes=0-0");
+      curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
       curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
       curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
       curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
-      curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-      curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlStopWk_);
-      curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &stop_ctx);
       curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
       if (!proxy.empty()) {
         curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
       }
-      if (headers) {
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+      if (!bear_token.empty()) {
+        *headers = curl_slist_append(
+            *headers,
+            AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, *headers);
+      } else if (!basic_username.empty() || !basic_password.empty()) {
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+        curl_easy_setopt(curl, CURLOPT_USERNAME, basic_username.c_str());
+        curl_easy_setopt(curl, CURLOPT_PASSWORD, basic_password.c_str());
       }
-      curl_rcm = curl_easy_perform(curl);
+    };
+
+    auto curl_res =
+        NBPerform("http.head", normalized, control, &response, configure);
+    if (!curl_res) {
+      return {HeadProbeResult{}, std::move(curl_res.rcm)};
+    }
+    const CURLcode curl_rcm = curl_res.data;
+    const bool need_get_fallback =
+        (curl_rcm != CURLE_OK || response == 405 || response == 501);
+    if (need_get_fallback) {
+      probe = {};
       response = 0;
-      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
+      const auto configure_get = [&](CURL *curl, struct curl_slist **headers) {
+        curl_easy_setopt(curl, CURLOPT_URL, normalized.c_str());
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+        curl_easy_setopt(curl, CURLOPT_RANGE, "bytes=0-0");
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
+        if (!proxy.empty()) {
+          curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+        }
+        if (!bear_token.empty()) {
+          *headers = curl_slist_append(
+              *headers,
+              AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
+          curl_easy_setopt(curl, CURLOPT_HTTPHEADER, *headers);
+        } else if (!basic_username.empty() || !basic_password.empty()) {
+          curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+          curl_easy_setopt(curl, CURLOPT_USERNAME, basic_username.c_str());
+          curl_easy_setopt(curl, CURLOPT_PASSWORD, basic_password.c_str());
+        }
+      };
+      curl_res =
+          NBPerform("http.head", normalized, control, &response, configure_get);
+      if (!curl_res) {
+        return {HeadProbeResult{}, std::move(curl_res.rcm)};
+      }
+      if (curl_res.data != CURLE_OK) {
+        return {HeadProbeResult{},
+                BuildCurlError_(curl_res.data, "http.head", normalized)};
+      }
     }
-
-    if (headers) {
-      curl_slist_free_all(headers);
-    }
-    curl_easy_cleanup(curl);
-
-    if (control.IsInterrupted()) {
-      return {HeadProbeResult{}, Err(EC::Terminate, "http.head", url,
-                                     "Operation interrupted by user")};
-    }
-    if (control.IsTimeout()) {
+    if (curl_res.data != CURLE_OK) {
       return {HeadProbeResult{},
-              Err(EC::OperationTimeout, "http.head", url, "Operation timeout")};
-    }
-    if (curl_rcm != CURLE_OK) {
-      return {HeadProbeResult{}, BuildCurlError_(curl_rcm, "http.head", url)};
+              BuildCurlError_(curl_res.data, "http.head", normalized)};
     }
 
     HeadProbeResult result = {};
@@ -305,15 +576,15 @@ public:
 
   [[nodiscard]] ECMData<RedirectResolveResult>
   ResolveRedirectChain(const std::string &url, int max_redirects,
-                       const ClientControlComponent &control) const {
-    const std::string normalized = AMStr::Strip(url);
+                       const ControlComponent &control) const {
+    const std::string normalized = ResolveHttpUrl_(url);
     if (!AMUrl::IsHttpUrl(normalized) || AMUrl::IsDirectoryUrl(normalized)) {
       return {RedirectResolveResult{}, Err(EC::InvalidArg, "http.redirect",
                                            normalized, "Invalid HTTP URL")};
     }
     int redirect_limit = max_redirects;
     if (redirect_limit < 0) {
-      redirect_limit = 0;
+      redirect_limit = MaxRedirectTimes();
     }
 
     RedirectResolveResult out = {};
@@ -350,60 +621,68 @@ public:
     return {out, OK};
   }
 
+  [[nodiscard]] ECMData<std::string>
+  FollowRedirects(const std::string &url,
+                  const ControlComponent &control) const {
+    auto res = ResolveRedirectChain(url, -1, control);
+    if (!res.rcm) {
+      return {{}, std::move(res.rcm)};
+    }
+    const std::string final_url = AMStr::Strip(res.data.final_url).empty()
+                                      ? AMStr::Strip(url)
+                                      : res.data.final_url;
+    return {final_url, OK};
+  }
+
   [[nodiscard]] ECMData<RangeProbeResult>
   ProbeOneByteRange(const std::string &url,
-                    const ClientControlComponent &control) const {
-    if (!AMUrl::IsHttpUrl(url) || AMUrl::IsDirectoryUrl(url)) {
-      return {RangeProbeResult{},
-              Err(EC::InvalidArg, "http.probe", url, "Invalid HTTP URL")};
+                    const ControlComponent &control) const {
+    const std::string normalized = ResolveHttpUrl_(url);
+    if (!AMUrl::IsHttpUrl(normalized) || AMUrl::IsDirectoryUrl(normalized)) {
+      return {RangeProbeResult{}, Err(EC::InvalidArg, "http.probe", normalized,
+                                      "Invalid HTTP URL")};
     }
-    const std::string proxy = ResolveProxy_();
-    const std::string bear_token = ResolveBearerToken_();
-
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-      return {RangeProbeResult{}, Err(EC::InvalidHandle, "http.probe", url,
-                                      "curl_easy_init failed")};
-    }
-
-    CurlStopContext stop_ctx = {&control};
+    const std::string proxy = Proxy();
+    const std::string bear_token = BearerToken();
+    const std::string basic_username = BasicUsername();
+    const std::string basic_password = BasicPassword();
     HttpHeaderProbe probe = {};
-    struct curl_slist *headers = nullptr;
-    if (!bear_token.empty()) {
-      headers = curl_slist_append(
-          headers, AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
-    }
-
     long response = 0;
-    const auto run_probe = [&](bool no_body) -> CURLcode {
+    const auto run_probe = [&](bool no_body) -> ECMData<CURLcode> {
       probe = {};
-      curl_easy_reset(curl);
-      curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-      curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-      curl_easy_setopt(curl, CURLOPT_MAXREDIRS, kMaxRedirects);
-      curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
-      curl_easy_setopt(curl, CURLOPT_NOBODY, no_body ? 1L : 0L);
-      curl_easy_setopt(curl, CURLOPT_RANGE, "bytes=0-0");
-      curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
-      curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
-      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
-      curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
-      curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-      curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlStopWk_);
-      curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &stop_ctx);
-      if (!proxy.empty()) {
-        curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
-      }
-      if (headers) {
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-      }
-      const CURLcode code = curl_easy_perform(curl);
-      response = 0;
-      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
-      return code;
+      const auto configure = [&](CURL *curl, struct curl_slist **headers) {
+        curl_easy_setopt(curl, CURLOPT_URL, normalized.c_str());
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, CurlMaxRedirects());
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, no_body ? 1L : 0L);
+        curl_easy_setopt(curl, CURLOPT_RANGE, "bytes=0-0");
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
+        if (!proxy.empty()) {
+          curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+        }
+        if (!bear_token.empty()) {
+          *headers = curl_slist_append(
+              *headers,
+              AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
+          curl_easy_setopt(curl, CURLOPT_HTTPHEADER, *headers);
+        } else if (!basic_username.empty() || !basic_password.empty()) {
+          curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+          curl_easy_setopt(curl, CURLOPT_USERNAME, basic_username.c_str());
+          curl_easy_setopt(curl, CURLOPT_PASSWORD, basic_password.c_str());
+        }
+      };
+      return NBPerform("http.probe", normalized, control, &response, configure);
     };
 
-    CURLcode curl_rcm = run_probe(true);
+    auto curl_res = run_probe(true);
+    if (!curl_res) {
+      return {RangeProbeResult{}, std::move(curl_res.rcm)};
+    }
+    CURLcode curl_rcm = curl_res.data;
     const auto has_total_size = [&]() -> bool {
       return (probe.content_range_total.has_value() &&
               *probe.content_range_total > 0) ||
@@ -413,24 +692,15 @@ public:
         (curl_rcm != CURLE_OK || response == 405 || response == 501 ||
          ((response == 200 || response == 206) && !has_total_size()));
     if (need_get_fallback) {
-      curl_rcm = run_probe(false);
-    }
-
-    if (headers) {
-      curl_slist_free_all(headers);
-    }
-    curl_easy_cleanup(curl);
-
-    if (control.IsInterrupted()) {
-      return {RangeProbeResult{}, Err(EC::Terminate, "http.probe", url,
-                                      "Operation interrupted by user")};
-    }
-    if (control.IsTimeout()) {
-      return {RangeProbeResult{}, Err(EC::OperationTimeout, "http.probe", url,
-                                      "Operation timeout")};
+      curl_res = run_probe(false);
+      if (!curl_res) {
+        return {RangeProbeResult{}, std::move(curl_res.rcm)};
+      }
+      curl_rcm = curl_res.data;
     }
     if (curl_rcm != CURLE_OK) {
-      return {RangeProbeResult{}, BuildCurlError_(curl_rcm, "http.probe", url)};
+      return {RangeProbeResult{},
+              BuildCurlError_(curl_rcm, "http.probe", normalized)};
     }
 
     RangeProbeResult result = {};
@@ -456,153 +726,91 @@ public:
 
   [[nodiscard]] ECMData<bool>
   ProbeResumeSupport(const std::string &url, size_t offset,
-                     const ClientControlComponent &control) const {
-    if (!AMUrl::IsHttpUrl(url) || AMUrl::IsDirectoryUrl(url)) {
-      return {false,
-              Err(EC::InvalidArg, "http.probe", url, "Invalid HTTP URL")};
+                     const ControlComponent &control) const {
+    const std::string normalized = ResolveHttpUrl_(url);
+    if (!AMUrl::IsHttpUrl(normalized) || AMUrl::IsDirectoryUrl(normalized)) {
+      return {false, Err(EC::InvalidArg, "http.probe", normalized,
+                         "Invalid HTTP URL")};
     }
-    const std::string proxy = ResolveProxy_();
-    const std::string bear_token = ResolveBearerToken_();
+    const std::string proxy = Proxy();
+    const std::string bear_token = BearerToken();
+    const std::string basic_username = BasicUsername();
+    const std::string basic_password = BasicPassword();
     if (offset == 0) {
-      auto probe = ProbeOneByteRange(url, control);
+      auto probe = ProbeOneByteRange(normalized, control);
       if (!(probe.rcm)) {
         return {false, probe.rcm};
       }
       return {probe.data.is_allowed, OK};
     }
-
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-      return {false, Err(EC::InvalidHandle, "http.probe", url,
-                         "curl_easy_init failed")};
-    }
-
-    CurlStopContext stop_ctx = {&control};
     HttpHeaderProbe probe = {};
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, kMaxRedirects);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlStopWk_);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &stop_ctx);
     const std::string range_header = AMStr::fmt("bytes={}-", offset);
-    curl_easy_setopt(curl, CURLOPT_RANGE, range_header.c_str());
-    if (!proxy.empty()) {
-      curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
-    }
-
-    struct curl_slist *headers = nullptr;
-    if (!bear_token.empty()) {
-      headers = curl_slist_append(
-          headers, AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    }
-
-    const CURLcode curl_rcm = curl_easy_perform(curl);
     long response = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
-    if (headers) {
-      curl_slist_free_all(headers);
+    const auto configure = [&](CURL *curl, struct curl_slist **headers) {
+      curl_easy_setopt(curl, CURLOPT_URL, normalized.c_str());
+      curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+      curl_easy_setopt(curl, CURLOPT_MAXREDIRS, CurlMaxRedirects());
+      curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
+      curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+      curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
+      curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
+      curl_easy_setopt(curl, CURLOPT_RANGE, range_header.c_str());
+      if (!proxy.empty()) {
+        curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+      }
+      if (!bear_token.empty()) {
+        *headers = curl_slist_append(
+            *headers,
+            AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, *headers);
+      } else if (!basic_username.empty() || !basic_password.empty()) {
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+        curl_easy_setopt(curl, CURLOPT_USERNAME, basic_username.c_str());
+        curl_easy_setopt(curl, CURLOPT_PASSWORD, basic_password.c_str());
+      }
+    };
+    const auto curl_res =
+        NBPerform("http.probe", normalized, control, &response, configure);
+    if (!curl_res) {
+      return {false, std::move(curl_res.rcm)};
     }
-    curl_easy_cleanup(curl);
-
-    if (control.IsInterrupted()) {
-      return {false, Err(EC::Terminate, "http.probe", url,
-                         "Operation interrupted by user")};
-    }
-    if (control.IsTimeout()) {
-      return {false, Err(EC::OperationTimeout, "http.probe", url,
-                         "Operation timeout")};
-    }
-    if (curl_rcm != CURLE_OK) {
-      return {false, BuildCurlError_(curl_rcm, "http.probe", url)};
+    if (curl_res.data != CURLE_OK) {
+      return {false, BuildCurlError_(curl_res.data, "http.probe", normalized)};
     }
     return {response == 206, OK};
   }
 
   ECMData<AMFSI::UpdateOSTypeResult>
   UpdateOSType(const AMFSI::UpdateOSTypeArgs &args = {},
-               const ClientControlComponent &control = {}) override {
+               const ControlComponent &control = {}) override {
     (void)args;
-    (void)control;
-    return {AMFSI::UpdateOSTypeResult{OS_TYPE::Unknown}, OK};
-  }
-
-  ECMData<AMFSI::UpdateHomeDirResult>
-  UpdateHomeDir(const AMFSI::UpdateHomeDirArgs &args = {},
-                const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::UpdateHomeDirResult{""},
-            Err(EC::OperationUnsupported, "http.update_home", ClientTarget_(),
-                "HTTP source has no home directory")};
+    return UnsupportedResult_(AMFSI::UpdateOSTypeResult{OS_TYPE::Unknown},
+                              control, "http.update_ostype",
+                              "HTTP source does not support OS detection");
   }
 
   ECMData<AMFSI::CheckResult>
   Check(const AMFSI::CheckArgs &args = {},
-        const ClientControlComponent &control = {}) override {
+        const ControlComponent &control = {}) override {
     (void)args;
-    if (control.IsInterrupted()) {
-      return {AMFSI::CheckResult{ClientStatus::ConnectionBroken},
-              Err(EC::Terminate, "http.check", ClientTarget_(),
-                  "Operation interrupted")};
-    }
-    if (control.IsTimeout()) {
-      return {AMFSI::CheckResult{ClientStatus::ConnectionBroken},
-              Err(EC::OperationTimeout, "http.check", ClientTarget_(),
-                  "Operation timeout")};
-    }
     return {AMFSI::CheckResult{ClientStatus::OK}, OK};
   }
 
   ECMData<AMFSI::ConnectResult>
   Connect(const AMFSI::ConnectArgs &args = {},
-          const ClientControlComponent &control = {}) override {
+          const ControlComponent &control = {}) override {
     (void)args;
-    if (control.IsInterrupted()) {
-      return {AMFSI::ConnectResult{ClientStatus::ConnectionBroken},
-              Err(EC::Terminate, "http.connect", ClientTarget_(),
-                  "Operation interrupted")};
-    }
-    if (control.IsTimeout()) {
-      return {AMFSI::ConnectResult{ClientStatus::ConnectionBroken},
-              Err(EC::OperationTimeout, "http.connect", ClientTarget_(),
-                  "Operation timeout")};
-    }
-    connect_state("initialize HTTP source", ClientTarget_());
-    return {AMFSI::ConnectResult{ClientStatus::OK}, OK};
-  }
-
-  ECMData<AMFSI::RTTResult>
-  GetRTT(const AMFSI::GetRTTArgs &args = {},
-         const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::RTTResult{-1.0},
-            Err(EC::OperationUnsupported, "http.rtt", ClientTarget_(),
-                "HTTP source does not support RTT test")};
-  }
-
-  ECMData<AMFSI::RunResult>
-  ConductCmd(const AMFSI::ConductCmdArgs &args,
-             const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::RunResult{"", -1},
-            Err(EC::OperationUnsupported, "http.cmd", ClientTarget_(),
-                "HTTP source does not support shell command")};
+    return UnsupportedResult_(AMFSI::ConnectResult{ClientStatus::OK}, control,
+                              "http.connect",
+                              "HTTP source is temporary and does not connect");
   }
 
   ECMData<AMFSI::StatResult>
   stat(const AMFSI::StatArgs &args,
-       const ClientControlComponent &control = {}) override {
-    const std::string url = AMStr::Strip(args.path);
+       const ControlComponent &control = {}) override {
+    const std::string url = ResolveHttpUrl_(args.path);
     if (!AMUrl::IsHttpUrl(url)) {
       return {AMFSI::StatResult{},
               Err(EC::InvalidArg, "http.stat", args.path,
@@ -612,85 +820,64 @@ public:
       return {AMFSI::StatResult{}, Err(EC::NotAFile, "http.stat", url,
                                        "HTTP directory URL is unsupported")};
     }
-    const std::string proxy = ResolveProxy_();
-    const std::string bear_token = ResolveBearerToken_();
-
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-      return {AMFSI::StatResult{}, Err(EC::InvalidHandle, "http.stat", url,
-                                       "curl_easy_init failed")};
+    if (auto stop_rcm = BuildStopRCM_(control, "http.stat", url);
+        stop_rcm.has_value()) {
+      return {AMFSI::StatResult{}, std::move(*stop_rcm)};
     }
-
-    CurlStopContext stop_ctx = {&control};
+    const std::string proxy = Proxy();
+    const std::string bear_token = BearerToken();
+    const std::string basic_username = BasicUsername();
+    const std::string basic_password = BasicPassword();
     HttpHeaderProbe probe = {};
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, kMaxRedirects);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlStopWk_);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &stop_ctx);
-    if (!proxy.empty()) {
-      curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
-    }
-
-    struct curl_slist *headers = nullptr;
-    if (!bear_token.empty()) {
-      headers = curl_slist_append(
-          headers, AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    }
-
-    CURLcode curl_rcm = curl_easy_perform(curl);
     long response = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
+    const auto run_probe = [&](bool no_body) -> ECMData<CURLcode> {
+      probe = {};
+      const auto configure = [&](CURL *curl, struct curl_slist **headers) {
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, CurlMaxRedirects());
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, no_body ? 1L : 0L);
+        if (!no_body) {
+          curl_easy_setopt(curl, CURLOPT_RANGE, "bytes=0-0");
+        }
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
+        if (!proxy.empty()) {
+          curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+        }
+        if (!bear_token.empty()) {
+          *headers = curl_slist_append(
+              *headers,
+              AMStr::fmt("Authorization: Bearer {}", bear_token).c_str());
+          curl_easy_setopt(curl, CURLOPT_HTTPHEADER, *headers);
+        } else if (!basic_username.empty() || !basic_password.empty()) {
+          curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+          curl_easy_setopt(curl, CURLOPT_USERNAME, basic_username.c_str());
+          curl_easy_setopt(curl, CURLOPT_PASSWORD, basic_password.c_str());
+        }
+      };
+      return NBPerform("http.stat", url, control, &response, configure);
+    };
+
+    auto curl_res = run_probe(true);
+    if (!curl_res) {
+      return {AMFSI::StatResult{}, std::move(curl_res.rcm)};
+    }
+    CURLcode curl_rcm = curl_res.data;
     bool need_get_fallback =
         (curl_rcm != CURLE_OK || response == 405 || response == 501);
 
     if (need_get_fallback) {
-      probe = {};
-      curl_easy_reset(curl);
-      curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-      curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-      curl_easy_setopt(curl, CURLOPT_MAXREDIRS, kMaxRedirects);
-      curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
-      curl_easy_setopt(curl, CURLOPT_RANGE, "bytes=0-0");
-      curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, ProbeHeaderWk_);
-      curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
-      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, DiscardWriteWk_);
-      curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
-      curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-      curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlStopWk_);
-      curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &stop_ctx);
-      if (!proxy.empty()) {
-        curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+      curl_res = run_probe(false);
+      if (!curl_res) {
+        return {AMFSI::StatResult{}, std::move(curl_res.rcm)};
       }
-      if (headers) {
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-      }
-      curl_rcm = curl_easy_perform(curl);
-      response = 0;
-      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
+      curl_rcm = curl_res.data;
     }
 
-    if (headers) {
-      curl_slist_free_all(headers);
-    }
-    curl_easy_cleanup(curl);
-
-    if (control.IsInterrupted()) {
-      return {AMFSI::StatResult{},
-              Err(EC::Terminate, "http.stat", url, "Operation interrupted")};
-    }
-    if (control.IsTimeout()) {
-      return {AMFSI::StatResult{},
-              Err(EC::OperationTimeout, "http.stat", url, "Operation timeout")};
-    }
     if (curl_rcm != CURLE_OK) {
       return {AMFSI::StatResult{}, BuildCurlError_(curl_rcm, "http.stat", url)};
     }
@@ -732,106 +919,60 @@ public:
     return {AMFSI::StatResult{info}, OK};
   }
 
-  ECMData<AMFSI::ListResult>
-  listdir(const AMFSI::ListdirArgs &args,
-          const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::ListResult{},
-            Err(EC::OperationUnsupported, "http.listdir", ClientTarget_(),
-                "HTTP source does not support directory listing")};
-  }
-
-  ECMData<AMFSI::ListNamesResult>
-  listnames(const AMFSI::ListNamesArgs &args,
-            const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::ListNamesResult{},
-            Err(EC::OperationUnsupported, "http.listnames", ClientTarget_(),
-                "HTTP source does not support directory listing")};
-  }
-
-  ECMData<AMFSI::MkdirResult>
-  mkdir(const AMFSI::MkdirArgs &args,
-        const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::MkdirResult{},
-            Err(EC::OperationUnsupported, "http.mkdir", ClientTarget_(),
-                "HTTP source is read-only")};
-  }
-
-  ECMData<AMFSI::MkdirsResult>
-  mkdirs(const AMFSI::MkdirsArgs &args,
-         const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::MkdirsResult{},
-            Err(EC::OperationUnsupported, "http.mkdirs", ClientTarget_(),
-                "HTTP source is read-only")};
-  }
-
-  ECMData<AMFSI::RMResult>
-  rmdir(const AMFSI::RmdirArgs &args,
-        const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::RMResult{},
-            Err(EC::OperationUnsupported, "http.rmdir", ClientTarget_(),
-                "HTTP source is read-only")};
-  }
-
-  ECMData<AMFSI::RMResult>
-  rmfile(const AMFSI::RmfileArgs &args,
-         const ClientControlComponent &control = {}) override {
-    (void)args;
-    (void)control;
-    return {AMFSI::RMResult{},
-            Err(EC::OperationUnsupported, "http.rmfile", ClientTarget_(),
-                "HTTP source is read-only")};
-  }
-
-  ECMData<AMFSI::MoveResult>
-  rename(const AMFSI::RenameArgs &args,
-         const ClientControlComponent &control = {}) override {
-    (void)control;
-    return {AMFSI::MoveResult{},
-            Err(EC::OperationUnsupported, "http.rename", "",
-                "HTTP client does not support rename")};
-  }
-
 private:
-  [[nodiscard]] std::string ClientTarget_() const {
-    if (!config_part_) {
-      return "<http-client>";
+  template <typename T>
+  [[nodiscard]] std::optional<T>
+  QueryNamedMetadata_(const std::string &name) const {
+    if (metadata_part_ == nullptr) {
+      return std::nullopt;
     }
-    const ConRequest req = config_part_->GetRequest();
-    if (!AMStr::Strip(req.nickname).empty()) {
-      return req.nickname;
+    auto query = metadata_part_->QueryNamedValue<T>(name);
+    if (!query.name_found || !query.type_match || !query.value.has_value()) {
+      return std::nullopt;
     }
-    if (!AMStr::Strip(req.hostname).empty()) {
-      return req.hostname;
-    }
-    return "<http-client>";
+    return query.value;
   }
 
-  [[nodiscard]] std::string ResolveProxy_() const {
-    if (!metadata_part_) {
-      return {};
+  template <typename T>
+  void SetNamedMetadata_(const std::string &name, T value) {
+    if (metadata_part_ == nullptr || name.empty()) {
+      return;
     }
-    auto runtime_meta = metadata_part_->QueryTypedValue<HttpRuntimeMetadata>();
-    if (!runtime_meta.has_value()) {
-      return {};
+    (void)metadata_part_->StoreNamedValue<T>(name, std::move(value), true);
+  }
+
+  [[nodiscard]] std::string ResolveHttpUrl_(const std::string &url) const {
+    const std::string normalized = AMStr::Strip(url);
+    if (AMUrl::IsHttpUrl(normalized)) {
+      return normalized;
     }
-    return runtime_meta->proxy;
+    if (!config_part_) {
+      return normalized;
+    }
+    const std::string host = AMStr::Strip(config_part_->GetRequest().hostname);
+    if (host.empty()) {
+      return normalized;
+    }
+    if (normalized.empty()) {
+      return host;
+    }
+    return AMUrl::ResolveRedirectUrl(host, normalized);
   }
 
   [[nodiscard]] std::string ResolveBearerToken_() const {
+    if (const auto meta =
+            QueryNamedMetadata_<std::string>(kHttpBearTokenMetaKey);
+        meta.has_value()) {
+      return *meta;
+    }
     if (!config_part_) {
       return {};
     }
-    return config_part_->GetRequest().password;
+    const ConRequest request = config_part_->GetRequest();
+    if (!AMStr::Strip(request.username).empty()) {
+      return {};
+    }
+    return request.password;
   }
 
   AMDomain::client::IClientMetaDataPort *metadata_part_ = nullptr;
@@ -840,46 +981,47 @@ private:
 };
 
 inline std::pair<ECM, AMDomain::client::ClientHandle>
-CreateTransientHttpSourceClient(const std::string &url,
-                                const std::string &proxy = "",
-                                const std::string &bear_token = "",
-                                const std::string &username = "",
-                                int redirect_times = 0) {
+BuildTransientHttpSourceClient(const std::string &url,
+                               const std::string &nickname = "",
+                               const std::string &username = "",
+                               const std::string &password = "") {
   const std::string normalized_url = AMStr::Strip(url);
   if (!AMUrl::IsHttpUrl(normalized_url)) {
-    return {Err(EC::InvalidArg, "http.create_client", url,
+    return {Err(EC::InvalidArg, "http.build_client", url,
                 "Only http:// and https:// are supported"),
             nullptr};
   }
 
   ConRequest request = {};
   request.protocol = ClientProtocol::HTTP;
-  request.nickname = "__http__";
+  request.nickname = AMStr::Strip(nickname).empty()
+                         ? std::string(kTransientHttpNickname)
+                         : AMStr::Strip(nickname);
   request.hostname = AMUrl::ExtractOrigin(normalized_url);
   request.username = username;
-  request.password = bear_token;
+  request.password = password;
   request.port = AMUrl::IsHttpsUrl(normalized_url) ? 443 : 80;
 
   auto metadata_port = std::make_unique<AMInfra::client::ClientMetaDataStore>();
   auto config_port =
       std::make_unique<AMInfra::client::ClientConfigStore>(request);
-  auto control_port = std::make_unique<AMInfra::client::ClientControlToken>();
+  auto control_port = std::make_unique<InterruptControl>();
   auto io_port = std::make_unique<AMHTTPIOCore>(
-      config_port.get(), control_port.get(), metadata_port.get());
+      metadata_port.get(), config_port.get(), control_port.get());
+
   auto client = std::make_shared<AMInfra::client::BaseClient>(
       std::move(metadata_port), std::move(config_port), std::move(control_port),
       std::move(io_port),
       AMDomain::client::ClientService::GenerateID(ClientProtocol::HTTP));
   if (!client) {
-    return {Err(EC::InvalidHandle, "http.create_client", url,
+    return {Err(EC::InvalidHandle, "http.build_client", url,
                 "Failed to create transient HTTP client"),
             nullptr};
   }
 
-  (void)client->MetaDataPort().StoreTypedValue(HttpRuntimeMetadata{
-      true, normalized_url, normalized_url, proxy, redirect_times});
-  client->ConfigPort().SetState({AMFSI::CheckResult{ClientStatus::OK}, OK});
+  client->ConfigPort().SetState(
+      {AMDomain::filesystem::CheckResult{ClientStatus::OK}, OK});
   return {OK, client};
 }
-} // namespace AMInfra::client::HTTP
 
+} // namespace AMInfra::client::HTTP

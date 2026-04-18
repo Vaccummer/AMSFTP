@@ -1,25 +1,20 @@
 #pragma once
 #include "domain/client/ClientPort.hpp"
+#include "foundation/core/Enum.hpp"
 #include <cstdint>
 
 namespace AMDomain::client::ClientService {
-constexpr int64_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
-constexpr int64_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
-constexpr int64_t AMMinBufferSize = 1024 * 4;
-constexpr int64_t AMMaxBufferSize = 1024 * 1024 * 1024;
-constexpr float AMDefaultTimeoutMs = -1.0f;
+constexpr int64_t AMMinBufferSize = 4 * AMKB;
+constexpr int64_t AMMaxBufferSize = AMGB;
+constexpr int64_t AMDefaultBufferSize = 5 * AMMB;
 
-inline int64_t ClampBufferSize(int64_t size, bool is_local) {
+inline int64_t ClampBufferSize(int64_t size) {
   if (size <= 0) {
-    return is_local ? AMDefaultLocalBufferSize : AMDefaultRemoteBufferSize;
+    return AMDefaultBufferSize;
   }
-  if (size <= AMMinBufferSize) {
-    return AMMinBufferSize;
-  }
-  if (size > AMMaxBufferSize) {
-    return AMMaxBufferSize;
-  }
-  return size;
+  return size < AMMinBufferSize
+             ? AMMinBufferSize
+             : (size > AMMaxBufferSize ? AMMaxBufferSize : size);
 };
 
 inline ClientID GenerateID(ClientProtocol protocol) {

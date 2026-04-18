@@ -46,6 +46,12 @@ bool IsStopError_(ErrorCode ec) {
   return ec == ErrorCode::Terminate || ec == ErrorCode::OperationTimeout;
 }
 
+std::optional<ECM> BuildRequestStopECM_(const ControlComponent &control,
+                                        std::string operation = "",
+                                        std::string target = "") {
+  return control.BuildRequestECM(std::move(operation), std::move(target));
+}
+
 void AddPathError_(std::vector<std::pair<PathTarget, ECM>> *errors, ECM *status,
                    const PathTarget &path, const ECM &rcm) {
   if (errors) {
@@ -141,7 +147,7 @@ void FilesystemAppService::ClearCache() { ClearBaseIOCache(); }
 
 ECMData<std::string>
 FilesystemAppService::GetClientHome(ClientHandle client,
-                                    const ClientControlComponent &control) {
+                                    const ControlComponent &control) {
   if (!client) {
     return {"", Err(EC::InvalidHandle, "", "", "Client handle is null")};
   }
@@ -169,14 +175,14 @@ FilesystemAppService::GetClientHome(ClientHandle client,
 
 ECMData<std::string>
 FilesystemAppService::GetClientCwd(const ClientHandle &client,
-                                   const ClientControlComponent &control) {
+                                   const ControlComponent &control) {
   if (!client) {
     return {"", Err(EC::InvalidHandle, "", "", "Client handle is null")};
   }
   auto meta_cwd = ClientAppService::GetClientCwd(client);
   if (meta_cwd.rcm && !AMStr::Strip(meta_cwd.data).empty()) {
     const std::string normalized_cwd = AMPath::NormalizeJoinedPath(
-        AMDomain::filesystem::services::NormalizePath(meta_cwd.data), "/");
+        AMDomain::filesystem::service::NormalizePath(meta_cwd.data), "/");
     return {normalized_cwd.empty() ? meta_cwd.data : normalized_cwd, OK};
   }
   auto home_res = GetClientHome(client, control);
@@ -186,9 +192,10 @@ FilesystemAppService::GetClientCwd(const ClientHandle &client,
   return {home_res.data, OK};
 }
 
-ECMData<std::string> FilesystemAppService::ResolveAbsolutePath(
-    ClientHandle client, const std::string &raw_path,
-    const ClientControlComponent &control) {
+ECMData<std::string>
+FilesystemAppService::ResolveAbsolutePath(ClientHandle client,
+                                          const std::string &raw_path,
+                                          const ControlComponent &control) {
   if (!client) {
     return {"", Err(EC::InvalidHandle, "", "", "Client handle is null")};
   }
@@ -209,12 +216,12 @@ ECMData<std::string> FilesystemAppService::ResolveAbsolutePath(
   const std::string abs_path =
       AMPath::abspath(input, true, home_result.data, cwd_result.data);
   const std::string normalized_abs =
-      AMDomain::filesystem::services::NormalizePath(abs_path);
+      AMDomain::filesystem::service::NormalizePath(abs_path);
   return {AMPath::NormalizeJoinedPath(normalized_abs, "/"), OK};
 }
 
 ECMData<PathTarget>
-FilesystemAppService::GetCwd(const ClientControlComponent &control) {
+FilesystemAppService::GetCwd(const ControlComponent &control) {
   PathTarget out = {};
   if (!client_service_) {
     return {std::move(out),
@@ -235,13 +242,13 @@ FilesystemAppService::GetCwd(const ClientControlComponent &control) {
   }
   out.nickname = client->ConfigPort().GetNickname();
   out.path = res.data;
-  out.is_wildcard = AMDomain::filesystem::services::HasWildcard(out.path);
+  out.is_wildcard = AMDomain::filesystem::service::HasWildcard(out.path);
   out.is_user_path = !out.path.empty() && out.path.front() == '~';
   return {std::move(out), OK};
 }
 
-ECM FilesystemAppService::EnsureClientWorkdir(
-    ClientHandle client, const ClientControlComponent &control) {
+ECM FilesystemAppService::EnsureClientWorkdir(ClientHandle client,
+                                              const ControlComponent &control) {
   if (!client) {
     return Err(EC::InvalidHandle, "", "", "Client handle is null");
   }
@@ -252,12 +259,12 @@ ECM FilesystemAppService::EnsureClientWorkdir(
   ClientMetaData metadata = *metadata_opt;
 
   const std::string normalized_home =
-      AMDomain::filesystem::services::NormalizePath(
+      AMDomain::filesystem::service::NormalizePath(
           AMStr::Strip(client->ConfigPort().GetHomeDir()));
   const auto try_resolve_dir =
       [&](const std::string &raw_candidate) -> ECMData<std::string> {
     const std::string normalized_candidate =
-        AMDomain::filesystem::services::NormalizePath(
+        AMDomain::filesystem::service::NormalizePath(
             AMStr::Strip(raw_candidate));
     if (normalized_candidate.empty()) {
       return {"", Err(EC::InvalidArg, "", "", "empty workdir candidate")};
@@ -268,7 +275,7 @@ ECM FilesystemAppService::EnsureClientWorkdir(
       return {"", absolute_result.rcm};
     }
     std::string absolute_path = AMPath::NormalizeJoinedPath(
-        AMDomain::filesystem::services::NormalizePath(absolute_result.data),
+        AMDomain::filesystem::service::NormalizePath(absolute_result.data),
         "/");
     if (absolute_path.empty()) {
       return {"", Err(EC::InvalidArg, "", "", "invalid workdir candidate")};
@@ -284,7 +291,7 @@ ECM FilesystemAppService::EnsureClientWorkdir(
     }
 
     std::string resolved = AMPath::NormalizeJoinedPath(
-        AMDomain::filesystem::services::NormalizePath(
+        AMDomain::filesystem::service::NormalizePath(
             stat_result.data.info.path),
         "/");
     if (resolved.empty()) {
@@ -331,7 +338,7 @@ ECMData<PathTarget> FilesystemAppService::PeekCdHistory() const {
 }
 
 ECM FilesystemAppService::ChangeDir(PathTarget path,
-                                    const ClientControlComponent &control,
+                                    const ControlComponent &control,
                                     bool from_history) {
   auto resolved_result = ResolvePath(path, control);
   if (!resolved_result.rcm || !resolved_result.data.client) {
@@ -357,8 +364,7 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
     return {EC::NotADirectory, "ChangeDir", abs_target, "Not a directory"};
   }
   metadata.cwd = AMPath::NormalizeJoinedPath(
-      AMDomain::filesystem::services::NormalizePath(
-          stat_result.data.info.path),
+      AMDomain::filesystem::service::NormalizePath(stat_result.data.info.path),
       "/");
   const ECM set_meta_rcm =
       ClientAppService::SetClientMetadata(client, metadata);
@@ -387,8 +393,8 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
 }
 
 ECMData<PathEntry> FilesystemAppService::StatEntry(
-    const PathTarget &target, const ClientControlComponent &control,
-    bool trace_link, ClientHandle preferred_client) {
+    const PathTarget &target, const ControlComponent &control, bool trace_link,
+    ClientHandle preferred_client) {
   auto resolved = ResolvePath(target, control, preferred_client);
   if (!(resolved.rcm) || !resolved.data.client) {
     return {PathEntry{}, (resolved.rcm) ? Err(EC::InvalidHandle, "", "",
@@ -409,10 +415,10 @@ ECMData<PathEntry> FilesystemAppService::StatEntry(
   return {std::move(out), OK};
 }
 
-ECMData<PathInfo>
-FilesystemAppService::Stat(const PathTarget &path,
-                           const ClientControlComponent &control,
-                           bool trace_link, ClientHandle preferred_client) {
+ECMData<PathInfo> FilesystemAppService::Stat(const PathTarget &path,
+                                             const ControlComponent &control,
+                                             bool trace_link,
+                                             ClientHandle preferred_client) {
   auto entry_result = StatEntry(path, control, trace_link, preferred_client);
   if (!(entry_result.rcm)) {
     return {PathInfo{}, entry_result.rcm};
@@ -422,7 +428,7 @@ FilesystemAppService::Stat(const PathTarget &path,
 
 ECMData<std::vector<PathInfo>>
 FilesystemAppService::Listdir(const PathTarget &path,
-                              const ClientControlComponent &control,
+                              const ControlComponent &control,
                               ClientHandle preferred_client) {
   auto resolved_result = ResolvePath(path, control, preferred_client);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
@@ -438,7 +444,7 @@ FilesystemAppService::Listdir(const PathTarget &path,
 
 ECMData<std::vector<std::string>>
 FilesystemAppService::ListNames(const PathTarget &path,
-                                const ClientControlComponent &control,
+                                const ControlComponent &control,
                                 ClientHandle preferred_client) {
   auto resolved_result = ResolvePath(path, control, preferred_client);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
@@ -453,7 +459,7 @@ FilesystemAppService::ListNames(const PathTarget &path,
 }
 
 ECM FilesystemAppService::Mkdirs(const PathTarget &path,
-                                 const ClientControlComponent &control,
+                                 const ControlComponent &control,
                                  ClientHandle preferred_client) {
   auto resolved_result = ResolvePath(path, control, preferred_client);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
@@ -467,10 +473,9 @@ ECM FilesystemAppService::Mkdirs(const PathTarget &path,
   return client->IOPort().mkdirs({resolved.abs_path}, control);
 }
 
-ECMData<double>
-FilesystemAppService::TestRTT(const std::string &nickname,
-                              const ClientControlComponent &control,
-                              int times) {
+ECMData<double> FilesystemAppService::TestRTT(const std::string &nickname,
+                                              const ControlComponent &control,
+                                              int times) {
   auto get_result = GetClient(nickname, control);
   if (!(get_result.rcm) || !get_result.data) {
     return {-1.0, (get_result.rcm)
@@ -488,7 +493,7 @@ FilesystemAppService::TestRTT(const std::string &nickname,
 
 ECMData<PathTarget>
 FilesystemAppService::ResolveTrashDir(const PathTarget &source,
-                                      const ClientControlComponent &control,
+                                      const ControlComponent &control,
                                       ClientHandle preferred_client) {
   auto source_resolved = ResolvePath(source, control, preferred_client);
   if (!(source_resolved.rcm) || !source_resolved.data.client) {
@@ -522,8 +527,8 @@ FilesystemAppService::ResolveTrashDir(const PathTarget &source,
 }
 
 ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
-                                 const ClientControlComponent &control,
-                                 bool mkdir, bool overwrite) {
+                                 const ControlComponent &control, bool mkdir,
+                                 bool overwrite) {
   auto src_resolved = ResolvePath(src, control);
   if (!(src_resolved.rcm) || !src_resolved.data.client) {
     return (src_resolved.rcm) ? Err(EC::InvalidHandle, "", "",
@@ -567,7 +572,7 @@ ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
     auto parent_stat =
         resolved_src.client->IOPort().stat({dst_parent, false}, control);
     if (!(parent_stat.rcm)) {
-      if (AMDomain::filesystem::services::IsPathNotExistError(
+      if (AMDomain::filesystem::service::IsPathNotExistError(
               parent_stat.rcm.code)) {
         if (!mkdir) {
           return Err(EC::ParentDirectoryNotExist, "", "",
@@ -600,7 +605,7 @@ ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
           EC::PathAlreadyExists, "", "",
           AMStr::fmt("Destination already exists: {}", resolved_dst.abs_path));
     }
-  } else if (!AMDomain::filesystem::services::IsPathNotExistError(
+  } else if (!AMDomain::filesystem::service::IsPathNotExistError(
                  dst_stat.rcm.code)) {
     return dst_stat.rcm;
   }
@@ -628,7 +633,7 @@ ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
 
 ECMData<RmfilePlan>
 FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
-                                    const ClientControlComponent &control) {
+                                    const ControlComponent &control) {
   RmfilePlan plan = {};
   ECM status = OK;
   if (targets.empty()) {
@@ -641,22 +646,16 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
   std::vector<PathTarget> expanded_targets = {};
   expanded_targets.reserve(targets.size());
   for (auto &target : targets) {
-    if (control.IsInterrupted()) {
-      const ECM rcm = Err(EC::Terminate, "", "", "Interrupted by user");
-      plan.rcm = rcm;
-      return {std::move(plan), rcm};
-    }
-    if (control.IsTimeout()) {
-      const ECM rcm = Err(EC::OperationTimeout, "", "", "Operation timed out");
-      plan.rcm = rcm;
-      return {std::move(plan), rcm};
+    if (auto stop_rcm = BuildRequestStopECM_(control); stop_rcm.has_value()) {
+      plan.rcm = *stop_rcm;
+      return {std::move(plan), *stop_rcm};
     }
 
     if (target.path.empty()) {
       target.path = ".";
     }
 
-    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+    if (AMDomain::filesystem::service::HasWildcard(target.path)) {
       auto find_result =
           find(target, SearchType::All, control, {},
                [&plan, &status](const PathTarget &error_path, ECM error_rcm) {
@@ -684,7 +683,7 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
           item.path = ".";
         }
         item.is_wildcard =
-            AMDomain::filesystem::services::HasWildcard(item.path);
+            AMDomain::filesystem::service::HasWildcard(item.path);
         item.is_user_path = !item.path.empty() && item.path.front() == '~';
         expanded_targets.push_back(std::move(item));
       }
@@ -702,15 +701,9 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
       continue;
     }
 
-    if (control.IsInterrupted()) {
-      const ECM rcm = Err(EC::Terminate, "", "", "Interrupted by user");
-      plan.rcm = rcm;
-      return {std::move(plan), rcm};
-    }
-    if (control.IsTimeout()) {
-      const ECM rcm = Err(EC::OperationTimeout, "", "", "Operation timed out");
-      plan.rcm = rcm;
-      return {std::move(plan), rcm};
+    if (auto stop_rcm = BuildRequestStopECM_(control); stop_rcm.has_value()) {
+      plan.rcm = *stop_rcm;
+      return {std::move(plan), *stop_rcm};
     }
 
     auto resolved_result = ResolvePath(target, control);
@@ -762,7 +755,7 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
 
 ECMData<std::vector<std::pair<PathTarget, ECM>>>
 FilesystemAppService::ExecuteRmfile(
-    const RmfilePlan &plan, const ClientControlComponent &control,
+    const RmfilePlan &plan, const ControlComponent &control,
     std::function<void(const PathTarget &, ECM)> on_error) {
   std::vector<std::pair<PathTarget, ECM>> errors = {};
   ECM status = OK;
@@ -772,13 +765,8 @@ FilesystemAppService::ExecuteRmfile(
   }
 
   for (const auto &resolved : plan.validated_targets) {
-    if (control.IsInterrupted()) {
-      return {std::move(errors),
-              Err(EC::Terminate, "", "", "Interrupted by user")};
-    }
-    if (control.IsTimeout()) {
-      return {std::move(errors),
-              Err(EC::OperationTimeout, "", "", "Operation timed out")};
+    if (auto stop_rcm = BuildRequestStopECM_(control); stop_rcm.has_value()) {
+      return {std::move(errors), *stop_rcm};
     }
 
     PathTarget target = resolved.target;
@@ -837,7 +825,7 @@ FilesystemAppService::ExecuteRmfile(
 }
 
 ECMData<std::vector<std::pair<PathTarget, ECM>>> FilesystemAppService::Rmdir(
-    std::vector<PathTarget> targets, const ClientControlComponent &control,
+    std::vector<PathTarget> targets, const ControlComponent &control,
     std::function<void(const PathTarget &, ECM)> on_error) {
   std::vector<std::pair<PathTarget, ECM>> errors = {};
   ECM status = OK;
@@ -847,13 +835,8 @@ ECMData<std::vector<std::pair<PathTarget, ECM>>> FilesystemAppService::Rmdir(
   }
 
   for (auto &target : targets) {
-    if (control.IsInterrupted()) {
-      return {std::move(errors),
-              Err(EC::Terminate, "", "", "Interrupted by user")};
-    }
-    if (control.IsTimeout()) {
-      return {std::move(errors),
-              Err(EC::OperationTimeout, "", "", "Operation timed out")};
+    if (auto stop_rcm = BuildRequestStopECM_(control); stop_rcm.has_value()) {
+      return {std::move(errors), *stop_rcm};
     }
 
     auto resolved_result = ResolvePath(target, control);
@@ -918,8 +901,9 @@ ECMData<std::vector<std::pair<PathTarget, ECM>>> FilesystemAppService::Rmdir(
   return {std::move(errors), status};
 }
 
-ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
-    std::vector<PathTarget> targets, const ClientControlComponent &control) {
+ECMData<PermanentRemovePlan>
+FilesystemAppService::PreparePermanentRemove(std::vector<PathTarget> targets,
+                                             const ControlComponent &control) {
   PermanentRemovePlan plan = {};
   ECM status = OK;
   if (targets.empty()) {
@@ -931,22 +915,16 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
 
   std::unordered_map<std::string, std::vector<PathInfo>> matched_map = {};
   for (auto &target : targets) {
-    if (control.IsInterrupted()) {
-      const ECM rcm = Err(EC::Terminate, "", "", "Interrupted by user");
-      plan.rcm = rcm;
-      return {std::move(plan), rcm};
-    }
-    if (control.IsTimeout()) {
-      const ECM rcm = Err(EC::OperationTimeout, "", "", "Operation timed out");
-      plan.rcm = rcm;
-      return {std::move(plan), rcm};
+    if (auto stop_rcm = BuildRequestStopECM_(control); stop_rcm.has_value()) {
+      plan.rcm = *stop_rcm;
+      return {std::move(plan), *stop_rcm};
     }
 
     if (target.path.empty()) {
       target.path = ".";
     }
 
-    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+    if (AMDomain::filesystem::service::HasWildcard(target.path)) {
       auto find_result =
           find(target, SearchType::All, control, {},
                [&plan, &status](const PathTarget &error_path, ECM error_rcm) {
@@ -1034,16 +1012,9 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
       stack.push_back({resolved_root, false});
 
       while (!stack.empty()) {
-        if (control.IsInterrupted()) {
-          const ECM rcm = Err(EC::Terminate, "", "", "Interrupted by user");
-          plan.rcm = rcm;
-          return {std::move(plan), rcm};
-        }
-        if (control.IsTimeout()) {
-          const ECM rcm =
-              Err(EC::OperationTimeout, "", "", "Operation timed out");
-          plan.rcm = rcm;
-          return {std::move(plan), rcm};
+        if (auto stop_rcm = BuildRequestStopECM_(control); stop_rcm.has_value()) {
+          plan.rcm = *stop_rcm;
+          return {std::move(plan), *stop_rcm};
         }
 
         StackFrame frame = std::move(stack.back());
@@ -1113,7 +1084,7 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
 
 ECMData<std::vector<std::pair<PathTarget, ECM>>>
 FilesystemAppService::ExecutePermanentRemove(
-    const PermanentRemovePlan &plan, const ClientControlComponent &control,
+    const PermanentRemovePlan &plan, const ControlComponent &control,
     std::function<void(const PathTarget &)> on_progress,
     std::function<void(const PathTarget &, ECM)> on_error) {
   std::vector<std::pair<PathTarget, ECM>> errors = {};
@@ -1125,13 +1096,8 @@ FilesystemAppService::ExecutePermanentRemove(
   }
 
   for (const auto &item : plan.ordered_delete_paths) {
-    if (control.IsInterrupted()) {
-      return {std::move(errors),
-              Err(EC::Terminate, "", "", "Interrupted by user")};
-    }
-    if (control.IsTimeout()) {
-      return {std::move(errors),
-              Err(EC::OperationTimeout, "", "", "Operation timed out")};
+    if (auto stop_rcm = BuildRequestStopECM_(control); stop_rcm.has_value()) {
+      return {std::move(errors), *stop_rcm};
     }
 
     PathTarget current_display = item.target;
@@ -1193,7 +1159,7 @@ FilesystemAppService::ExecutePermanentRemove(
 
 ECMData<std::vector<std::pair<PathTarget, ECM>>>
 FilesystemAppService::Saferm(std::vector<PathTarget> targets,
-                             const ClientControlComponent &control) {
+                             const ControlComponent &control) {
   std::vector<std::pair<PathTarget, ECM>> errors = {};
   ECM status = OK;
   if (targets.empty()) {
@@ -1204,20 +1170,15 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
 
   std::unordered_map<std::string, std::vector<PathInfo>> matched_map = {};
   for (auto &target : targets) {
-    if (control.IsInterrupted()) {
-      return {std::move(errors),
-              Err(EC::Terminate, "", "", "Interrupted by user")};
-    }
-    if (control.IsTimeout()) {
-      return {std::move(errors),
-              Err(EC::OperationTimeout, "", "", "Operation timed out")};
+    if (auto stop_rcm = BuildRequestStopECM_(control); stop_rcm.has_value()) {
+      return {std::move(errors), *stop_rcm};
     }
 
     if (target.path.empty()) {
       target.path = ".";
     }
 
-    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+    if (AMDomain::filesystem::service::HasWildcard(target.path)) {
       auto find_result =
           find(target, SearchType::All, control, {},
                [&errors, &status](const PathTarget &error_path, ECM error_rcm) {
@@ -1267,13 +1228,9 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
   std::unordered_map<std::string, ECM> bucket_rcm_map = {};
 
   for (const auto &source : compacted_targets) {
-    if (control.IsInterrupted()) {
-      return {std::move(errors),
-              Err(EC::Terminate, "", "", "Interrupted by user")};
-    }
-    if (control.IsTimeout()) {
-      return {std::move(errors),
-              Err(EC::OperationTimeout, "", "", "Operation timed out")};
+    auto stop_rcm = BuildRequestStopECM_(control, "saferm", source.path);
+    if (stop_rcm.has_value()) {
+      return {std::move(errors), *stop_rcm};
     }
 
     const std::string &nickname = source.nickname;
@@ -1287,7 +1244,7 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
         PathTarget trash_dir = std::move(trash_result.data);
         auto trash_stat = Stat(trash_dir, control, false);
         if (!(trash_stat.rcm)) {
-          if (AMDomain::filesystem::services::IsPathNotExistError(
+          if (AMDomain::filesystem::service::IsPathNotExistError(
                   trash_stat.rcm.code)) {
             prepare_rcm = Mkdirs(trash_dir, control);
           } else {
@@ -1349,7 +1306,7 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
                               BuildSuffixName_(base_name, ext_name, index));
       auto dst_stat = Stat(dst, control, false);
       if (!(dst_stat.rcm)) {
-        if (AMDomain::filesystem::services::IsPathNotExistError(
+        if (AMDomain::filesystem::service::IsPathNotExistError(
                 dst_stat.rcm.code)) {
           found_unique = true;
           break;
@@ -1375,4 +1332,3 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
 }
 
 } // namespace AMApplication::filesystem
-

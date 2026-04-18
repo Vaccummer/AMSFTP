@@ -48,7 +48,7 @@ struct TaskListArgs : BaseArgStruct {
  * @brief CLI argument container for task show.
  */
 struct TaskShowArgs : BaseArgStruct {
-  std::vector<size_t> ids = {};
+  std::vector<AMDomain::transfer::TaskID> ids = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
@@ -128,7 +128,7 @@ struct TaskThreadArgs : BaseArgStruct {
  * @brief CLI argument container for task query.
  */
 struct TaskEntryArgs : BaseArgStruct {
-  std::vector<size_t> ids = {};
+  std::vector<AMDomain::transfer::TaskID> ids = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
@@ -144,7 +144,7 @@ struct TaskEntryArgs : BaseArgStruct {
  */
 struct TaskControlArgs : BaseArgStruct {
   enum class Action { Terminate, Pause, Resume };
-  std::vector<size_t> ids = {};
+  std::vector<AMDomain::transfer::TaskID> ids = {};
   int grace_period_ms = 1500;
   Action action = Action::Terminate;
   [[nodiscard]] ECM Run(const CLIServices &managers,
@@ -199,4 +199,3 @@ struct TaskRetryArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
-

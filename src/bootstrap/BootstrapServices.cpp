@@ -8,13 +8,14 @@
 #include "application/log/LoggerAppService.hpp"
 #include "application/prompt/PromptHistoryManager.hpp"
 #include "application/prompt/PromptProfileManager.hpp"
-#include "application/transfer/TransferAppService.hpp"
 #include "application/terminal/TermAppService.hpp"
+#include "application/transfer/TransferAppService.hpp"
 #include "application/var/VarAppService.hpp"
 #include "domain/config/ConfigSchema.hpp"
-#include "domain/transfer/TransferPort.hpp"
 #include "domain/log/LoggerModel.hpp"
 #include "domain/log/LoggerPorts.hpp"
+#include "domain/transfer/TransferPort.hpp"
+#include "foundation/core/DataClass.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/client/ClientInterfaceService.hpp"
 #include "interface/adapters/config/ConfigInterfaceService.hpp"
@@ -85,8 +86,7 @@ struct AppServiceBuildState final {
       prompt_profile_history_manager = nullptr;
   std::unique_ptr<AMInterface::prompt::AMPromptIOManager> prompt_io_manager =
       nullptr;
-  std::unique_ptr<AMApplication::log::LoggerAppService> log_manager =
-      nullptr;
+  std::unique_ptr<AMApplication::log::LoggerAppService> log_manager = nullptr;
   AMDomain::transfer::TransferManagerArg transfer_manager_arg = {};
   AMDomain::log::LogManagerArg log_manager_arg = {};
 };
@@ -250,7 +250,7 @@ void BuildCliRuntimeState_(BootstrapServices *runtime,
 }
 
 ECM BuildRunContext_(AMInterface::cli::CliRunContext *run_ctx) {
-  run_ctx->task_control_token = AMDomain::client::CreateClientControlToken();
+  run_ctx->task_control_token = std::make_shared<InterruptControl>();
   if (!run_ctx->task_control_token) {
     return Err(EC::InvalidHandle, "", "",
                "failed to create task control token");
@@ -311,8 +311,7 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   state->transfer_manager_arg.heartbeat_timeout_ms =
       snapshots.client_service_arg.heartbeat_timeout_ms;
   state->log_manager_arg = snapshots.log_manager_arg;
-  state->log_manager =
-      std::make_unique<AMApplication::log::LoggerAppService>();
+  state->log_manager = std::make_unique<AMApplication::log::LoggerAppService>();
   state->host_service = std::make_unique<AMApplication::host::HostAppService>();
   {
     const ECM rcm = state->host_service->Init(snapshots.host_config_arg);
@@ -363,8 +362,8 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
 }
 
 std::filesystem::path ResolveLogPath_(const fs::path &project_root,
-                                  const std::string &configured_path,
-                                  const fs::path &default_relative_path) {
+                                      const std::string &configured_path,
+                                      const fs::path &default_relative_path) {
   std::string raw_path = configured_path;
   AMStr::VStrip(raw_path);
   const fs::path resolved =
@@ -375,7 +374,8 @@ std::filesystem::path ResolveLogPath_(const fs::path &project_root,
   return (project_root / resolved).lexically_normal();
 }
 
-ECM BuildLogManager_(const fs::path &project_root, AppServiceBuildState *state) {
+ECM BuildLogManager_(const fs::path &project_root,
+                     AppServiceBuildState *state) {
   if (state == nullptr || state->client_service == nullptr ||
       state->log_manager == nullptr) {
     return Err(EC::InvalidHandle, "bootstrap build log manager",
@@ -389,17 +389,17 @@ ECM BuildLogManager_(const fs::path &project_root, AppServiceBuildState *state) 
                "failed to build logger writer");
   }
 
-  auto client_writer =
-      std::shared_ptr<AMDomain::log::ILoggerWritePort>(std::move(client_writer_owned));
-  auto program_writer =
-      std::shared_ptr<AMDomain::log::ILoggerWritePort>(std::move(program_writer_owned));
+  auto client_writer = std::shared_ptr<AMDomain::log::ILoggerWritePort>(
+      std::move(client_writer_owned));
+  auto program_writer = std::shared_ptr<AMDomain::log::ILoggerWritePort>(
+      std::move(program_writer_owned));
 
-  const fs::path client_path = ResolveLogPath_(
-      project_root, state->log_manager_arg.client_log_path,
-      fs::path("config/log/Client.log"));
-  const fs::path program_path = ResolveLogPath_(
-      project_root, state->log_manager_arg.program_log_path,
-      fs::path("config/log/Program.log"));
+  const fs::path client_path =
+      ResolveLogPath_(project_root, state->log_manager_arg.client_log_path,
+                      fs::path("config/log/Client.log"));
+  const fs::path program_path =
+      ResolveLogPath_(project_root, state->log_manager_arg.program_log_path,
+                      fs::path("config/log/Program.log"));
 
   const ECM client_path_rcm = client_writer->SetPath(client_path);
   if (!client_path_rcm) {
@@ -427,7 +427,8 @@ ECM BuildLogManager_(const fs::path &project_root, AppServiceBuildState *state) 
   if (!state->log_manager->SetLogger(AMDomain::log::LoggerType::Program,
                                      program_writer)) {
     return Err(EC::CommonFailure, "bootstrap build log manager",
-               program_path.string(), "failed to register program logger writer");
+               program_path.string(),
+               "failed to register program logger writer");
   }
 
   (void)state->log_manager->SetTraceLevel(
@@ -450,8 +451,7 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
                                  AppServiceBuildState *state) {
   if (state == nullptr) {
     return Err(EC::InvalidArg, "bootstrap build prompt/style services",
-               "<state>",
-               "state is null");
+               "<state>", "state is null");
   }
   state->completer_config_manager =
       std::make_unique<AMApplication::completion::CompleterConfigManager>(
@@ -531,8 +531,7 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
 ECM RegisterConfigSyncPorts_(AppServiceBuildState *state) {
   if (state == nullptr || state->config_service == nullptr) {
     return Err(EC::InvalidHandle, "bootstrap register config sync ports",
-               "<state>",
-               "state or config service is null");
+               "<state>", "state or config service is null");
   }
 
   auto register_port = [&](AMApplication::config::IConfigSyncPort *port,
@@ -619,9 +618,9 @@ BuildApplicationServices_(const fs::path &root_dir) {
   return {std::move(state), OK};
 }
 
-ECM BuildClientInterfaceServices_(
-    const AMInterface::cli::amf &task_control_token,
-    const AppServiceBuildState &app_state, InterfaceServiceBuildState *state) {
+ECM BuildClientInterfaceServices_(const amf &task_control_token,
+                                  const AppServiceBuildState &app_state,
+                                  InterfaceServiceBuildState *state) {
   if (state == nullptr || app_state.config_service == nullptr ||
       app_state.client_service == nullptr ||
       app_state.terminal_service == nullptr ||
@@ -631,8 +630,7 @@ ECM BuildClientInterfaceServices_(
       app_state.prompt_io_manager == nullptr ||
       app_state.style_service == nullptr || app_state.var_service == nullptr) {
     return Err(EC::InvalidHandle, "bootstrap build interface services",
-               "<dependencies>",
-               "required service dependency is null");
+               "<dependencies>", "required service dependency is null");
   }
   state->config_interface_service =
       std::make_unique<AMInterface::config::ConfigInterfaceService>(
@@ -642,17 +640,17 @@ ECM BuildClientInterfaceServices_(
   state->client_interface_service =
       std::make_unique<AMInterface::client::ClientInterfaceService>(
           *app_state.client_service, *app_state.terminal_service,
-          *app_state.filesystem_service,
-          *app_state.host_service, *app_state.known_hosts_service,
-          *app_state.prompt_io_manager, *app_state.style_service);
+          *app_state.filesystem_service, *app_state.host_service,
+          *app_state.known_hosts_service, *app_state.prompt_io_manager,
+          *app_state.style_service);
   state->client_interface_service->SetDefaultControlToken(task_control_token);
   state->client_interface_service->BindInteractionCallbacks();
 
   state->filesystem_interface_service =
       std::make_unique<AMInterface::filesystem::FilesystemInterfaceSerivce>(
           *app_state.client_service, *app_state.host_service,
-          *app_state.filesystem_service,
-          *app_state.style_service, *app_state.prompt_io_manager);
+          *app_state.filesystem_service, *app_state.style_service,
+          *app_state.prompt_io_manager);
   state->filesystem_interface_service->SetDefaultControlToken(
       task_control_token);
 
@@ -670,15 +668,14 @@ ECM BuildClientInterfaceServices_(
   return OK;
 }
 
-ECM BuildTransferInterfaceService_(
-    const AMInterface::cli::amf &task_control_token,
-    const AppServiceBuildState &app_state, InterfaceServiceBuildState *state) {
+ECM BuildTransferInterfaceService_(const amf &task_control_token,
+                                   const AppServiceBuildState &app_state,
+                                   InterfaceServiceBuildState *state) {
   if (state == nullptr || app_state.filesystem_service == nullptr ||
       app_state.prompt_io_manager == nullptr ||
       app_state.style_service == nullptr) {
     return Err(EC::InvalidHandle, "bootstrap build transfer interface",
-               "<dependencies>",
-               "required service dependency is null");
+               "<dependencies>", "required service dependency is null");
   }
   state->transfer_pool = AMDomain::transfer::CreateTransferPoolPort(
       app_state.transfer_manager_arg);
@@ -694,16 +691,14 @@ ECM BuildTransferInterfaceService_(
       std::make_unique<AMInterface::transfer::TransferInterfaceService>(
           *app_state.filesystem_service, *state->transfer_app_service,
           *app_state.prompt_io_manager,
-          [](AMDomain::client::amf token) {
-            return AMDomain::client::ClientControlComponent(token, -1);
-          },
+          [](AMDomain::client::amf token) { return ControlComponent(token); },
           app_state.style_service.get(),
           app_state.transfer_manager_arg.bar_refresh_interval_ms);
   state->transfer_service->SetDefaultControlToken(task_control_token);
   return OK;
 }
 
-ECM BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
+ECM BootstrapLocalClient_(const amf &task_control_token,
                           const AppServiceBuildState &app_state) {
   if (app_state.host_service == nullptr ||
       app_state.client_service == nullptr ||
@@ -713,8 +708,7 @@ ECM BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
   }
   auto local_cfg_result = app_state.host_service->GetLocalConfig();
   if ((local_cfg_result.rcm)) {
-    const auto control =
-        AMDomain::client::ClientControlComponent(task_control_token, -1);
+    const auto control = ControlComponent(task_control_token);
     auto local_client_result = app_state.client_service->CreateClient(
         local_cfg_result.data, control, true);
     if ((local_client_result.rcm) && local_client_result.data) {
@@ -735,11 +729,12 @@ ECM BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
         }
       }
     } else if (!(local_client_result.rcm)) {
-      return Err(local_client_result.rcm.code, "bootstrap create local client",
-                 "local",
-                 local_client_result.rcm.error.empty()
-                     ? std::string(AMStr::ToString(local_client_result.rcm.code))
-                     : local_client_result.rcm.error);
+      return Err(
+          local_client_result.rcm.code, "bootstrap create local client",
+          "local",
+          local_client_result.rcm.error.empty()
+              ? std::string(AMStr::ToString(local_client_result.rcm.code))
+              : local_client_result.rcm.error);
     }
     return OK;
   }
@@ -750,7 +745,7 @@ ECM BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
                  : local_cfg_result.rcm.error);
 }
 
-ECM BuildAndInitSignalMonitor_(const AMInterface::cli::amf &task_control_token,
+ECM BuildAndInitSignalMonitor_(const amf &task_control_token,
                                InterfaceServiceBuildState *state) {
   if (state == nullptr) {
     return Err(EC::InvalidArg, "bootstrap init signal monitor", "<state>",
@@ -759,8 +754,7 @@ ECM BuildAndInitSignalMonitor_(const AMInterface::cli::amf &task_control_token,
   state->signal_monitor = AMDomain::signal::BuildSignalMonitorPort();
   if (!state->signal_monitor) {
     return Err(EC::InvalidHandle, "bootstrap init signal monitor",
-               "<signal-monitor>",
-               "failed to build signal monitor");
+               "<signal-monitor>", "failed to build signal monitor");
   }
 
   AMDomain::signal::SignalHook hook = {};
@@ -870,22 +864,18 @@ ECMData<fs::path> ResolveRootDir() {
   if (!AMStr::GetEnv(kRootEnvKey, &env_root)) {
     return {fs::path{},
             Err(EC::ConfigNotInitialized, "bootstrap resolve root",
-                "$AMSFTP_ROOT",
-                "env variable $AMSFTP_ROOT is not set")};
+                "$AMSFTP_ROOT", "env variable $AMSFTP_ROOT is not set")};
   }
   AMStr::VStrip(env_root);
   if (env_root.empty()) {
-    return {fs::path{},
-            Err(EC::ConfigNotInitialized, "bootstrap resolve root",
-                "$AMSFTP_ROOT",
-                "AMSFTP_ROOT is empty")};
+    return {fs::path{}, Err(EC::ConfigNotInitialized, "bootstrap resolve root",
+                            "$AMSFTP_ROOT", "AMSFTP_ROOT is empty")};
   }
 
   fs::path root_dir = NormalizeRootPath_(env_root);
   if (root_dir.empty()) {
-    return {fs::path{},
-            Err(EC::InvalidArg, "bootstrap resolve root", env_root,
-                "resolved root directory is empty")};
+    return {fs::path{}, Err(EC::InvalidArg, "bootstrap resolve root", env_root,
+                            "resolved root directory is empty")};
   }
   std::error_code ec;
   if (std::filesystem::exists(root_dir, ec) && !ec &&
@@ -895,9 +885,8 @@ ECMData<fs::path> ResolveRootDir() {
                 "AMSFTP_ROOT exists but is not a directory")};
   }
   if (ec) {
-    return {fs::path{},
-            Err(EC::ConfigLoadFailed, "bootstrap resolve root", root_dir.string(),
-                ec.message())};
+    return {fs::path{}, Err(EC::ConfigLoadFailed, "bootstrap resolve root",
+                            root_dir.string(), ec.message())};
   }
   const ECM init_rcm = InitProjectRoot_(root_dir);
   if (!init_rcm) {
@@ -985,5 +974,3 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 }
 
 } // namespace AMBootstrap
-
-

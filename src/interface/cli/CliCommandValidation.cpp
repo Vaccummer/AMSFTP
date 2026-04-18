@@ -92,7 +92,7 @@ std::string BuildInvalidMessage_(
   const std::string invalid =
       style_service.Format(invalid_token, AMInterface::style::StyleIndex::IllegalCommand);
   if (!suggestion.has_value()) {
-    return AMStr::fmt("❌ InvalidArg \"{}\" is not a valid module or command",
+    return AMStr::fmt("❌ {} is not a valid module or command",
                       invalid);
   }
 
@@ -102,8 +102,8 @@ std::string BuildInvalidMessage_(
   const std::string kind_text = is_module ? "module" : "command";
   const std::string name = style_service.Format(suggestion->name, kind_style);
   return AMStr::fmt(
-      "❌ InvalidArg \"{}\" is not a valid module or command, did you mean {}: "
-      "\"{}\"",
+      "❌ {} is not a valid module or command, did you mean {}: "
+      "{}",
       invalid, kind_text, name);
 }
 

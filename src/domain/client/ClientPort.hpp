@@ -18,8 +18,6 @@
 
 namespace AMDomain::client {
 class IClientPort;
-class IClientControlToken;
-class IClientTimeoutPort;
 
 using ClientHandle = std::shared_ptr<IClientPort>;
 using CB =
@@ -28,8 +26,7 @@ using WalkErrorCallback =
     std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
 using WRD =
     std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
-using amf = std::shared_ptr<IClientControlToken>;
-using timeoutf = std::shared_ptr<IClientTimeoutPort>;
+using amf = std::shared_ptr<InterruptControl>;
 using WER = std::vector<std::pair<std::string, ECM>>;
 using WRI = std::pair<std::vector<PathInfo>, WER>;
 using RemoveErrors = std::vector<std::pair<std::string, ECM>>;
@@ -47,9 +44,8 @@ using ParsedClientPath =
     std::tuple<std::string, std::string, ClientHandle, ECM>;
 using DisconnectCallback =
     std::function<void(const ClientHandle &, const ECM &)>;
-
-amf CreateClientControlToken();
-timeoutf CreateClientTimeoutPort();
+using ClientID = std::string;
+using ClientName = std::string;
 
 /**
  * @brief Port for runtime metadata access.
@@ -318,144 +314,6 @@ public:
 };
 
 /**
- * @brief Port for interrupt/task-control operations.
- */
-class IClientControlToken {
-public:
-  /**
-   * @brief Virtual destructor for polymorphic use.
-   */
-  virtual ~IClientControlToken() = default;
-
-  /**
-   * @brief Request interruption for this client instance.
-   */
-  virtual void RequestInterrupt() = 0;
-
-  /**
-   * @brief Clear client-level interruption state.
-   */
-  virtual void ClearInterrupt() = 0;
-
-  /**
-   * @brief Return true when client-level interruption is requested.
-   */
-  [[nodiscard]] virtual bool IsInterrupted() const = 0;
-
-  /**
-   * @brief Register one wake callback for interruption.
-   */
-  virtual size_t RegisterWakeup(std::function<void()> wake_cb) = 0;
-
-  /**
-   * @brief Unregister one wake callback token.
-   */
-  virtual bool UnregisterWakeup(size_t token) = 0;
-};
-
-class ControlTokenWakeupSafeGaurd {
-private:
-  const amf &control_token_;
-  size_t wake_token_ = 0;
-
-public:
-  explicit ControlTokenWakeupSafeGaurd(const amf &control_token,
-                                       std::function<void()> wake_cb)
-      : control_token_(control_token) {
-    if (control_token_) {
-      wake_token_ = control_token_->RegisterWakeup(std::move(wake_cb));
-    }
-  }
-
-  ~ControlTokenWakeupSafeGaurd() {
-    if (wake_token_ != 0 && control_token_) {
-      control_token_->UnregisterWakeup(wake_token_);
-    }
-  }
-};
-
-/**
- * @brief Port for timeout-budget tracking.
- */
-class IClientTimeoutPort {
-public:
-  /**
-   * @brief Virtual destructor for polymorphic use.
-   */
-  virtual ~IClientTimeoutPort() = default;
-
-  /**
-   * @brief Return true when timeout budget has elapsed.
-   */
-  [[nodiscard]] virtual bool IsTimeout() const = 0;
-
-  /**
-   * @brief Return remaining timeout budget in milliseconds.
-   * When SetTimeout is called with a negative value, there is no timeout and
-   * this returns std::nullopt.
-   * When timed out, this returns 0.
-   * Otherwise this returns remaining milliseconds.
-   */
-  [[nodiscard]] virtual std::optional<unsigned int> RemainTimeMs() const = 0;
-
-  /**
-   * @brief Set timeout budget in milliseconds.
-   * @param timeout_ms Timeout budget in milliseconds; negative value means
-   * no timeout.
-   */
-  virtual void SetTimeout(float timeout_ms) = 0;
-};
-
-class ClientControlComponent {
-private:
-  amf control_port = nullptr;
-  timeoutf timeout_port = nullptr;
-
-public:
-  ClientControlComponent(amf control_port = nullptr,
-                         timeoutf timeout_port = nullptr)
-      : control_port(std::move(control_port)),
-        timeout_port(std::move(timeout_port)) {}
-
-  ClientControlComponent(amf control_port, int timeout_ms)
-      : control_port(std::move(control_port)),
-        timeout_port(CreateClientTimeoutPort()) {
-    if (timeout_port) {
-      timeout_port->SetTimeout(static_cast<float>(timeout_ms));
-    }
-  }
-
-  [[nodiscard]] bool IsInterrupted() const {
-    return (control_port && control_port->IsInterrupted());
-  }
-
-  [[nodiscard]] bool IsTimeout() const {
-    return (timeout_port && timeout_port->IsTimeout());
-  }
-
-  [[nodiscard]] std::optional<unsigned int> RemainingTimeMs() const {
-    if (timeout_port) {
-      return timeout_port->RemainTimeMs();
-    }
-    return std::nullopt;
-  }
-
-  [[nodiscard]] const amf &ControlToken() const { return control_port; }
-
-  [[nodiscard]] bool CheckStop(ECM &rcm) const {
-    if (IsInterrupted()) {
-      rcm = ECM{EC::Terminate, "", "", "Operation interrupted by user"};
-      return true;
-    }
-    if (IsTimeout()) {
-      rcm = ECM{EC::OperationTimeout, "", "", "Operation timed out"};
-      return true;
-    }
-    return false;
-  }
-};
-
-/**
  * @brief Port for IO worker operations.
  */
 class IClientIOPort {
@@ -478,8 +336,8 @@ public:
   /**
    * @brief Register one connect-state callback for connect progress records.
    */
-  virtual void RegisterConnectStateCallback(
-      ConnectStateCallback connect_state_cb) = 0;
+  virtual void
+  RegisterConnectStateCallback(ConnectStateCallback connect_state_cb) = 0;
 
   /**
    * @brief Unregister current connect-state callback.
@@ -511,122 +369,122 @@ public:
    */
   virtual ECMData<AMDomain::filesystem::UpdateOSTypeResult>
   UpdateOSType(const AMDomain::filesystem::UpdateOSTypeArgs &args = {},
-               const ClientControlComponent &control = {}) = 0;
+               const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Update and return home directory.
    */
   virtual ECMData<AMDomain::filesystem::UpdateHomeDirResult>
   UpdateHomeDir(const AMDomain::filesystem::UpdateHomeDirArgs &args = {},
-                const ClientControlComponent &control = {}) = 0;
+                const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Validate connection health.
    */
   virtual ECMData<AMDomain::filesystem::CheckResult>
   Check(const AMDomain::filesystem::CheckArgs &args = {},
-        const ClientControlComponent &control = {}) = 0;
+        const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Connect or reconnect this client.
    */
   virtual ECMData<AMDomain::filesystem::ConnectResult>
   Connect(const AMDomain::filesystem::ConnectArgs &args = {},
-          const ClientControlComponent &control = {}) = 0;
+          const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Measure round trip time when supported.
    */
   virtual ECMData<AMDomain::filesystem::RTTResult>
   GetRTT(const AMDomain::filesystem::GetRTTArgs &args = {},
-         const ClientControlComponent &control = {}) = 0;
+         const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Execute command and return output + exit code when supported.
    */
   virtual ECMData<AMDomain::filesystem::RunResult>
   ConductCmd(const AMDomain::filesystem::ConductCmdArgs &args,
-             const ClientControlComponent &control = {}) = 0;
+             const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Query path metadata.
    */
   virtual ECMData<AMDomain::filesystem::StatResult>
   stat(const AMDomain::filesystem::StatArgs &args,
-       const ClientControlComponent &control = {}) = 0;
+       const ControlComponent &control = {}) = 0;
 
   /**
    * @brief List one directory.
    */
   virtual ECMData<AMDomain::filesystem::ListResult>
   listdir(const AMDomain::filesystem::ListdirArgs &args,
-          const ClientControlComponent &control = {}) = 0;
+          const ControlComponent &control = {}) = 0;
 
   /**
    * @brief List one directory and return only entry names.
    */
   virtual ECMData<AMDomain::filesystem::ListNamesResult>
   listnames(const AMDomain::filesystem::ListNamesArgs &args,
-            const ClientControlComponent &control = {}) = 0;
+            const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Create one directory.
    */
   virtual ECMData<AMDomain::filesystem::MkdirResult>
   mkdir(const AMDomain::filesystem::MkdirArgs &args,
-        const ClientControlComponent &control = {}) = 0;
+        const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Create multi-level directories.
    */
   virtual ECMData<AMDomain::filesystem::MkdirsResult>
   mkdirs(const AMDomain::filesystem::MkdirsArgs &args,
-         const ClientControlComponent &control = {}) = 0;
+         const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Remove one directory.
    */
   virtual ECMData<AMDomain::filesystem::RMResult>
   rmdir(const AMDomain::filesystem::RmdirArgs &args,
-        const ClientControlComponent &control = {}) = 0;
+        const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Remove one file.
    */
   virtual ECMData<AMDomain::filesystem::RMResult>
   rmfile(const AMDomain::filesystem::RmfileArgs &args,
-         const ClientControlComponent &control = {}) = 0;
+         const ControlComponent &control = {}) = 0;
 
   /**
    * @brief Rename or move one path.
    */
   virtual ECMData<AMDomain::filesystem::MoveResult>
   rename(const AMDomain::filesystem::RenameArgs &args,
-         const ClientControlComponent &control = {}) = 0;
+         const ControlComponent &control = {}) = 0;
 
   /**
    * Deprecated orchestration APIs (migration reference only):
    * virtual AMDomain::filesystem::GetsizeResult
    * getsize(const AMDomain::filesystem::GetsizeArgs &args,
-   *         const ClientControlComponent &control = {}) = 0;
+   *         const ControlComponent &control = {}) = 0;
    * virtual AMDomain::filesystem::FindResult
    * find(const AMDomain::filesystem::FindArgs &args,
-   *      const ClientControlComponent &control = {}) = 0;
+   *      const ControlComponent &control = {}) = 0;
    * virtual AMDomain::filesystem::DeleteResult
    * remove(const AMDomain::filesystem::RemoveArgs &args,
-   *        const ClientControlComponent &control = {}) = 0;
+   *        const ControlComponent &control = {}) = 0;
    * virtual ECM
    * saferm(const AMDomain::filesystem::SafermArgs &args,
-   *        const ClientControlComponent &control = {}) = 0;
+   *        const ControlComponent &control = {}) = 0;
    * virtual ECM
    * copy(const AMDomain::filesystem::CopyArgs &args,
-   *      const ClientControlComponent &control = {}) = 0;
+   *      const ControlComponent &control = {}) = 0;
    * virtual AMDomain::filesystem::IWalkResult
    * iwalk(const AMDomain::filesystem::IWalkArgs &args,
-   *       const ClientControlComponent &control = {}) = 0;
+   *       const ControlComponent &control = {}) = 0;
    * virtual AMDomain::filesystem::WalkResult
    * walk(const AMDomain::filesystem::WalkArgs &args,
-   *      const ClientControlComponent &control = {}) = 0;
+   *      const ControlComponent &control = {}) = 0;
    */
 };
 
@@ -669,12 +527,12 @@ public:
   /**
    * @brief Return task-control port.
    */
-  [[nodiscard]] virtual IClientControlToken &TaskControlPort() = 0;
+  [[nodiscard]] virtual InterruptControl &InterruptPort() = 0;
 
   /**
    * @brief Return task-control port.
    */
-  [[nodiscard]] virtual const IClientControlToken &TaskControlPort() const = 0;
+  [[nodiscard]] virtual const InterruptControl &InterruptPort() const = 0;
 
   /**
    * @brief Return IO port.
@@ -685,11 +543,7 @@ public:
    * @brief Return IO port.
    */
   [[nodiscard]] virtual const IClientIOPort &IOPort() const = 0;
-
 };
-
-using ClientID = IClientPort::ID;
-using ClientName = std::string;
 
 class IClientMaintainerPort {
 public:
@@ -742,4 +596,3 @@ CreateClientMaintainer(int heartbeat_interval_s = 60,
                        DisconnectCallback disconnect_callback = {},
                        std::vector<ClientHandle> init_clients = {});
 } // namespace AMDomain::client
-

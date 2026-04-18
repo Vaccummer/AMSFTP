@@ -9,7 +9,7 @@ StyleConfigManager::StyleConfigManager(StyleConfigArg arg)
 
 ECM StyleConfigManager::Init() {
   auto guard = init_arg_.lock();
-  AMDomain::style::services::NormalizeStyleConfigArg(&guard.get());
+  AMDomain::style::service::NormalizeStyleConfigArg(&guard.get());
   return OK;
 }
 

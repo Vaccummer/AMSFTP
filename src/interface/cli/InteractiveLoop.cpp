@@ -252,7 +252,10 @@ void RegisterPromptGetters_(AMInterface::prompt::CLIPromtRender &core_prompt,
                                                         &running_count);
     return std::to_string(running_count);
   });
-  core_prompt.RegisterGetter("task_paused", []() { return std::string("0"); });
+  core_prompt.RegisterGetter("task_paused", [&managers]() {
+    const auto paused = managers.application.transfer_service->GetPausedTasks();
+    return std::to_string(paused.size());
+  });
 }
 
 class ScopedInteractiveEventCallbacks_ : public NonCopyableNonMovable {
@@ -414,7 +417,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       }
       if (err != last_core_prompt_parse_error) {
         managers.interfaces.prompt_io_manager->FmtPrint(
-            "❌ CorePrompt parse failed: {}", err);
+            "❌ CorePrompt parse failed: {}", AMStr::BBCEscape(err));
         last_core_prompt_parse_error = err;
       }
     } else {
@@ -426,7 +429,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
         }
         if (err != last_core_prompt_render_error) {
           managers.interfaces.prompt_io_manager->FmtPrint(
-              "❌ CorePrompt render failed: {}", err);
+              "❌ CorePrompt render failed: {}", AMStr::BBCEscape(err));
           last_core_prompt_render_error = err;
         }
       } else {

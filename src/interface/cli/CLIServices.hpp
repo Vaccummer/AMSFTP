@@ -9,7 +9,6 @@
 #include "application/terminal/TermAppService.hpp"
 #include "application/transfer/TransferAppService.hpp"
 #include "application/var/VarAppService.hpp"
-#include "domain/client/ClientPort.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "interface/adapters/client/ClientInterfaceService.hpp"
@@ -27,8 +26,6 @@
 #include <string>
 
 namespace AMInterface::cli {
-
-using amf = std::shared_ptr<AMDomain::client::IClientControlToken>;
 
 template <typename T> class ServiceHolder final : public NonCopyableNonMovable {
 public:

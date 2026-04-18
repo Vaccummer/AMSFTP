@@ -8,8 +8,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
-#include <future>
 #include <functional>
+#include <future>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -24,21 +24,21 @@
 #include <vector>
 
 namespace AMInfra::transfer {
+using AMDomain::transfer::TaskAssignType;
 using EC = ErrorCode;
 using ProgressCBInfo = AMDomain::transfer::ProgressCBInfo;
 using ErrorCBInfo = AMDomain::transfer::ErrorCBInfo;
 using TaskHandle = std::shared_ptr<AMDomain::transfer::TaskInfo>;
 using TaskStatus = AMDomain::transfer::TaskStatus;
 using TaskInfo = AMDomain::transfer::TaskInfo;
-using TaskId = TaskInfo::ID;
-using TaskAssignType = ::TaskAssignType;
+using AMDomain::transfer::TaskID;
 using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TransferTask = AMDomain::transfer::TransferTask;
 
 struct TransferBufferPolicy {
   size_t default_buffer_size =
-      AMDomain::client::ClientService::AMDefaultRemoteBufferSize;
+      AMDomain::client::ClientService::AMDefaultBufferSize;
   size_t min_buffer_size = AMDomain::client::ClientService::AMMinBufferSize;
   size_t max_buffer_size = AMDomain::client::ClientService::AMMaxBufferSize;
 };
@@ -169,8 +169,9 @@ public:
       return true;
     }
     std::unique_lock<std::mutex> lock(wait_mtx_);
-    wait_cv_.wait_for(lock, std::chrono::milliseconds(std::max(1, wait_ms)),
-                      [&]() { return writable() > 0 || (should_stop && should_stop()); });
+    wait_cv_.wait_for(
+        lock, std::chrono::milliseconds(std::max(1, wait_ms)),
+        [&]() { return writable() > 0 || (should_stop && should_stop()); });
     return writable() > 0;
   }
 
@@ -180,8 +181,9 @@ public:
       return true;
     }
     std::unique_lock<std::mutex> lock(wait_mtx_);
-    wait_cv_.wait_for(lock, std::chrono::milliseconds(std::max(1, wait_ms)),
-                      [&]() { return available() > 0 || (should_stop && should_stop()); });
+    wait_cv_.wait_for(
+        lock, std::chrono::milliseconds(std::max(1, wait_ms)),
+        [&]() { return available() > 0 || (should_stop && should_stop()); });
     return available() > 0;
   }
 };
@@ -222,8 +224,8 @@ private:
   std::future<ECM> EnqueueReadJob_(ClientHandle src_client,
                                    const TaskHandle &task_info,
                                    TransferRuntimeProgress *runtime_progress);
-  [[nodiscard]] size_t ResolveTaskBufferSize_(
-      const TaskHandle &task_info) const;
+  [[nodiscard]] size_t
+  ResolveTaskBufferSize_(const TaskHandle &task_info) const;
 
 private:
   TransferBufferPolicy buffer_policy_ = {};
@@ -240,7 +242,6 @@ public:
   using TaskHandle = AMInfra::transfer::TaskHandle;
   using TaskStatus = AMInfra::transfer::TaskStatus;
   using TaskInfo = AMInfra::transfer::TaskInfo;
-  using TaskId = AMInfra::transfer::TaskId;
   using TaskAssignType = AMInfra::transfer::TaskAssignType;
   using ClientHandle = AMInfra::transfer::ClientHandle;
   using TransferClientContainer = AMInfra::transfer::TransferClientContainer;
@@ -258,25 +259,24 @@ public:
   ECM Submit(TaskHandle task_info) override;
 
   [[nodiscard]] std::optional<TaskStatus>
-  GetStatus(const TaskId &id) const override;
+  GetStatus(const TaskID &id) const override;
 
-  [[nodiscard]] TaskHandle GetActiveTask(const TaskId &id) const override;
+  [[nodiscard]] TaskHandle GetActiveTask(const TaskID &id) const override;
 
-  [[nodiscard]] std::unordered_map<TaskId, TaskHandle>
+  [[nodiscard]] std::unordered_map<TaskID, TaskHandle>
   GetAllActiveTasks() const override;
 
-  [[nodiscard]] std::unordered_map<TaskId, TaskHandle>
+  [[nodiscard]] std::unordered_map<TaskID, TaskHandle>
   GetPendingTasks() const override;
 
-  [[nodiscard]] std::unordered_map<TaskId, TaskHandle>
+  [[nodiscard]] std::unordered_map<TaskID, TaskHandle>
   GetConductingTasks() const override;
 
-  std::pair<TaskHandle, ECM> StopActive(
-      const TaskId &id, AMDomain::transfer::ActiveStopReason reason,
-      int timeout_ms = 5000, int grace_period_ms = 1500) override;
+  std::pair<TaskHandle, ECM>
+  StopActive(const TaskID &id, AMDomain::transfer::ActiveStopReason reason,
+             int timeout_ms = 5000, int grace_period_ms = 1500) override;
 
-  std::pair<TaskHandle, ECM> Terminate(const TaskId &id,
-                                       int timeout_ms = 5000,
+  std::pair<TaskHandle, ECM> Terminate(const TaskID &id, int timeout_ms = 5000,
                                        int grace_period_ms = 1500) override;
 
 private:
@@ -286,12 +286,12 @@ private:
   void RegisterTask(const TaskHandle &task_info, TaskAssignType assign_type,
                     int affinity_thread);
 
-  std::optional<std::pair<TaskId, TaskHandle>>
+  std::optional<std::pair<TaskID, TaskHandle>>
   DequeueTask(std::stop_token stop_token, size_t thread_index);
 
   void HandleCompletedTask(const TaskHandle &task_info);
 
-  void SetConducting(size_t thread_index, const TaskId &task_id,
+  void SetConducting(size_t thread_index, const TaskID &task_id,
                      const TaskHandle &task_info);
 
   void ClearConducting(size_t thread_index);
@@ -309,7 +309,7 @@ private:
   void HeartbeatLoop_(std::stop_token stop_token);
   void HeartbeatTick_();
 
-  std::unordered_map<TaskId, TaskHandle> GetRegistryCopy() const;
+  std::unordered_map<TaskID, TaskHandle> GetRegistryCopy() const;
 
   std::atomic<bool> running_{true};
   std::atomic<size_t> desired_thread_count_{0};
@@ -326,20 +326,18 @@ private:
 
   mutable std::mutex queue_mtx_;
   std::condition_variable queue_cv_;
-  std::vector<std::list<TaskId>> affinity_queues_;
-  std::list<TaskId> public_queue_;
+  std::vector<std::list<TaskID>> affinity_queues_;
+  std::list<TaskID> public_queue_;
 
-  mutable AMAtomic<std::unordered_map<TaskId, TaskHandle>> task_registry_;
+  mutable AMAtomic<std::unordered_map<TaskID, TaskHandle>> task_registry_;
 
   mutable std::mutex conducting_mtx_;
   std::condition_variable conducting_cv_;
-  std::unordered_set<TaskId> conducting_tasks_;
-  std::vector<TaskId> conducting_by_thread_;
+  std::unordered_set<TaskID> conducting_tasks_;
+  std::vector<TaskID> conducting_by_thread_;
   std::vector<TaskHandle> conducting_infos_;
   AMDomain::transfer::TransferManagerArg manager_arg_ = {};
   std::vector<std::unique_ptr<TransferExecutionEngine>> engines_ = {};
   std::atomic<bool> is_deconstruct{false};
 };
 } // namespace AMInfra::transfer
-
-

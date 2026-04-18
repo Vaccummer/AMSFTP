@@ -46,6 +46,40 @@ enum class ClientStatus {
   ConnectionBroken = 3,
 };
 
+enum class WaitResult {
+  Ready,       // Socket is ready for read/write
+  ReadReady,   // Socket is ready for read (ReadOrWrite mode only)
+  WriteReady,  // Socket is ready for write (ReadOrWrite mode only)
+  Timeout,     // Operation timed out
+  Interrupted, // Operation was interrupted by flag
+  Error        // Socket error occurred
+};
+
+inline ErrorCode AMCast(WaitResult wr) {
+  switch (wr) {
+  case WaitResult::Ready:
+  case WaitResult::ReadReady:
+  case WaitResult::WriteReady:
+    return ErrorCode::Success;
+  case WaitResult::Timeout:
+    return ErrorCode::OperationTimeout;
+  case WaitResult::Interrupted:
+    return ErrorCode::Terminate;
+  case WaitResult::Error:
+    return ErrorCode::SocketRecvError;
+  default:
+    return ErrorCode::UnknownError;
+  }
+}
+
+template <typename T> struct NBResult {
+  T value; // Function return value
+  ECM rcm; // Wait state
+  [[nodiscard]] bool ok() const { return rcm.code == EC::Success; }
+  operator bool() const { return ok(); }
+  NBResult(T value, ECM rcm) : value(value), rcm(std::move(rcm)) {}
+};
+
 struct AuthCBInfo {
   /**
    * @brief Whether a password is required for authentication.

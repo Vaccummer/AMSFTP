@@ -65,8 +65,7 @@ inline TransferCliBuildResult BuildTransferArgsFromCli(
   }
 
   if (src_tokens.empty()) {
-    out.rcm =
-        Err(EC::InvalidArg, "", "", "cp requires at least one source");
+    out.rcm = Err(EC::InvalidArg, "", "", "cp requires at least one source");
     return out;
   }
 
@@ -314,8 +313,8 @@ struct CpArgs : BaseArgStruct {
     arg.timeout_ms = timeout_ms;
     arg.confirm_policy =
         filesystem_arg_detail::BuildTransferConfirmPolicy(ctx, quiet);
-    const auto component = AMDomain::client::ClientControlComponent(
-        ctx.task_control_token, arg.timeout_ms);
+    const auto component =
+        ControlComponent(ctx.task_control_token, arg.timeout_ms);
     return managers.interfaces.transfer_service->Transfer(arg, component);
   }
   void reset() override {
@@ -345,8 +344,7 @@ struct MoveArgs : BaseArgStruct {
 
     src_token = AMStr::Strip(src_token);
     if (src_token.empty()) {
-      return Err(EC::InvalidArg, "", "src",
-                 "move requires one source path");
+      return Err(EC::InvalidArg, "", "src", "move requires one source path");
     }
 
     AMInterface::filesystem::FilesystemMoveArg arg = {};
@@ -376,8 +374,7 @@ struct CloneArgs : BaseArgStruct {
     const std::string suffix = AMStr::Strip(async_suffix);
     if (!suffix.empty()) {
       if (suffix != "&") {
-        return Err(EC::InvalidArg, "", "",
-                   "clone async suffix must be '&'");
+        return Err(EC::InvalidArg, "", "", "clone async suffix must be '&'");
       }
       raw_srcs.push_back(suffix);
     }
@@ -394,8 +391,8 @@ struct CloneArgs : BaseArgStruct {
     arg.timeout_ms = -1;
     arg.confirm_policy =
         filesystem_arg_detail::BuildTransferConfirmPolicy(ctx, quiet);
-    const auto component = AMDomain::client::ClientControlComponent(
-        ctx.task_control_token, arg.timeout_ms);
+    const auto component =
+        ControlComponent(ctx.task_control_token, arg.timeout_ms);
     return managers.interfaces.transfer_service->Transfer(arg, component);
   }
   void reset() override {
@@ -411,6 +408,8 @@ struct CloneArgs : BaseArgStruct {
 struct WgetArgs : BaseArgStruct {
   std::string src = {};
   std::string dst = {};
+  std::string username = {};
+  std::string password = {};
   std::string bear_token = {};
   std::string proxy = {};
   std::string sproxy = {};
@@ -451,6 +450,8 @@ struct WgetArgs : BaseArgStruct {
     arg.resume = resume;
     arg.overwrite = overwrite;
     arg.quiet = quiet;
+    arg.username = username;
+    arg.password = password;
     arg.bear_token = bear_token;
     arg.proxy = proxy;
     arg.https_proxy = sproxy;
@@ -460,13 +461,15 @@ struct WgetArgs : BaseArgStruct {
     arg.confirm_policy =
         filesystem_arg_detail::BuildTransferConfirmPolicy(ctx, quiet);
 
-    const auto component = AMDomain::client::ClientControlComponent(
-        ctx.task_control_token, arg.timeout_ms);
+    const auto component =
+        ControlComponent(ctx.task_control_token, arg.timeout_ms);
     return managers.interfaces.transfer_service->HttpGet(arg, component);
   }
   void reset() override {
     src.clear();
     dst.clear();
+    username.clear();
+    password.clear();
     bear_token.clear();
     proxy.clear();
     sproxy.clear();
@@ -553,8 +556,7 @@ struct LocalArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     if (targets.size() > 1) {
-      return Err(EC::InvalidArg, "", "",
-                 "local accepts at most one nickname");
+      return Err(EC::InvalidArg, "", "", "local accepts at most one nickname");
     }
     auto req = request;
     if (!targets.empty()) {
@@ -605,9 +607,8 @@ struct CmdArgs : BaseArgStruct {
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    const std::string command =
-        AMStr::Strip(filesystem_arg_detail::DecodeQuotedDashShellCmd(
-            request.cmd));
+    const std::string command = AMStr::Strip(
+        filesystem_arg_detail::DecodeQuotedDashShellCmd(request.cmd));
     if (command.empty()) {
       return Err(EC::InvalidArg, "", "", "cmd cannot be empty");
     }
@@ -633,8 +634,7 @@ struct TerminalArgs : BaseArgStruct {
     (void)ctx;
     auto arg = request;
     arg.target = AMStr::Strip(arg.target);
-    return managers.interfaces.terminal_interface_service->LaunchTerminal(
-        arg);
+    return managers.interfaces.terminal_interface_service->LaunchTerminal(arg);
   }
   void reset() override { request = {}; }
 };
@@ -673,8 +673,7 @@ struct TermRemoveArgs : BaseArgStruct {
     for (auto &nickname : arg.nicknames) {
       nickname = AMStr::Strip(nickname);
     }
-    return managers.interfaces.terminal_interface_service->RemoveTerminal(
-        arg);
+    return managers.interfaces.terminal_interface_service->RemoveTerminal(arg);
   }
   void reset() override { request = {}; }
 };
@@ -750,4 +749,3 @@ struct ExitArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
-

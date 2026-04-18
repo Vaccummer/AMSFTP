@@ -49,8 +49,8 @@ constexpr const char *kTerminalLeaseKey = "terminal.lease";
             {EC::InvalidHandle, "maintainer.check_client", "<client>",
              "Client handle is null"}};
   }
-  auto checked = client->IOPort().Check(
-      {}, AMDomain::client::ClientControlComponent(nullptr, timeout_ms));
+  auto checked =
+      client->IOPort().Check({}, ControlComponent(nullptr, timeout_ms));
   client->ConfigPort().SetState(checked);
   return checked;
 }
@@ -69,8 +69,7 @@ ClientMaintainer::ClientMaintainer(int heartbeat_interval_s,
 
 ClientMaintainer::~ClientMaintainer() { TerminateHeartbeat(); }
 
-ClientMaintainer::ClientHandle
-ClientMaintainer::GetClient(const ClientName &name) {
+ClientHandle ClientMaintainer::GetClient(const ClientName &name) {
   const ClientName normalized = NormalizeNickname(name);
   auto clients = clients_.lock();
   auto it = clients->find(normalized);
@@ -89,8 +88,7 @@ ECM ClientMaintainer::CheckClient(const ClientName &name) {
   return checked.rcm;
 }
 
-std::map<ClientMaintainer::ClientName, ClientMaintainer::ClientHandle>
-ClientMaintainer::GetAllClients() {
+std::map<ClientName, ClientHandle> ClientMaintainer::GetAllClients() {
   return clients_.lock().load();
 }
 
@@ -307,13 +305,4 @@ void ClientMaintainer::HeartbeatLoop_(std::stop_token stop_token) {
 }
 } // namespace AMInfra::client::maintainer
 
-namespace AMDomain::client {
-std::unique_ptr<IClientMaintainerPort>
-CreateClientMaintainer(int heartbeat_interval_s, int check_timeout_ms,
-                       DisconnectCallback disconnect_callback,
-                       std::vector<ClientHandle> init_clients) {
-  return std::make_unique<AMInfra::client::maintainer::ClientMaintainer>(
-      heartbeat_interval_s, check_timeout_ms, std::move(disconnect_callback),
-      std::move(init_clients));
-}
-} // namespace AMDomain::client
+

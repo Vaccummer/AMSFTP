@@ -12,10 +12,10 @@ namespace AMApplication::filesystem {
 using PathTarget = AMDomain::filesystem::PathTarget;
 using ResolvedPath = AMDomain::filesystem::ResolvedPath;
 using PathEntry = AMDomain::filesystem::PathEntry;
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using FilesystemArg = AMDomain::filesystem::FilesystemArg;
 using RunResult = AMDomain::filesystem::RunResult;
 using ClientHandle = AMDomain::client::ClientHandle;
+using AMDomain::filesystem::SearchType;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TASKS = std::vector<AMDomain::transfer::TransferTask>;
 struct DstResolveResult {
@@ -85,96 +85,89 @@ public:
   ~FilesystemAppService() override = default;
 
   [[nodiscard]] static ECMData<std::string>
-  GetClientHome(ClientHandle client, const ClientControlComponent &control);
+  GetClientHome(ClientHandle client, const ControlComponent &control);
   [[nodiscard]] static ECMData<std::string>
-  GetClientCwd(const ClientHandle &client,
-               const ClientControlComponent &control);
+  GetClientCwd(const ClientHandle &client, const ControlComponent &control);
   [[nodiscard]] static ECMData<std::string>
   ResolveAbsolutePath(ClientHandle client, const std::string &raw_path,
-                      const ClientControlComponent &control);
+                      const ControlComponent &control);
   void ClearCache();
 
-  [[nodiscard]] ECMData<PathTarget>
-  GetCwd(const ClientControlComponent &control);
-  ECM EnsureClientWorkdir(ClientHandle client,
-                          const ClientControlComponent &control);
+  [[nodiscard]] ECMData<PathTarget> GetCwd(const ControlComponent &control);
+  ECM EnsureClientWorkdir(ClientHandle client, const ControlComponent &control);
   [[nodiscard]] ECMData<PathTarget> PeekCdHistory() const;
-  ECM ChangeDir(PathTarget path, const ClientControlComponent &control,
+  ECM ChangeDir(PathTarget path, const ControlComponent &control,
                 bool from_history = false);
   [[nodiscard]] ECMData<PathEntry>
-  StatEntry(const PathTarget &target, const ClientControlComponent &control,
+  StatEntry(const PathTarget &target, const ControlComponent &control,
             bool trace_link = false, ClientHandle preferred_client = nullptr);
   [[nodiscard]] ECMData<PathInfo> Stat(const PathTarget &path,
-                                       const ClientControlComponent &control,
+                                       const ControlComponent &control,
                                        bool trace_link = false,
                                        ClientHandle preferred_client = nullptr);
   [[nodiscard]] ECMData<std::vector<PathInfo>>
-  Listdir(const PathTarget &path, const ClientControlComponent &control,
+  Listdir(const PathTarget &path, const ControlComponent &control,
           ClientHandle preferred_client = nullptr);
   [[nodiscard]] ECMData<std::vector<std::string>>
-  ListNames(const PathTarget &path, const ClientControlComponent &control,
+  ListNames(const PathTarget &path, const ControlComponent &control,
             ClientHandle preferred_client = nullptr);
   [[nodiscard]] ECMData<int64_t>
-  GetSize(const PathTarget &path, const ClientControlComponent &control,
+  GetSize(const PathTarget &path, const ControlComponent &control,
           std::function<bool(const PathTarget &, int64_t)> on_progress = {},
           std::function<void(const PathTarget &, ECM)> on_error = {});
-  ECM Mkdirs(const PathTarget &path, const ClientControlComponent &control,
+  ECM Mkdirs(const PathTarget &path, const ControlComponent &control,
              ClientHandle preferred_client = nullptr);
   [[nodiscard]] ECMData<double> TestRTT(const std::string &nickname,
-                                        const ClientControlComponent &control,
+                                        const ControlComponent &control,
                                         int times = 1);
   [[nodiscard]] ECMData<PathTarget>
-  ResolveTrashDir(const PathTarget &source,
-                  const ClientControlComponent &control,
+  ResolveTrashDir(const PathTarget &source, const ControlComponent &control,
                   ClientHandle preferred_client = nullptr);
   ECM Rename(const PathTarget &src, const PathTarget &dst,
-             const ClientControlComponent &control, bool mkdir = true,
+             const ControlComponent &control, bool mkdir = true,
              bool overwrite = false);
   [[nodiscard]] ECMData<RmfilePlan>
   PrepareRmfile(std::vector<PathTarget> targets,
-                const ClientControlComponent &control);
+                const ControlComponent &control);
   [[nodiscard]] ECMData<std::vector<std::pair<PathTarget, ECM>>>
-  ExecuteRmfile(const RmfilePlan &plan, const ClientControlComponent &control,
+  ExecuteRmfile(const RmfilePlan &plan, const ControlComponent &control,
                 std::function<void(const PathTarget &, ECM)> on_error = {});
   [[nodiscard]] ECMData<std::vector<std::pair<PathTarget, ECM>>>
-  Rmdir(std::vector<PathTarget> targets, const ClientControlComponent &control,
+  Rmdir(std::vector<PathTarget> targets, const ControlComponent &control,
         std::function<void(const PathTarget &, ECM)> on_error = {});
   [[nodiscard]] ECMData<PermanentRemovePlan>
   PreparePermanentRemove(std::vector<PathTarget> targets,
-                         const ClientControlComponent &control);
+                         const ControlComponent &control);
   [[nodiscard]] ECMData<std::vector<std::pair<PathTarget, ECM>>>
   ExecutePermanentRemove(
-      const PermanentRemovePlan &plan, const ClientControlComponent &control,
+      const PermanentRemovePlan &plan, const ControlComponent &control,
       std::function<void(const PathTarget &)> on_progress = {},
       std::function<void(const PathTarget &, ECM)> on_error = {});
   [[nodiscard]] ECMData<std::vector<std::pair<PathTarget, ECM>>>
-  Saferm(std::vector<PathTarget> targets,
-         const ClientControlComponent &control);
+  Saferm(std::vector<PathTarget> targets, const ControlComponent &control);
   [[nodiscard]] ECMData<std::vector<PathInfo>>
-  find(const PathTarget &path, SearchType type,
-       const ClientControlComponent &control,
+  find(const PathTarget &path, SearchType type, const ControlComponent &control,
        std::function<void(const PathTarget &)> on_enter_dir = {},
        std::function<void(const PathTarget &, ECM)> on_error = {},
        std::function<bool(const PathTarget &)> on_match = {});
 
   [[nodiscard]] ECMData<DstResolveResult>
   ResolveTransferDst(PathTarget dst, TransferClientContainer *clients,
-                     const ClientControlComponent &control);
+                     const ControlComponent &control);
 
-  [[nodiscard]] ECMData<SourceResolveResult> ResolveTransferSrc(
-      std::vector<PathTarget> srcs, TransferClientContainer *clients,
-      const ClientControlComponent &control, bool error_stop = true);
+  [[nodiscard]] ECMData<SourceResolveResult>
+  ResolveTransferSrc(std::vector<PathTarget> srcs,
+                     TransferClientContainer *clients,
+                     const ControlComponent &control, bool error_stop = true);
 
-  [[nodiscard]] ECMData<BuildTransferTaskResult>
-  BuildTransferTasks(const SourceResolveResult &src,
-                     const DstResolveResult &dst,
-                     const ClientControlComponent &control,
-                     const BuildTransferTaskOptions &opt);
+  [[nodiscard]] ECMData<BuildTransferTaskResult> BuildTransferTasks(
+      const SourceResolveResult &src, const DstResolveResult &dst,
+      const ControlComponent &control, const BuildTransferTaskOptions &opt);
 
-  [[nodiscard]] ECMData<HttpDownloadPlan> BuildHttpDownloadPlan(
-      const std::optional<PathTarget> &dst_target,
-      const std::string &suggested_filename,
-      const ClientControlComponent &control);
+  [[nodiscard]] ECMData<HttpDownloadPlan>
+  BuildHttpDownloadPlan(const std::optional<PathTarget> &dst_target,
+                        const std::string &suggested_filename,
+                        const ControlComponent &control);
 
   [[nodiscard]] ECMData<TransferClientContainer> RecollectTransferClients(
       const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info);

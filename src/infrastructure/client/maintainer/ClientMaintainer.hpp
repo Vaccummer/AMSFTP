@@ -13,14 +13,13 @@
 #include <vector>
 
 namespace AMInfra::client::maintainer {
+using AMDomain::client::ClientHandle;
+using AMDomain::client::ClientName;
+using DisconnectCallback =
+    std::function<void(const ClientHandle &, const ECM &)>;
 class ClientMaintainer final : public AMDomain::client::IClientMaintainerPort,
                                private NonCopyableNonMovable {
 public:
-  using ClientHandle = AMDomain::client::ClientHandle;
-  using ClientName = AMDomain::client::ClientName;
-  using DisconnectCallback =
-      std::function<void(const ClientHandle &, const ECM &)>;
-
 private:
   enum class HeartbeatState : int {
     Stopped = 0,

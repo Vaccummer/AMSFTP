@@ -111,66 +111,65 @@ public:
   [[nodiscard]] ECMData<PathTarget>
   SplitRawTarget(const std::string &token) const;
 
-  ECM Stat(const FilesystemStatArg &arg,
-           const std::optional<AMDomain::client::ClientControlComponent>
-               &control_opt = std::nullopt) const;
+  ECM Stat(
+      const FilesystemStatArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Ls(const FilesystemLsArg &arg,
-         const std::optional<AMDomain::client::ClientControlComponent>
-             &control_opt = std::nullopt) const;
+  ECM Ls(
+      const FilesystemLsArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Cd(const FilesystemCdArg &arg,
-         const std::optional<AMDomain::client::ClientControlComponent>
-             &control_opt = std::nullopt) const;
+  ECM Cd(
+      const FilesystemCdArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Mkdirs(const FilesystemMkdirsArg &arg,
-             const std::optional<AMDomain::client::ClientControlComponent>
-                 &control_opt = std::nullopt) const;
+  ECM Mkdirs(
+      const FilesystemMkdirsArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM GetSize(const FilesystemGetSizeArg &arg,
-              const std::optional<AMDomain::client::ClientControlComponent>
-                  &control_opt = std::nullopt) const;
+  ECM GetSize(
+      const FilesystemGetSizeArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Find(const FilesystemFindArg &arg,
-           const std::optional<AMDomain::client::ClientControlComponent>
-               &control_opt = std::nullopt) const;
+  ECM Find(
+      const FilesystemFindArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Realpath(const FilesystemRealpathArg &arg,
-               const std::optional<AMDomain::client::ClientControlComponent>
-                   &control_opt = std::nullopt) const;
+  ECM Realpath(
+      const FilesystemRealpathArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Tree(const FilesystemTreeArg &arg,
-           const std::optional<AMDomain::client::ClientControlComponent>
-               &control_opt = std::nullopt) const;
+  ECM Tree(
+      const FilesystemTreeArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM TestRTT(const FilesystemTestRTTArg &arg,
-              const std::optional<AMDomain::client::ClientControlComponent>
-                  &control_opt = std::nullopt) const;
+  ECM TestRTT(
+      const FilesystemTestRTTArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Rename(const FilesystemRenameArg &arg,
-             const std::optional<AMDomain::client::ClientControlComponent>
-                 &control_opt = std::nullopt) const;
+  ECM Rename(
+      const FilesystemRenameArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Move(const FilesystemMoveArg &arg,
-           const std::optional<AMDomain::client::ClientControlComponent>
-               &control_opt = std::nullopt) const;
+  ECM Move(
+      const FilesystemMoveArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Saferm(const FilesystemSafermArg &arg,
-             const std::optional<AMDomain::client::ClientControlComponent>
-                 &control_opt = std::nullopt) const;
+  ECM Saferm(
+      const FilesystemSafermArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Rmfile(const FilesystemRmfileArg &arg,
-             const std::optional<AMDomain::client::ClientControlComponent>
-                 &control_opt = std::nullopt) const;
+  ECM Rmfile(
+      const FilesystemRmfileArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Rmdir(const FilesystemRmdirArg &arg,
-            const std::optional<AMDomain::client::ClientControlComponent>
-                &control_opt = std::nullopt) const;
+  ECM Rmdir(
+      const FilesystemRmdirArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
   ECM PermanentRemove(
       const FilesystemPermanentRemoveArg &arg,
-      const std::optional<AMDomain::client::ClientControlComponent>
-          &control_opt = std::nullopt) const;
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
 private:
   [[nodiscard]] ECMData<PathTarget> MatchOne(const PathTarget &path) const;

@@ -1,13 +1,13 @@
 #pragma once
 #include "foundation/core/DataClass.hpp"
 #include "interface/completion/Engine.hpp"
-#include <memory>
 #include <chrono>
-#include <functional>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+
 
 namespace AMInterface::completion {
 class ICompletionRuntime;
@@ -63,7 +63,6 @@ private:
   void ParseCommandPath_(const AMCompletionContext &ctx, std::string *out_path,
                          const CommandNode **out_node,
                          size_t *out_consumed) const;
-
 };
 
 /**

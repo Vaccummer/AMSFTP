@@ -4,7 +4,6 @@
 #include "foundation/tools/time.hpp"
 
 #include <algorithm>
-#include <unordered_set>
 
 namespace AMApplication::transfer {
 
@@ -46,8 +45,7 @@ ECM TransferAppService::Submit(const TaskHandle &task_info) {
   return OK;
 }
 
-ECM TransferAppService::Pause(TaskId id, int timeout_ms,
-                              int grace_period_ms) {
+ECM TransferAppService::Pause(TaskID id, int timeout_ms, int grace_period_ms) {
   if (id == 0) {
     return Err(EC::InvalidArg, "", "", "Task ID must be > 0");
   }
@@ -71,9 +69,9 @@ ECM TransferAppService::Pause(TaskId id, int timeout_ms,
     }
   }
 
-  auto [task_info, rcm] = transfer_pool_.StopActive(
-      id, AMDomain::transfer::ActiveStopReason::Pause, timeout_ms,
-      grace_period_ms);
+  auto [task_info, rcm] =
+      transfer_pool_.StopActive(id, AMDomain::transfer::ActiveStopReason::Pause,
+                                timeout_ms, grace_period_ms);
   if (!(rcm)) {
     return rcm;
   }
@@ -86,7 +84,7 @@ ECM TransferAppService::Pause(TaskId id, int timeout_ms,
   return OK;
 }
 
-ECM TransferAppService::Resume(TaskId id, int timeout_ms) {
+ECM TransferAppService::Resume(TaskID id, int timeout_ms) {
   (void)timeout_ms;
   if (id == 0) {
     return Err(EC::InvalidArg, "", "", "Task ID must be > 0");
@@ -104,7 +102,8 @@ ECM TransferAppService::Resume(TaskId id, int timeout_ms) {
     paused->erase(it);
   }
 
-  auto recollect_result = filesystem_service_.RecollectTransferClients(task_info);
+  auto recollect_result =
+      filesystem_service_.RecollectTransferClients(task_info);
   if (!(recollect_result.rcm)) {
     if (task_info) {
       StorePaused_(task_info);
@@ -134,8 +133,7 @@ ECM TransferAppService::Resume(TaskId id, int timeout_ms) {
 }
 
 std::pair<TransferAppService::TaskHandle, ECM>
-TransferAppService::Terminate(TaskId id, int timeout_ms,
-                              int grace_period_ms) {
+TransferAppService::Terminate(TaskID id, int timeout_ms, int grace_period_ms) {
   if (id == 0) {
     return {nullptr, Err(EC::InvalidArg, "", "", "Task ID must be > 0")};
   }
@@ -144,9 +142,8 @@ TransferAppService::Terminate(TaskId id, int timeout_ms,
     auto finished = finished_tasks_.lock();
     auto it = finished->find(id);
     if (it != finished->end()) {
-      return {it->second,
-              Err(EC::OperationUnsupported, "", AMStr::ToString(id),
-                  "Task already finished")};
+      return {it->second, Err(EC::OperationUnsupported, "", AMStr::ToString(id),
+                              "Task already finished")};
     }
   }
 
@@ -165,7 +162,8 @@ TransferAppService::Terminate(TaskId id, int timeout_ms,
     MarkUnfinishedEntries_(paused_task, terminate_rcm);
     paused_task->SetResult(terminate_rcm);
     paused_task->SetStatus(TaskStatus::Finished);
-    paused_task->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
+    paused_task->Time.finish.store(AMTime::seconds(),
+                                   std::memory_order_relaxed);
     ReleaseClients_(paused_task);
     StoreFinished_(paused_task);
     return {paused_task, OK};
@@ -184,7 +182,7 @@ TransferAppService::Terminate(TaskId id, int timeout_ms,
 }
 
 std::optional<TransferAppService::TaskStatus>
-TransferAppService::GetStatus(TaskId id) const {
+TransferAppService::GetStatus(TaskID id) const {
   if (id == 0) {
     return std::nullopt;
   }
@@ -209,7 +207,7 @@ TransferAppService::GetStatus(TaskId id) const {
   return std::nullopt;
 }
 
-TransferAppService::TaskHandle TransferAppService::FindTask(TaskId id) const {
+TransferAppService::TaskHandle TransferAppService::FindTask(TaskID id) const {
   if (id == 0) {
     return nullptr;
   }
@@ -234,47 +232,48 @@ TransferAppService::TaskHandle TransferAppService::FindTask(TaskId id) const {
   return nullptr;
 }
 
-TransferAppService::TaskHandle TransferAppService::GetActiveTask(TaskId id) const {
+TransferAppService::TaskHandle
+TransferAppService::GetActiveTask(TaskID id) const {
   if (id == 0) {
     return nullptr;
   }
   return transfer_pool_.GetActiveTask(id);
 }
 
-std::unordered_map<TransferAppService::TaskId, TransferAppService::TaskHandle>
+std::unordered_map<TransferAppService::TaskID, TransferAppService::TaskHandle>
 TransferAppService::GetAllActiveTasks() const {
   return transfer_pool_.GetAllActiveTasks();
 }
 
-std::unordered_map<TransferAppService::TaskId, TransferAppService::TaskHandle>
+std::unordered_map<TransferAppService::TaskID, TransferAppService::TaskHandle>
 TransferAppService::GetAllHistoryTasks() const {
   return GetFinishedTasks();
 }
 
-std::unordered_map<TransferAppService::TaskId, TransferAppService::TaskHandle>
+std::unordered_map<TransferAppService::TaskID, TransferAppService::TaskHandle>
 TransferAppService::GetPendingTasks() const {
   return transfer_pool_.GetPendingTasks();
 }
 
-std::unordered_map<TransferAppService::TaskId, TransferAppService::TaskHandle>
+std::unordered_map<TransferAppService::TaskID, TransferAppService::TaskHandle>
 TransferAppService::GetConductingTasks() const {
   return transfer_pool_.GetConductingTasks();
 }
 
-std::unordered_map<TransferAppService::TaskId, TransferAppService::TaskHandle>
+std::unordered_map<TransferAppService::TaskID, TransferAppService::TaskHandle>
 TransferAppService::GetPausedTasks() const {
   auto paused = paused_tasks_.lock();
   return *paused;
 }
 
-std::unordered_map<TransferAppService::TaskId, TransferAppService::TaskHandle>
+std::unordered_map<TransferAppService::TaskID, TransferAppService::TaskHandle>
 TransferAppService::GetFinishedTasks() const {
   auto finished = finished_tasks_.lock();
   return *finished;
 }
 
-TransferAppService::TaskHandle TransferAppService::GetFinishedTask(TaskId id,
-                                                                   bool remove) {
+TransferAppService::TaskHandle
+TransferAppService::GetFinishedTask(TaskID id, bool remove) {
   auto finished = finished_tasks_.lock();
   auto it = finished->find(id);
   if (it == finished->end()) {
@@ -287,12 +286,12 @@ TransferAppService::TaskHandle TransferAppService::GetFinishedTask(TaskId id,
   return task_info;
 }
 
-TransferAppService::TaskHandle TransferAppService::GetResultTask(TaskId id,
+TransferAppService::TaskHandle TransferAppService::GetResultTask(TaskID id,
                                                                  bool remove) {
   return GetFinishedTask(id, remove);
 }
 
-bool TransferAppService::RemoveFinished(TaskId id) {
+bool TransferAppService::RemoveFinished(TaskID id) {
   auto finished = finished_tasks_.lock();
   return finished->erase(id) > 0;
 }
@@ -302,20 +301,21 @@ void TransferAppService::ClearFinished() {
   finished->clear();
 }
 
-std::vector<TransferAppService::TaskId> TransferAppService::ListTaskIds() const {
-  std::unordered_set<TaskId> seen = {};
-  std::vector<TaskId> ids = {};
-  const auto add_ids = [&seen, &ids](
-                           const std::unordered_map<TaskId, TaskHandle> &tasks) {
-    for (const auto &[id, task] : tasks) {
-      if (!task || id == 0) {
-        continue;
-      }
-      if (seen.insert(id).second) {
-        ids.push_back(id);
-      }
-    }
-  };
+std::vector<TransferAppService::TaskID>
+TransferAppService::ListTaskIDs() const {
+  std::unordered_set<TaskID> seen = {};
+  std::vector<TaskID> ids = {};
+  const auto add_ids =
+      [&seen, &ids](const std::unordered_map<TaskID, TaskHandle> &tasks) {
+        for (const auto &[id, task] : tasks) {
+          if (!task || id == 0) {
+            continue;
+          }
+          if (seen.insert(id).second) {
+            ids.push_back(id);
+          }
+        }
+      };
   add_ids(transfer_pool_.GetAllActiveTasks());
   add_ids(GetPausedTasks());
   add_ids(GetFinishedTasks());
@@ -389,4 +389,3 @@ void TransferAppService::StoreFinished_(const TaskHandle &task_info) {
 }
 
 } // namespace AMApplication::transfer
-

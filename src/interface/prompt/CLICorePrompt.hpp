@@ -27,8 +27,9 @@ public:
     std::string cached_render = "";
     bool has_cached_render = false;
     bool parse_ok = false;
+    bool render_ok = true;
+    std::string render_error = "";
     PromptTemplateContext parsed_context = {};
-    PromptVarMap required_vars = {};
     PromptTemplateDiagnostics diagnostics = {};
   };
 
@@ -53,6 +54,7 @@ private:
   [[nodiscard]] std::string ResolveCorePromptFormat_() const;
   [[nodiscard]] ECMData<std::string>
   RenderPromptFormat_(const RenderArg &arg) const;
+  [[nodiscard]] PromptVarMap BuildRenderVars_(const RenderArg &arg) const;
   [[nodiscard]] std::string BuildFallbackPrompt_(const RenderArg &arg) const;
   void RefreshTemplateCache_();
 

@@ -64,7 +64,7 @@ std::vector<std::string> FilesystemAppBaseService::BuildBaseListNames(
 
 ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
     ClientHandle client, const std::string &nickname,
-    const std::string &abs_path, const ClientControlComponent &control,
+    const std::string &abs_path, const ControlComponent &control,
     bool trace_link) {
   if (!client) {
     return {{}, Err(EC::InvalidHandle, "", "", "Client handle is null")};
@@ -100,7 +100,7 @@ ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
 
 ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
     ClientHandle client, const std::string &nickname,
-    const std::string &abs_path, const ClientControlComponent &control) {
+    const std::string &abs_path, const ControlComponent &control) {
   if (!client) {
     return {{}, Err(EC::InvalidHandle, "", "", "Client handle is null")};
   }
@@ -156,7 +156,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
 
 ECMData<std::vector<std::string>> FilesystemAppBaseService::BaseListNames(
     ClientHandle client, const std::string &nickname,
-    const std::string &abs_path, const ClientControlComponent &control) {
+    const std::string &abs_path, const ControlComponent &control) {
   if (!client) {
     return {{}, Err(EC::InvalidHandle, "", "", "Client handle is null")};
   }
@@ -274,8 +274,7 @@ ECM FilesystemAppBaseService::Init() {
   }
   const FilesystemArg arg = init_arg_.lock().load();
   if (arg.max_cd_history <= 0) {
-    return Err(EC::InvalidArg, "", "",
-               "max_cd_history must be greater than 0");
+    return Err(EC::InvalidArg, "", "", "max_cd_history must be greater than 0");
   }
   if (arg.terminal_read_timeout_ms == 0 || arg.terminal_read_timeout_ms < -1) {
     return Err(EC::InvalidArg, "", "",
@@ -312,16 +311,14 @@ std::string FilesystemAppBaseService::CurrentNickname() const {
 }
 
 ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
-    const std::string &nickname,
-    const AMDomain::client::ClientControlComponent &control, bool detach) {
+    const std::string &nickname, const ControlComponent &control, bool detach) {
   if (!host_service_ || !client_service_) {
     return {nullptr, Err(EC::InvalidHandle, "", "",
                          "filesystem app base service deps are null")};
   }
 
   if (nickname.empty()) {
-    return {nullptr,
-            Err(EC::InvalidArg, "", "", "Client nickname is empty")};
+    return {nullptr, Err(EC::InvalidArg, "", "", "Client nickname is empty")};
   }
 
   auto existing = client_service_->GetClient(nickname, true);
@@ -371,8 +368,7 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
   }
 
   if (nickname.empty()) {
-    return {nullptr,
-            Err(EC::InvalidArg, "", "", "Client nickname is empty")};
+    return {nullptr, Err(EC::InvalidArg, "", "", "Client nickname is empty")};
   }
 
   constexpr int kPublicClientLeaseRetryTimes = 8;
@@ -403,7 +399,7 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
   }
 
   auto create_result =
-      client_service_->CreateClient(host_cfg.data, ClientControlComponent{});
+      client_service_->CreateClient(host_cfg.data, ControlComponent{});
   if (!(create_result.rcm) || !create_result.data) {
     return {create_result.data, create_result.rcm};
   }
@@ -425,7 +421,7 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
 
 ECMData<ResolvedPath>
 FilesystemAppBaseService::ResolvePath(const PathTarget &target,
-                                      const ClientControlComponent &control,
+                                      const ControlComponent &control,
                                       ClientHandle preferred_client) {
   if (!client_service_) {
     return {ResolvedPath{},
@@ -438,7 +434,7 @@ FilesystemAppBaseService::ResolvePath(const PathTarget &target,
     out.target.path = ".";
   }
   out.target.is_wildcard =
-      AMDomain::filesystem::services::HasWildcard(out.target.path);
+      AMDomain::filesystem::service::HasWildcard(out.target.path);
   out.target.is_user_path =
       !out.target.path.empty() && out.target.path.front() == '~';
 
@@ -453,10 +449,9 @@ FilesystemAppBaseService::ResolvePath(const PathTarget &target,
     }
     auto get_result = GetClient(out.target.nickname, control);
     if (!get_result.rcm || !get_result.data) {
-      return {ResolvedPath{}, (get_result.rcm)
-                                  ? Err(EC::InvalidHandle, "", "",
-                                        "Resolved client is null")
-                                  : get_result.rcm};
+      return {ResolvedPath{}, (get_result.rcm) ? Err(EC::InvalidHandle, "", "",
+                                                     "Resolved client is null")
+                                               : get_result.rcm};
     }
     out.client = get_result.data;
   }
@@ -469,16 +464,16 @@ FilesystemAppBaseService::ResolvePath(const PathTarget &target,
   out.abs_path = abs_result.data;
   out.target.path = out.abs_path;
   out.target.is_wildcard =
-      AMDomain::filesystem::services::HasWildcard(out.target.path);
+      AMDomain::filesystem::service::HasWildcard(out.target.path);
   out.target.is_user_path =
       !out.target.path.empty() && out.target.path.front() == '~';
 
   return {std::move(out), OK};
 }
 
-std::vector<ECMData<ResolvedPath>> FilesystemAppBaseService::ResolvePath(
-    const std::vector<PathTarget> &targets,
-    const AMDomain::client::ClientControlComponent &control) {
+std::vector<ECMData<ResolvedPath>>
+FilesystemAppBaseService::ResolvePath(const std::vector<PathTarget> &targets,
+                                      const ControlComponent &control) {
   std::vector<ECMData<ResolvedPath>> out = {};
   out.reserve(targets.size());
   for (const auto &target : targets) {
@@ -497,4 +492,3 @@ std::vector<ECMData<ResolvedPath>> FilesystemAppBaseService::ResolvePath(
   return out;
 }
 } // namespace AMApplication::filesystem
-

@@ -29,19 +29,18 @@
 
 namespace AMInterface::filesystem {
 namespace {
-using AMDomain::filesystem::services::NormalizePath;
+using AMDomain::filesystem::SearchType;
+using AMDomain::filesystem::service::NormalizePath;
 using AMDomain::host::HostService::NormalizeNickname;
 ECM MergeStatus_(const ECM &current, const ECM &next) {
   return (next) ? current : next;
 }
 
-AMDomain::client::ClientControlComponent
+ControlComponent
 ResolveControl_(AMDomain::client::amf default_interrupt_flag,
-                const std::optional<AMDomain::client::ClientControlComponent>
-                    &control_opt) {
+                const std::optional<ControlComponent> &control_opt) {
   return control_opt.has_value() ? control_opt.value()
-                                 : AMDomain::client::ClientControlComponent(
-                                       default_interrupt_flag, -1);
+                                 : ControlComponent(default_interrupt_flag);
 }
 
 std::string MakePathKey_(const PathTarget &path) {
@@ -343,9 +342,8 @@ FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
     AMInterface::style::AMStyleService &style_service,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager)
     : client_service_(client_service), host_service_(host_service),
-      filesystem_service_(filesystem_service),
-      style_service_(style_service), prompt_io_manager_(prompt_io_manager),
-      default_interrupt_flag_(nullptr) {}
+      filesystem_service_(filesystem_service), style_service_(style_service),
+      prompt_io_manager_(prompt_io_manager), default_interrupt_flag_(nullptr) {}
 
 void FilesystemInterfaceSerivce::SetDefaultControlToken(
     const AMDomain::client::amf &token) {
@@ -424,8 +422,7 @@ ECMData<PathTarget>
 FilesystemInterfaceSerivce::MatchOne(const PathTarget &path) const {
   size_t matched_count = 0;
   PathTarget first_matched_path = {};
-  auto control =
-      AMDomain::client::ClientControlComponent(default_interrupt_flag_, -1);
+  auto control = ControlComponent(default_interrupt_flag_);
   auto find_result = filesystem_service_.find(
       path, SearchType::All, control, {}, {},
       [&matched_count, &first_matched_path](const PathTarget &matched) -> bool {
@@ -455,8 +452,7 @@ FilesystemInterfaceSerivce::MatchOne(const PathTarget &path) const {
 
 ECM FilesystemInterfaceSerivce::Stat(
     const FilesystemStatArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   if (arg.raw_paths.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -483,7 +479,7 @@ ECM FilesystemInterfaceSerivce::Stat(
     split_paths.push_back(std::move(split_result.data));
   }
   const auto valid_paths =
-      AMDomain::filesystem::services::DedupPathTargets(split_paths);
+      AMDomain::filesystem::service::DedupPathTargets(split_paths);
 
   for (const auto &path : valid_paths) {
     if (control.IsInterrupted()) {
@@ -504,8 +500,7 @@ ECM FilesystemInterfaceSerivce::Stat(
 
 ECM FilesystemInterfaceSerivce::GetSize(
     const FilesystemGetSizeArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   if (arg.raw_paths.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -532,7 +527,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
     split_paths.push_back(std::move(split_result.data));
   }
   const auto valid_paths =
-      AMDomain::filesystem::services::DedupPathTargets(split_paths);
+      AMDomain::filesystem::service::DedupPathTargets(split_paths);
 
   for (const auto &path : valid_paths) {
     if (control.IsInterrupted()) {
@@ -543,7 +538,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
     }
 
     PathTarget target = path;
-    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+    if (AMDomain::filesystem::service::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
       if (!(match_result.rcm)) {
         prompt_io_manager_.ErrorFormat(match_result.rcm);
@@ -630,8 +625,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
 
 ECM FilesystemInterfaceSerivce::Find(
     const FilesystemFindArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   auto split_result = SplitRawTarget(arg.raw_path);
   if (!(split_result.rcm)) {
     prompt_io_manager_.ErrorFormat(split_result.rcm);
@@ -670,8 +664,7 @@ ECM FilesystemInterfaceSerivce::Find(
 
 ECM FilesystemInterfaceSerivce::Realpath(
     const FilesystemRealpathArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::string raw_path = AMStr::Strip(arg.raw_path);
   if (raw_path.empty()) {
@@ -726,7 +719,7 @@ ECM FilesystemInterfaceSerivce::Realpath(
     return OK;
   }
 
-  if (AMDomain::filesystem::services::IsPathNotExistError(
+  if (AMDomain::filesystem::service::IsPathNotExistError(
           stat_result.rcm.code)) {
     const std::string styled_label =
         interface_print::BuildStyledPathLabel(style_service_, print_target);
@@ -740,8 +733,7 @@ ECM FilesystemInterfaceSerivce::Realpath(
 
 ECM FilesystemInterfaceSerivce::Tree(
     const FilesystemTreeArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const auto print_error = [&](const std::string &label, const ECM &rcm) {
     if (!arg.quiet) {
@@ -765,7 +757,7 @@ ECM FilesystemInterfaceSerivce::Tree(
   }
   PathTarget target = std::move(split_result.data);
 
-  if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+  if (AMDomain::filesystem::service::HasWildcard(target.path)) {
     auto match_result = MatchOne(target);
     if (!(match_result.rcm)) {
       print_error(interface_print::BuildPathLabel(target), match_result.rcm);
@@ -889,8 +881,7 @@ ECM FilesystemInterfaceSerivce::Tree(
 
 ECM FilesystemInterfaceSerivce::TestRTT(
     const FilesystemTestRTTArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   if (arg.times <= 0) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "times must be > 0");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -914,8 +905,7 @@ ECM FilesystemInterfaceSerivce::TestRTT(
 
 ECM FilesystemInterfaceSerivce::Rename(
     const FilesystemRenameArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   auto src_split = SplitRawTarget(arg.target);
   if (!(src_split.rcm)) {
@@ -923,7 +913,7 @@ ECM FilesystemInterfaceSerivce::Rename(
     return src_split.rcm;
   }
   PathTarget src = std::move(src_split.data);
-  if (AMDomain::filesystem::services::HasWildcard(src.path)) {
+  if (AMDomain::filesystem::service::HasWildcard(src.path)) {
     auto match_result = MatchOne(src);
     if (!(match_result.rcm)) {
       prompt_io_manager_.ErrorFormat(match_result.rcm);
@@ -938,9 +928,9 @@ ECM FilesystemInterfaceSerivce::Rename(
     return dst_split.rcm;
   }
   PathTarget dst = std::move(dst_split.data);
-  if (AMDomain::filesystem::services::HasWildcard(dst.path)) {
-    const ECM rcm = Err(EC::InvalidArg, "", "",
-                        "Destination wildcard is not supported");
+  if (AMDomain::filesystem::service::HasWildcard(dst.path)) {
+    const ECM rcm =
+        Err(EC::InvalidArg, "", "", "Destination wildcard is not supported");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -961,8 +951,7 @@ ECM FilesystemInterfaceSerivce::Rename(
                    interface_print::BuildPathLabel(dst));
     const bool approved = prompt_io_manager_.PromptYesNo(prompt, &canceled);
     if (!approved) {
-      const ECM cancel_rcm =
-          Err(EC::ConfigCanceled, "", "", "Rename canceled");
+      const ECM cancel_rcm = Err(EC::ConfigCanceled, "", "", "Rename canceled");
       prompt_io_manager_.ErrorFormat(cancel_rcm);
       return cancel_rcm;
     }
@@ -977,8 +966,7 @@ ECM FilesystemInterfaceSerivce::Rename(
 
 ECM FilesystemInterfaceSerivce::Move(
     const FilesystemMoveArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const std::string raw_src = AMStr::Strip(arg.target);
   if (raw_src.empty()) {
@@ -997,7 +985,7 @@ ECM FilesystemInterfaceSerivce::Move(
   std::vector<PathTarget> sources = {};
   PathTarget src_pattern = std::move(src_split.data);
   const bool src_is_wildcard =
-      AMDomain::filesystem::services::HasWildcard(src_pattern.path);
+      AMDomain::filesystem::service::HasWildcard(src_pattern.path);
   if (src_is_wildcard) {
     auto find_result = filesystem_service_.find(
         src_pattern, SearchType::All, control, {},
@@ -1022,7 +1010,7 @@ ECM FilesystemInterfaceSerivce::Move(
       one.path = entry.path;
       sources.push_back(std::move(one));
     }
-    sources = AMDomain::filesystem::services::DedupPathTargets(sources);
+    sources = AMDomain::filesystem::service::DedupPathTargets(sources);
 
     if (sources.empty()) {
       const ECM rcm = Err(EC::PathNotExist, "Move", raw_src,
@@ -1055,7 +1043,7 @@ ECM FilesystemInterfaceSerivce::Move(
     return MergeStatus_(status, dst_split.rcm);
   }
   PathTarget dst_dir = std::move(dst_split.data);
-  if (AMDomain::filesystem::services::HasWildcard(dst_dir.path)) {
+  if (AMDomain::filesystem::service::HasWildcard(dst_dir.path)) {
     const ECM rcm = Err(EC::InvalidArg, "Move", raw_dst,
                         "Destination wildcard is not supported");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1064,8 +1052,7 @@ ECM FilesystemInterfaceSerivce::Move(
 
   auto dst_stat = filesystem_service_.Stat(dst_dir, control, false);
   if (!(dst_stat.rcm)) {
-    if (AMDomain::filesystem::services::IsPathNotExistError(
-            dst_stat.rcm.code)) {
+    if (AMDomain::filesystem::service::IsPathNotExistError(dst_stat.rcm.code)) {
       if (!arg.mkdir) {
         const ECM rcm = Err(EC::PathNotExist, "Move",
                             interface_print::BuildPathLabel(dst_dir),
@@ -1130,7 +1117,7 @@ ECM FilesystemInterfaceSerivce::Move(
     if ((precheck.rcm)) {
       entry.dst_exists = true;
       collisions.push_back(entry.dst);
-    } else if (AMDomain::filesystem::services::IsPathNotExistError(
+    } else if (AMDomain::filesystem::service::IsPathNotExistError(
                    precheck.rcm.code)) {
       entry.dst_exists = false;
     } else {
@@ -1203,8 +1190,7 @@ ECM FilesystemInterfaceSerivce::Move(
 
 ECM FilesystemInterfaceSerivce::Saferm(
     const FilesystemSafermArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   if (arg.targets.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1241,8 +1227,7 @@ ECM FilesystemInterfaceSerivce::Saferm(
 
 ECM FilesystemInterfaceSerivce::Rmfile(
     const FilesystemRmfileArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   if (arg.targets.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1271,7 +1256,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
     }
 
     PathTarget target = std::move(split_result.data);
-    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+    if (AMDomain::filesystem::service::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
       if (!(match_result.rcm)) {
         prompt_io_manager_.ErrorFormat(match_result.rcm);
@@ -1322,8 +1307,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
 
 ECM FilesystemInterfaceSerivce::Rmdir(
     const FilesystemRmdirArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   if (arg.targets.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1352,7 +1336,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
     }
 
     PathTarget target = std::move(split_result.data);
-    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+    if (AMDomain::filesystem::service::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
       if (!(match_result.rcm)) {
         prompt_io_manager_.ErrorFormat(match_result.rcm);
@@ -1378,8 +1362,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
 
 ECM FilesystemInterfaceSerivce::PermanentRemove(
     const FilesystemPermanentRemoveArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   if (arg.targets.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     if (!arg.quiet) {
@@ -1465,8 +1448,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
 
 ECM FilesystemInterfaceSerivce::Ls(
     const FilesystemLsArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   PathTarget target = {};
   if (AMStr::Strip(arg.raw_path).empty()) {
@@ -1495,7 +1477,7 @@ ECM FilesystemInterfaceSerivce::Ls(
     }
     target = std::move(split_result.data);
   }
-  if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+  if (AMDomain::filesystem::service::HasWildcard(target.path)) {
     auto match_result = MatchOne(target);
     if (!(match_result.rcm)) {
       prompt_io_manager_.ErrorFormat(match_result.rcm);
@@ -1566,8 +1548,7 @@ ECM FilesystemInterfaceSerivce::Ls(
 
 ECM FilesystemInterfaceSerivce::Cd(
     const FilesystemCdArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const std::string raw_path = AMStr::Strip(arg.raw_path);
   const bool from_history = (raw_path == "-");
@@ -1587,7 +1568,7 @@ ECM FilesystemInterfaceSerivce::Cd(
       return split_result.rcm;
     }
     target = split_result.data;
-    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
+    if (AMDomain::filesystem::service::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
       if (!(match_result.rcm)) {
         prompt_io_manager_.ErrorFormat(match_result.rcm);
@@ -1635,8 +1616,7 @@ ECM FilesystemInterfaceSerivce::Cd(
 
 ECM FilesystemInterfaceSerivce::Mkdirs(
     const FilesystemMkdirsArg &arg,
-    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
-    const {
+    const std::optional<ControlComponent> &control_opt) const {
   if (arg.raw_paths.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
@@ -1663,7 +1643,7 @@ ECM FilesystemInterfaceSerivce::Mkdirs(
     split_paths.push_back(std::move(split_result.data));
   }
   const auto valid_paths =
-      AMDomain::filesystem::services::DedupPathTargets(split_paths);
+      AMDomain::filesystem::service::DedupPathTargets(split_paths);
 
   for (const auto &path : valid_paths) {
     if (control.IsInterrupted()) {
@@ -1678,4 +1658,3 @@ ECM FilesystemInterfaceSerivce::Mkdirs(
   return status;
 }
 } // namespace AMInterface::filesystem
-

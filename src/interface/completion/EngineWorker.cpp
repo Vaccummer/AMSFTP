@@ -419,7 +419,8 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       const size_t eq_pos = token.find('=');
       const std::string option_name =
           eq_pos == std::string::npos ? token : token.substr(0, eq_pos);
-      const bool option_exists = node && node->long_options.contains(option_name);
+      const bool option_exists =
+          node && node->long_options.contains(option_name);
       if (!option_exists) {
         state.args.push_back(token);
         ++state.arg_index;
@@ -723,8 +724,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       }
     } else if (state.has_module && !state.has_cmd) {
       const auto *node = command_tree->FindNode(state.command_path);
-      if (node &&
-          node->subcommands.contains(current_prefix)) {
+      if (node && node->subcommands.contains(current_prefix)) {
         state.command_path += " " + current_prefix;
         state.cmd = state.command_path;
         state.has_cmd = true;
@@ -737,26 +737,26 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   ctx.options = state.options;
   ctx.args = state.args;
 
-    if (state.unknown_before_command) {
-      ctx.targets = {AMCompletionTarget::Disabled};
+  if (state.unknown_before_command) {
+    ctx.targets = {AMCompletionTarget::Disabled};
+    return ctx;
+  }
+  if (!state.has_module && !state.has_cmd) {
+    const bool prefix_starts_with_path_sign =
+        !ctx.token_prefix.empty() &&
+        (ctx.token_prefix.front() == '@' || ctx.token_prefix.front() == '~' ||
+         ctx.token_prefix.front() == '/' || ctx.token_prefix.front() == '\\' ||
+         ctx.token_prefix.front() == '.');
+    const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
+    const bool prefix_has_path_sign = prefix_starts_with_path_sign || has_at ||
+                                      IsPathLikeText_(ctx.token_prefix);
+    if (prefix_has_path_sign) {
+      ctx.targets = {AMCompletionTarget::Path};
       return ctx;
     }
-    if (!state.has_module && !state.has_cmd) {
-      const bool prefix_starts_with_path_sign =
-          !ctx.token_prefix.empty() &&
-          (ctx.token_prefix.front() == '@' || ctx.token_prefix.front() == '~' ||
-           ctx.token_prefix.front() == '/' || ctx.token_prefix.front() == '\\' ||
-           ctx.token_prefix.front() == '.');
-      const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
-      const bool prefix_has_path_sign = prefix_starts_with_path_sign || has_at ||
-                                        IsPathLikeText_(ctx.token_prefix);
-      if (prefix_has_path_sign) {
-        ctx.targets = {AMCompletionTarget::Path};
-        return ctx;
-      }
-      ctx.targets = {AMCompletionTarget::TopCommand};
-      return ctx;
-    }
+    ctx.targets = {AMCompletionTarget::TopCommand};
+    return ctx;
+  }
   if (state.has_module && !state.has_cmd) {
     ctx.targets = {AMCompletionTarget::Subcommand};
     return ctx;
@@ -812,8 +812,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       bool all_known = true;
       bool any_value_rule = false;
       for (char c : body) {
-        if (!cmd_node ||
-            !cmd_node->short_options.contains(c)) {
+        if (!cmd_node || !cmd_node->short_options.contains(c)) {
           all_known = false;
           break;
         }
@@ -1154,7 +1153,7 @@ void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
     scoped.search_delay_ms = policy.search_delay_ms;
 
     if (policy.use_async) {
-      scoped.control_token = AMDomain::client::CreateClientControlToken();
+      scoped.control_token = CreateInterruptControl();
       scoped.async_search = true;
       auto task = engine->CreateTask(scoped);
       if (task) {
@@ -1226,4 +1225,3 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
 }
 
 } // namespace AMInterface::completer
-

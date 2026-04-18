@@ -13,7 +13,10 @@
 #include <vector>
 
 namespace AMDomain::host {
-using EC = ErrorCode;
+inline constexpr int DefaultSFTPPort = 22;
+inline constexpr int DefaultFTPPort = 21;
+inline constexpr int DefaultHTTPPort = 80;
+inline constexpr const char *const klocalname = "local";
 
 enum class ClientProtocol {
   UnInitilized = -1,
@@ -107,8 +110,7 @@ struct ClientMetaData {
     };
 
     if (attr == Attr::trash_dir || attr == Attr::login_dir ||
-        attr == Attr::cwd ||
-        attr == Attr::cmd_template) {
+        attr == Attr::cwd || attr == Attr::cmd_template) {
       if constexpr (std::is_assignable_v<T &, std::string>) {
         if (attr == Attr::trash_dir) {
           *out_value = trash_dir;
@@ -127,6 +129,7 @@ struct ClientMetaData {
     return fail(AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   }
 };
+
 /**
  * @brief Connection request payload for host/client initialization.
  */
@@ -486,4 +489,3 @@ struct KnownHostEntryArg {
   KnownHostMap entries = {};
 };
 } // namespace AMDomain::host
-

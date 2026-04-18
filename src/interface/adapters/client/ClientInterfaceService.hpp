@@ -22,7 +22,6 @@ using AMHostConfigManager = AMApplication::host::HostAppService;
 using AMKnownHostsManager = AMApplication::host::KnownHostsAppService;
 using AMPromptIOManager = AMInterface::prompt::AMPromptIOManager;
 using AMStyleService = AMInterface::style::AMStyleService;
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using amf = AMDomain::client::amf;
 using ClientHandle = AMDomain::client::ClientHandle;
 using HostConfig = AMDomain::host::HostConfig;
@@ -98,39 +97,36 @@ public:
   [[nodiscard]] amf GetDefaultControlToken() const;
   void BindInteractionCallbacks();
 
-  ECM Connect(
-      const ConnectRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM Connect(const ConnectRequest &request,
+              const std::optional<ControlComponent> &component = std::nullopt);
   ECM ChangeClient(
       const ChangeClientRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+      const std::optional<ControlComponent> &component = std::nullopt);
   ECM ConnectSftp(
       const ProtocolConnectRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+      const std::optional<ControlComponent> &component = std::nullopt);
   ECM ConnectFtp(
       const ProtocolConnectRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+      const std::optional<ControlComponent> &component = std::nullopt);
   ECM ConnectLocal(
       const ProtocolConnectRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+      const std::optional<ControlComponent> &component = std::nullopt);
   ECM RemoveClients(
       const RemoveClientsRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+      const std::optional<ControlComponent> &component = std::nullopt);
   ECM ListClients(
       const ListClientsRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+      const std::optional<ControlComponent> &component = std::nullopt);
   ECM CheckClients(
       const CheckClientsRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
-  ECM PoolLs(
-      const ListPoolClientsRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+      const std::optional<ControlComponent> &component = std::nullopt);
+  ECM PoolLs(const ListPoolClientsRequest &request,
+             const std::optional<ControlComponent> &component = std::nullopt);
   ECM PoolCheck(
       const CheckPoolClientsRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
-  ECM PoolRm(
-      const RemovePoolClientsRequest &request,
-      const std::optional<ClientControlComponent> &component = std::nullopt);
+      const std::optional<ControlComponent> &component = std::nullopt);
+  ECM PoolRm(const RemovePoolClientsRequest &request,
+             const std::optional<ControlComponent> &component = std::nullopt);
   ECM ListPrivateKeys();
   ECM AddHost(const std::string &nickname);
   ECM ModifyHost(const std::string &nickname);
@@ -143,12 +139,12 @@ public:
                 bool list = false);
 
 private:
-  [[nodiscard]] ClientControlComponent
-  ResolveControl_(const std::optional<ClientControlComponent> &component) const;
+  [[nodiscard]] ControlComponent
+  ResolveControl_(const std::optional<ControlComponent> &component) const;
   [[nodiscard]] ECM
   ConnectProtocol_(const ProtocolConnectRequest &request,
                    AMDomain::host::ClientProtocol protocol,
-                   const std::optional<ClientControlComponent> &component);
+                   const std::optional<ControlComponent> &component);
 
   ClientAppService &client_service_;
   TermAppService &terminal_service_;

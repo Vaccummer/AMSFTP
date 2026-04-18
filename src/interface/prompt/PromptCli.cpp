@@ -259,6 +259,18 @@ void PromptIOManager::Print(const std::string &text) {
   EmitOutput_(EnsureTrailingNewline_(text));
 }
 
+void PromptIOManager::StaticPrint(const std::string &text,
+                                  bool ensure_newline) {
+  const std::string output =
+      ensure_newline ? EnsureTrailingNewline_(text) : text;
+  if (output.find('\x1b') != std::string::npos) {
+    ic_term_write(output.c_str());
+  } else {
+    ic_print(output.c_str());
+  }
+  ic_term_flush();
+}
+
 void PromptIOManager::PrintOperationAbort() {
   const std::string abort_style =
       isocline_profile_manager_.style_config_manager_.GetInitArg()

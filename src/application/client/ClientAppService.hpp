@@ -15,7 +15,6 @@
 namespace AMApplication::client {
 using ClientHandle = AMDomain::client::ClientHandle;
 using CheckResult = AMDomain::filesystem::CheckResult;
-using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostConfig = AMDomain::host::HostConfig;
 using ClientMetaData = AMDomain::host::ClientMetaData;
 using HostConfigManager = AMApplication::host::HostAppService;
@@ -75,10 +74,10 @@ public:
 
   void BindHostConfigManager(HostConfigManager *host_config_manager);
   ECMData<ClientHandle> CreateClient(const AMDomain::host::HostConfig &config,
-                                     const ClientControlComponent &control,
+                                     const ControlComponent &control,
                                      bool silent = false);
   ECMData<ClientHandle> CreateClient(const std::string &nickname,
-                                     const ClientControlComponent &control,
+                                     const ControlComponent &control,
                                      bool case_sensitive = true,
                                      bool silent = false);
 
@@ -87,22 +86,19 @@ public:
                                                    bool silent = false);
 
   [[nodiscard]] ECMData<ClientHandle>
-  EnsureClient(const std::string &nickname,
-               const ClientControlComponent &control,
+  EnsureClient(const std::string &nickname, const ControlComponent &control,
                bool case_sensitive = true, bool silent = false);
 
   ECM AddClient(ClientHandle client, bool overwrite);
 
-  [[nodiscard]] std::optional<ECMData<CheckResult>>
-  CheckClient(const std::string &nickname, bool reconnect, bool update,
-              const std::optional<ClientControlComponent> &control_component =
-                  std::nullopt,
-              int timeout_ms = 0);
-  [[nodiscard]] ECMData<CheckResult>
-  CheckClientHandle(const ClientHandle &client, bool reconnect, bool update,
-                    const std::optional<ClientControlComponent>
-                        &control_component = std::nullopt,
-                    int timeout_ms = 0) const;
+  [[nodiscard]] std::optional<ECMData<CheckResult>> CheckClient(
+      const std::string &nickname, bool reconnect, bool update,
+      const std::optional<ControlComponent> &control_component = std::nullopt,
+      int timeout_ms = 0);
+  [[nodiscard]] ECMData<CheckResult> CheckClientHandle(
+      const ClientHandle &client, bool reconnect, bool update,
+      const std::optional<ControlComponent> &control_component = std::nullopt,
+      int timeout_ms = 0) const;
 
   [[nodiscard]] std::map<std::string, ClientHandle> GetClients() const;
   [[nodiscard]] std::vector<PublicClientInstance>
@@ -122,7 +118,7 @@ public:
   void SetConnectHooks(ConnectHooks hooks);
 
   ECMData<ClientHandle> ChangeClient(const std::string &nickname,
-                                     const ClientControlComponent &control,
+                                     const ControlComponent &control,
                                      bool silent = false);
 
   void SetCurrentClient(const ClientHandle &client);
@@ -141,21 +137,21 @@ public:
   [[nodiscard]] static ECM TryReturnClient(const ClientHandle &client);
   [[nodiscard]] static ECM TryActivateTerminal(const ClientHandle &client);
   [[nodiscard]] static ECM TryDeactivateTerminal(const ClientHandle &client);
-  [[nodiscard]] static ECM EnsureTerminalInactive(
-      const ClientHandle &client, const std::string &operation = {});
+  [[nodiscard]] static ECM
+  EnsureTerminalInactive(const ClientHandle &client,
+                         const std::string &operation = {});
 
 private:
   void ApplyCallbacksToClient_(const ClientHandle &client,
                                const ClientCallbacks &callbacks,
                                TraceCallback trace_override = {});
-  [[nodiscard]] ECMData<CheckResult> CheckClientInternal_(
-      const ClientHandle &client, bool reconnect, bool update,
-      const AMDomain::client::ClientControlComponent &control) const;
+  [[nodiscard]] ECMData<CheckResult>
+  CheckClientInternal_(const ClientHandle &client, bool reconnect, bool update,
+                       const ControlComponent &control) const;
   [[nodiscard]] std::pair<ClientCallbacks, std::vector<std::string>>
   SnapshotCreateContext_(bool for_public_pool) const;
   [[nodiscard]] ConnectHooks SnapshotConnectHooks_() const;
-  [[nodiscard]] ClientControlComponent BuildCheckControl_(
-      int timeout_ms = -1) const;
+  [[nodiscard]] ControlComponent BuildCheckControl_(int timeout_ms = 0) const;
 
 private:
   mutable AMAtomic<ClientHanleCache> runtime_clients_ = {};

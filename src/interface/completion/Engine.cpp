@@ -100,7 +100,7 @@ public:
                         AMCompletionSearchEngine *engine)
       : id_(id), ctx_(std::move(ctx)), engine_(engine) {
     if (!ctx_.control_token) {
-      ctx_.control_token = AMDomain::client::CreateClientControlToken();
+      ctx_.control_token = CreateInterruptControl();
     }
     ctx_.async_search = true;
   }
@@ -166,9 +166,8 @@ public:
     } catch (...) {
       {
         std::lock_guard<std::mutex> lock(result_mtx_);
-        result_.rcm =
-            Err(EC::UnknownError, "completion task", task_target,
-                "unknown error");
+        result_.rcm = Err(EC::UnknownError, "completion task", task_target,
+                          "unknown error");
       }
       if (cancel_requested_.load(std::memory_order_acquire)) {
         state_.store(CompletionTaskState::Canceled, std::memory_order_release);

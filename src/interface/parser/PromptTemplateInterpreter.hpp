@@ -22,25 +22,8 @@ struct PromptTemplateDiagnostics {
   [[nodiscard]] bool HasError() const { return !items.empty(); }
 };
 
-enum class PromptTemplateNodeType {
-  Text = 0,
-  Variable,
-  IfBlock,
-};
-
-struct PromptTemplateNode {
-  PromptTemplateNodeType type = PromptTemplateNodeType::Text;
-  size_t offset = 0;
-  std::string text = {};
-  std::string var_key = {};
-  std::vector<PromptTemplateNode> cond_nodes = {};
-  std::vector<PromptTemplateNode> then_nodes = {};
-  std::vector<PromptTemplateNode> else_nodes = {};
-};
-
 struct PromptTemplateContext {
   std::string source = {};
-  std::vector<PromptTemplateNode> nodes = {};
 };
 
 struct PromptTemplateParseResult {
