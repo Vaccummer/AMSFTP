@@ -3,13 +3,13 @@
 #include "interface/parser/CommandTree.hpp"
 #include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <foundation/core/Enum.hpp>
 #include <memory>
 #include <mutex>
+#include <semaphore>
 #include <string>
 #include <stop_token>
 #include <thread>
@@ -469,8 +469,8 @@ private:
 
   std::atomic<bool> async_stop_{false};
   std::mutex async_queue_mtx_;
-  std::condition_variable async_queue_cv_;
   std::deque<AMCompletionAsyncTask> async_queue_;
+  std::counting_semaphore<> async_queue_ready_{0};
   std::vector<std::jthread> async_workers_;
 
   const AMInterface::parser::CommandNode *command_tree_ = nullptr;

@@ -5,6 +5,7 @@
 
 #include <deque>
 #include <future>
+#include <semaphore>
 
 namespace AMInfra::transfer {
 class TransferExecutionEngine final : NonCopyableNonMovable {
@@ -36,8 +37,8 @@ private:
 private:
   TransferBufferPolicy buffer_policy_ = {};
   mutable std::mutex read_queue_mtx_ = {};
-  std::condition_variable read_queue_cv_ = {};
   std::deque<ReadJob> read_queue_ = {};
+  std::counting_semaphore<> read_queue_ready_{0};
   std::jthread read_thread_ = {};
 };
 } // namespace AMInfra::transfer

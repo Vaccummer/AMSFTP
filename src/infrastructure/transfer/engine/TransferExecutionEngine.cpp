@@ -28,7 +28,7 @@ TransferExecutionEngine::~TransferExecutionEngine() {
   if (read_thread_.joinable()) {
     read_thread_.request_stop();
   }
-  read_queue_cv_.notify_all();
+  read_queue_ready_.release();
   if (read_thread_.joinable()) {
     read_thread_.join();
   }
@@ -36,14 +36,22 @@ TransferExecutionEngine::~TransferExecutionEngine() {
 
 void TransferExecutionEngine::ReadLoop_(std::stop_token stop_token) {
   while (true) {
+    read_queue_ready_.acquire();
+    if (stop_token.stop_requested()) {
+      std::lock_guard<std::mutex> lock(read_queue_mtx_);
+      if (read_queue_.empty()) {
+        return;
+      }
+    }
+
     ReadJob job = {};
     {
-      std::unique_lock<std::mutex> lock(read_queue_mtx_);
-      read_queue_cv_.wait(lock, [this, &stop_token]() {
-        return stop_token.stop_requested() || !read_queue_.empty();
-      });
-      if (stop_token.stop_requested() && read_queue_.empty()) {
-        return;
+      std::lock_guard<std::mutex> lock(read_queue_mtx_);
+      if (read_queue_.empty()) {
+        if (stop_token.stop_requested()) {
+          return;
+        }
+        continue;
       }
       job = std::move(read_queue_.front());
       read_queue_.pop_front();
@@ -79,7 +87,7 @@ std::future<ECM> TransferExecutionEngine::EnqueueReadJob_(
     std::lock_guard<std::mutex> lock(read_queue_mtx_);
     read_queue_.push_back(std::move(job));
   }
-  read_queue_cv_.notify_one();
+  read_queue_ready_.release();
   return future;
 }
 
