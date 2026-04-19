@@ -75,6 +75,9 @@ public:
   [[nodiscard]] ECMData<ClientHandle>
   EnsureClient(const std::string &nickname, const ControlComponent &control,
                bool case_sensitive = true, bool silent = false);
+  [[nodiscard]] ECMData<ClientHandle>
+  AcquireTransferClient(const std::string &nickname, int retry_times = 8,
+                        int retry_wait_ms = 25);
 
   ECM AddClient(ClientHandle client, bool overwrite);
 

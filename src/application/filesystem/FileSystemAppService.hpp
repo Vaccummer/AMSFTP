@@ -1,11 +1,9 @@
 #pragma once
 #include "application/filesystem/FilesystemAppBaseService.hpp"
+#include "application/filesystem/FilesystemAppDTO.hpp"
 #include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
-#include "domain/transfer/TransferDomainModel.hpp"
 #include "foundation/core/Enum.hpp"
 #include <functional>
-#include <map>
-#include <memory>
 #include <optional>
 
 namespace AMApplication::filesystem {
@@ -16,72 +14,10 @@ using FilesystemArg = AMDomain::filesystem::FilesystemArg;
 using RunResult = AMDomain::filesystem::RunResult;
 using ClientHandle = AMDomain::client::ClientHandle;
 using AMDomain::filesystem::SearchType;
-using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
-using TASKS = std::vector<AMDomain::transfer::TransferTask>;
-struct DstResolveResult {
-  PathTarget target = {};
-  ResolvedPath resolved_target = {};
-  std::optional<PathInfo> dst_info = std::nullopt;
-};
-
-struct SourceHostResolveData {
-  ResolvedPath resolved_target = {};
-  std::vector<PathInfo> raw_paths = {};
-  std::vector<PathInfo> paths = {};
-};
-
-struct SourceResolveResult {
-  std::map<std::string, SourceHostResolveData> data = {};
-  std::map<std::string, std::vector<std::pair<PathTarget, ECM>>> error_data =
-      {};
-};
-
-struct BuildTransferTaskOptions {
-  bool clone = false;
-  bool mkdir = true;
-  bool ignore_special_file = true;
-  bool resume = false;
-};
-
-struct BuildTransferTaskResult {
-  struct WarningItem {
-    std::string src = {};
-    std::string dst = {};
-    ECM rcm = OK;
-  };
-
-  TASKS dir_tasks = {};
-  TASKS file_tasks = {};
-  std::vector<WarningItem> warnings = {};
-};
-
-struct HttpDownloadPlan {
-  PathTarget final_target = {};
-  ResolvedPath resolved_target = {};
-  std::optional<PathInfo> dst_info = std::nullopt;
-};
-
-struct PermanentRemovePlan {
-  std::map<std::string, std::vector<PathTarget>> grouped_display_paths = {};
-  std::vector<ResolvedPath> ordered_delete_paths = {};
-  std::vector<std::pair<PathTarget, ECM>> precheck_errors = {};
-  ECM rcm = OK;
-};
-
-struct RmfilePlan {
-  std::map<std::string, std::vector<PathTarget>> grouped_display_paths = {};
-  std::vector<ResolvedPath> validated_targets = {};
-  std::vector<std::pair<PathTarget, ECM>> precheck_errors = {};
-  ECM rcm = OK;
-};
-
-[[nodiscard]] std::vector<PathInfo>
-CompactMatchedPaths_(const std::vector<PathInfo> &raw);
 
 class FilesystemAppService final : public FilesystemAppBaseService {
 public:
-  FilesystemAppService(FilesystemArg arg, HostAppService *host_service,
-                       ClientAppService *client_service);
+  FilesystemAppService(FilesystemArg arg, ClientAppService *client_service);
   ~FilesystemAppService() override = default;
 
   [[nodiscard]] static ECMData<std::string>
@@ -92,6 +28,8 @@ public:
   ResolveAbsolutePath(ClientHandle client, const std::string &raw_path,
                       const ControlComponent &control);
   void ClearCache();
+  [[nodiscard]] ECMData<ClientHandle> GetClient(const std::string &nickname,
+                                                const ControlComponent &control);
 
   [[nodiscard]] ECMData<PathTarget> GetCwd(const ControlComponent &control);
   ECM EnsureClientWorkdir(ClientHandle client, const ControlComponent &control);
@@ -151,25 +89,11 @@ public:
        std::function<void(const PathTarget &, ECM)> on_error = {},
        std::function<bool(const PathTarget &)> on_match = {});
 
-  [[nodiscard]] ECMData<DstResolveResult>
-  ResolveTransferDst(PathTarget dst, TransferClientContainer *clients,
-                     const ControlComponent &control);
-
-  [[nodiscard]] ECMData<SourceResolveResult>
-  ResolveTransferSrc(std::vector<PathTarget> srcs,
-                     TransferClientContainer *clients,
-                     const ControlComponent &control, bool error_stop = true);
-
-  [[nodiscard]] ECMData<BuildTransferTaskResult> BuildTransferTasks(
-      const SourceResolveResult &src, const DstResolveResult &dst,
-      const ControlComponent &control, const BuildTransferTaskOptions &opt);
-
-  [[nodiscard]] ECMData<HttpDownloadPlan>
-  BuildHttpDownloadPlan(const std::optional<PathTarget> &dst_target,
-                        const std::string &suggested_filename,
-                        const ControlComponent &control);
-
-  [[nodiscard]] ECMData<TransferClientContainer> RecollectTransferClients(
-      const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info);
+private:
+  [[nodiscard]] ECMData<ClientHandle>
+  GetTransferClient_(const std::string &nickname);
+  [[nodiscard]] ECMData<ResolvedPath>
+  ResolvePath_(const PathTarget &target, const ControlComponent &control,
+               ClientHandle preferred_client = nullptr);
 };
 } // namespace AMApplication::filesystem

@@ -2,7 +2,10 @@
 #include "domain/client/ClientPort.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/string.hpp"
+#include <algorithm>
+#include <chrono>
 #include <optional>
+#include <thread>
 
 namespace AMApplication::client {
 namespace {
@@ -383,8 +386,6 @@ ClientAppService::CreateClient(const HostConfig &config,
   }
   ApplyCallbacksToClient_(client, callbacks);
 
-  (void)client->MetaDataPort().StoreTypedValue(config.metadata, true);
-
   const ConnectHooks hooks = SnapshotConnectHooks_();
   if (hooks.before_connect) {
     (void)CallCallbackSafe(hooks.before_connect, config, client, silent);
@@ -398,7 +399,7 @@ ClientAppService::CreateClient(const HostConfig &config,
   if (!connect_result.rcm) {
     return {nullptr, connect_result.rcm};
   }
-
+  (void)client->MetaDataPort().StoreTypedValue(config.metadata, true);
   return {client, connect_result.rcm};
 }
 
@@ -459,6 +460,45 @@ ClientAppService::EnsureClient(const std::string &nickname,
 }
 
 ECMData<ClientHandle>
+ClientAppService::AcquireTransferClient(const std::string &nickname,
+                                        int retry_times, int retry_wait_ms) {
+  const int safe_retry_times = std::max(0, retry_times);
+  const int safe_retry_wait_ms = std::max(0, retry_wait_ms);
+  ECMData<ClientHandle> public_result = {};
+  for (int attempt = 0; attempt <= safe_retry_times; ++attempt) {
+    public_result = GetPublicClient(nickname);
+    if ((public_result.rcm) && public_result.data) {
+      return public_result;
+    }
+    if (public_result.rcm.code != EC::PathUsingByOthers ||
+        attempt >= safe_retry_times) {
+      break;
+    }
+    if (safe_retry_wait_ms > 0) {
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(safe_retry_wait_ms));
+    }
+  }
+
+  auto create_result = CreateClient(nickname, ControlComponent{});
+  if (!(create_result.rcm) || !create_result.data) {
+    return create_result;
+  }
+
+  const ECM lease_rcm = TryLeaseClient(create_result.data);
+  if (!(lease_rcm)) {
+    return {nullptr, lease_rcm};
+  }
+
+  const ECM add_rcm = AddPublicClient(create_result.data);
+  if (!(add_rcm)) {
+    (void)TryReturnClient(create_result.data);
+    return {nullptr, add_rcm};
+  }
+  return {create_result.data, OK};
+}
+
+ECMData<ClientHandle>
 ClientAppService::ChangeClient(const std::string &nickname,
                                const ControlComponent &control, bool silent) {
   const std::string current_nickname = GetCurrentNickname();
@@ -493,8 +533,8 @@ ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
   if (IsLocalNickname(nickname)) {
     const ClientHandle current = GetCurrentClient();
     const bool update_current =
-        !current ||
-        IsLocalNickname(current->ConfigPort().GetNickname()) || overwrite;
+        !current || IsLocalNickname(current->ConfigPort().GetNickname()) ||
+        overwrite;
     if (!GetLocalClient() || overwrite) {
       SetLocalClient_(client, update_current);
     } else if (update_current) {
@@ -614,14 +654,16 @@ ECMData<ClientHandle>
 ClientAppService::GetPublicClient(const std::string &nickname) {
   auto resolved_key = ResolvePublicBucketKey_(nickname, true);
   if (!resolved_key.has_value()) {
-    return {nullptr, {EC::ClientNotFound, "get_public_client", nickname,
-                      "No public client found"}};
+    return {nullptr,
+            {EC::ClientNotFound, "get_public_client", nickname,
+             "No public client found"}};
   }
   std::vector<std::pair<ClientID, ClientHandle>> candidates =
       SnapshotPublicBucket_(*resolved_key);
   if (candidates.empty()) {
-    return {nullptr, {EC::ClientNotFound, "get_public_client", nickname,
-                      "No public client found"}};
+    return {nullptr,
+            {EC::ClientNotFound, "get_public_client", nickname,
+             "No public client found"}};
   }
 
   std::vector<ClientID> stale_ids = {};

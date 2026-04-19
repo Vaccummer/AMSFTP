@@ -1,6 +1,8 @@
 #pragma once
 
+#include "application/client/ClientAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
+#include "application/transfer/TransferAppDTO.hpp"
 #include "domain/transfer/TransferDomainModel.hpp"
 #include "domain/transfer/TransferPort.hpp"
 #include "foundation/core/DataClass.hpp"
@@ -21,6 +23,7 @@ public:
 
   TransferAppService(
       AMDomain::transfer::ITransferPoolPort &transfer_pool,
+      AMApplication::client::ClientAppService &client_service,
       AMApplication::filesystem::FilesystemAppService &filesystem_service);
   ~TransferAppService() override = default;
 
@@ -51,17 +54,36 @@ public:
   void ClearFinished();
 
   [[nodiscard]] std::vector<TaskID> ListTaskIDs() const;
+  [[nodiscard]] ECMData<DstResolveResult>
+  ResolveTransferDst(PathTarget dst, TransferClientContainer *clients,
+                     const ControlComponent &control);
+  [[nodiscard]] ECMData<SourceResolveResult>
+  ResolveTransferSrc(std::vector<PathTarget> srcs,
+                     TransferClientContainer *clients,
+                     const ControlComponent &control, bool error_stop = true);
+  [[nodiscard]] ECMData<BuildTransferTaskResult> BuildTransferTasks(
+      const SourceResolveResult &src, const DstResolveResult &dst,
+      const ControlComponent &control, const BuildTransferTaskOptions &opt);
+  [[nodiscard]] ECMData<HttpDownloadPlan>
+  BuildHttpDownloadPlan(const std::optional<PathTarget> &dst_target,
+                        const std::string &suggested_filename,
+                        const ControlComponent &control);
 
 private:
   void OnTaskCompleted_(const TaskHandle &task_info);
   static void MarkUnfinishedEntries_(const TaskHandle &task_info,
                                      const ECM &entry_rcm);
   static void ReleaseClients_(const TaskHandle &task_info);
+  [[nodiscard]] ECMData<AMDomain::transfer::TransferClientContainer>
+  RecollectTransferClients_(const TaskHandle &task_info);
+  [[nodiscard]] ECMData<AMDomain::client::ClientHandle>
+  AcquireTransferClient_(const std::string &nickname);
   void StorePaused_(const TaskHandle &task_info);
   void StoreFinished_(const TaskHandle &task_info);
 
 private:
   AMDomain::transfer::ITransferPoolPort &transfer_pool_;
+  AMApplication::client::ClientAppService &client_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   mutable AMAtomic<std::unordered_map<TaskID, TaskHandle>> paused_tasks_ = {};
   mutable AMAtomic<std::unordered_map<TaskID, TaskHandle>> finished_tasks_ = {};

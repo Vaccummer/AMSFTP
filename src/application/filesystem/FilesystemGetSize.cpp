@@ -3,20 +3,20 @@
 
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <string>
 #include <unordered_set>
 
 namespace AMApplication::filesystem {
 namespace {
-
-ECM CurrentStopError_(const ControlComponent &control) {
-  if (control.IsInterrupted()) {
-    return {EC::Terminate, "", "", "Operation interrupted"};
+std::optional<ECM> BuildGetSizeStopECM_(const ControlComponent &control,
+                                        const std::string &operation,
+                                        const std::string &target = "") {
+  if (auto stop_rcm = control.BuildRequestECM(operation, target);
+      stop_rcm.has_value()) {
+    return stop_rcm;
   }
-  if (control.IsTimeout()) {
-    return {EC::OperationTimeout, "", "", "Operation timed out"};
-  }
-  return OK;
+  return control.BuildECM(operation, target);
 }
 
 void UpdateLastError_(ECM *last_error, const ECM &next) {
@@ -57,7 +57,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
   int64_t total_size = 0;
   ECM last_error = OK;
 
-  auto resolved_result = ResolvePath(path, control);
+  auto resolved_result = ResolvePath_(path, control);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
     return {total_size, (resolved_result.rcm) ? Err(EC::InvalidHandle, "", "",
                                                     "Resolved client is null")
@@ -106,9 +106,10 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     return OK;
   };
 
-  const ECM stop_rcm = CurrentStopError_(control);
-  if (!(stop_rcm)) {
-    return {total_size, stop_rcm};
+  if (auto stop_rcm =
+          BuildGetSizeStopECM_(control, "getsize.start", resolved.abs_path);
+      stop_rcm.has_value()) {
+    return {total_size, *stop_rcm};
   }
 
   auto root_stat =
@@ -139,14 +140,22 @@ ECMData<int64_t> FilesystemAppService::GetSize(
   std::unordered_set<std::string> visited_dirs = {root_dir};
 
   while (!pending_dirs.empty()) {
-    const ECM loop_stop_rcm = CurrentStopError_(control);
-    if (!loop_stop_rcm) {
-      UpdateLastError_(&last_error, loop_stop_rcm);
+    if (auto stop_rcm = BuildGetSizeStopECM_(control, "getsize.traverse",
+                                             pending_dirs.front());
+        stop_rcm.has_value()) {
+      UpdateLastError_(&last_error, *stop_rcm);
       return {total_size, last_error};
     }
 
     std::string current_dir = std::move(pending_dirs.front());
     pending_dirs.pop_front();
+
+    if (auto stop_rcm =
+            BuildGetSizeStopECM_(control, "getsize.listdir", current_dir);
+        stop_rcm.has_value()) {
+      UpdateLastError_(&last_error, *stop_rcm);
+      return {total_size, last_error};
+    }
 
     auto list_result = BaseListdir(client, nickname, current_dir, control);
     if (!list_result.rcm) {
@@ -158,13 +167,15 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     }
 
     for (const auto &entry : list_result.data) {
-      const ECM item_stop_rcm = CurrentStopError_(control);
-      if (!(item_stop_rcm)) {
-        UpdateLastError_(&last_error, item_stop_rcm);
+      const std::string entry_path = ResolveEntryPath_(current_dir, entry);
+      if (auto stop_rcm = BuildGetSizeStopECM_(
+              control, "getsize.scan-entry",
+              entry_path.empty() ? current_dir : entry_path);
+          stop_rcm.has_value()) {
+        UpdateLastError_(&last_error, *stop_rcm);
         return {total_size, last_error};
       }
 
-      const std::string entry_path = ResolveEntryPath_(current_dir, entry);
       if (entry.type == PathType::DIR) {
         if (!entry_path.empty() && visited_dirs.insert(entry_path).second) {
           pending_dirs.push_back(entry_path);
@@ -192,5 +203,3 @@ ECMData<int64_t> FilesystemAppService::GetSize(
 }
 
 } // namespace AMApplication::filesystem
-
-
