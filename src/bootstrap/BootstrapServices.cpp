@@ -336,8 +336,7 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
 
   state->client_service =
       std::make_unique<AMApplication::client::ClientAppService>(
-          snapshots.client_service_arg);
-  state->client_service->BindHostConfigManager(state->host_service.get());
+          state->host_service.get(), snapshots.client_service_arg);
   state->client_service->SetPrivateKeys(snapshots.host_config_arg.private_keys);
 
   state->terminal_service =

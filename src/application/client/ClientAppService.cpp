@@ -1,18 +1,15 @@
 #include "application/client/ClientAppService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/host/HostDomainService.hpp"
-#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include <optional>
 
 namespace AMApplication::client {
 namespace {
-using ClientStatus = AMDomain::client::ClientStatus;
-using HostConfig = AMDomain::host::HostConfig;
-using HostConfigManager = AMApplication::host::HostAppService;
+using AMApplication::host::HostAppService;
+using AMDomain::client::ClientStatus;
+using AMDomain::host::HostConfig;
 using AMDomain::host::HostService::IsLocalNickname;
-constexpr const char *kTransferLeaseKey = "transfer.lease";
-constexpr const char *kTerminalLeaseKey = "terminal.lease";
 
 [[nodiscard]] ECM QueryLeaseFlag_(const ClientHandle &client, const char *key,
                                   bool *value) {
@@ -81,7 +78,7 @@ constexpr const char *kTerminalLeaseKey = "terminal.lease";
                          "reconcile_terminal_lease");
 }
 
-ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
+ECMData<HostConfig> ResolveHostConfig_(HostAppService *host_config_manager,
                                        const std::string &nickname,
                                        bool case_sensitive) {
   if (!host_config_manager) {
@@ -97,36 +94,6 @@ ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
   }
   return {HostConfig{}, Err(EC::ClientNotFound, "resolve_host_config", nickname,
                             "Host config not found")};
-}
-
-[[nodiscard]] bool MatchNickname_(const std::string &lhs,
-                                  const std::string &rhs, bool case_sensitive) {
-  if (case_sensitive) {
-    return lhs == rhs;
-  }
-  return AMStr::lowercase(lhs) == AMStr::lowercase(rhs);
-}
-
-[[nodiscard]] std::optional<std::string>
-ResolvePublicBucketKey_(const ClientContainer &clients,
-                        const std::string &nickname, bool case_sensitive) {
-  const std::string target = AMStr::Strip(nickname);
-  if (target.empty()) {
-    return std::nullopt;
-  }
-  auto direct_it = clients.find(target);
-  if (direct_it != clients.end()) {
-    return direct_it->first;
-  }
-  if (case_sensitive) {
-    return std::nullopt;
-  }
-  for (const auto &entry : clients) {
-    if (MatchNickname_(entry.first, target, false)) {
-      return entry.first;
-    }
-  }
-  return std::nullopt;
 }
 
 ECM AcquireTransferLease_(const ClientHandle &client) {
@@ -298,12 +265,18 @@ ECM AcquireTerminalLease_(const ClientHandle &client) {
 }
 } // namespace
 
-ClientAppService::ClientAppService(ClientServiceArg arg)
-    : ClientAppServiceBase(std::move(arg)) {}
+ClientAppService::ClientAppService(HostAppService *host_config_manager,
+                                   ClientServiceArg arg)
+    : ClientAppServiceBase(std::move(arg)),
+      host_config_manager_(host_config_manager) {}
 
 ClientAppService::~ClientAppService() = default;
 
 ECM ClientAppService::Init(ClientHandle local_client) {
+  if (host_config_manager_ == nullptr) {
+    return {EC::InvalidHandle, "ClientAppService::Init", "host_service",
+            "Host config manager is nullptr"};
+  }
   const ClientServiceArg init_arg = GetInitArg();
   const ClientCallbacks public_callbacks = GetPublicCallbacks();
   this->maintainer_ = CreateClientMaintainer(init_arg.heartbeat_interval_s,
@@ -367,43 +340,6 @@ ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
           Err(EC::ClientNotFound, "get_client", nickname, "Client not found")};
 }
 
-ClientHandle ClientAppService::GetLocalClient() const {
-  return runtime_clients_.lock()->local;
-}
-
-ClientHandle ClientAppService::GetCurrentClient() const {
-  return runtime_clients_.lock()->current;
-}
-
-std::string ClientAppService::GetCurrentNickname() const {
-  ClientHandle current = GetCurrentClient();
-  if (!current) {
-    ClientHandle local = GetLocalClient();
-    if (!local) {
-      return "local";
-    }
-    const std::string local_nickname =
-        AMStr::Strip(local->ConfigPort().GetNickname());
-    return local_nickname.empty() ? std::string("local") : local_nickname;
-  }
-  const std::string current_nickname =
-      AMStr::Strip(current->ConfigPort().GetNickname());
-  if (!current_nickname.empty()) {
-    return current_nickname;
-  }
-  ClientHandle local = GetLocalClient();
-  if (!local) {
-    return "local";
-  }
-  const std::string local_nickname =
-      AMStr::Strip(local->ConfigPort().GetNickname());
-  return local_nickname.empty() ? std::string("local") : local_nickname;
-}
-
-std::string ClientAppService::CurrentNickname() const {
-  return GetCurrentNickname();
-}
-
 void ClientAppService::RegisterMaintainerCallbacks(
     std::optional<DisconnectCallback> disconnect_cb,
     std::optional<TraceCallback> trace_cb,
@@ -428,11 +364,6 @@ void ClientAppService::RegisterPublicCallbacks(
   if (maintainer_ && disconnect_cb.has_value()) {
     maintainer_->SetDisconnectCallback(*disconnect_cb);
   }
-}
-
-void ClientAppService::BindHostConfigManager(
-    HostConfigManager *host_config_manager) {
-  host_config_manager_ = host_config_manager;
 }
 
 ECMData<ClientHandle>
@@ -560,17 +491,15 @@ ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
   }
 
   if (IsLocalNickname(nickname)) {
-    auto runtime_clients = runtime_clients_.lock();
-    auto cache = runtime_clients.load();
-    if (!cache.local || overwrite) {
-      cache.local = client;
+    const ClientHandle current = GetCurrentClient();
+    const bool update_current =
+        !current ||
+        IsLocalNickname(current->ConfigPort().GetNickname()) || overwrite;
+    if (!GetLocalClient() || overwrite) {
+      SetLocalClient_(client, update_current);
+    } else if (update_current) {
+      SetCurrentClient(GetLocalClient());
     }
-    if (!cache.current ||
-        IsLocalNickname(cache.current->ConfigPort().GetNickname()) ||
-        overwrite) {
-      cache.current = cache.local;
-    }
-    runtime_clients.store(cache);
     return OK;
   }
 
@@ -584,12 +513,7 @@ ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
             "Client already exists"};
   }
 
-  auto runtime_clients = runtime_clients_.lock();
-  auto cache = runtime_clients.load();
-  if (!cache.current) {
-    cache.current = client;
-    runtime_clients.store(cache);
-  }
+  (void)SetCurrentClientIfEmpty_(client);
   return OK;
 }
 
@@ -628,49 +552,6 @@ std::map<std::string, ClientHandle> ClientAppService::GetClients() const {
   return clients;
 }
 
-std::vector<ClientAppService::PublicClientInstance>
-ClientAppService::ListPublicClients(const std::vector<std::string> &nicknames,
-                                    bool case_sensitive) const {
-  std::vector<PublicClientInstance> out = {};
-  std::vector<std::string> filters = {};
-  filters.reserve(nicknames.size());
-  for (const auto &nickname : nicknames) {
-    const std::string stripped = AMStr::Strip(nickname);
-    if (!stripped.empty()) {
-      filters.push_back(stripped);
-    }
-  }
-
-  auto public_clients = public_clients_.lock();
-  for (const auto &bucket : *public_clients) {
-    bool selected = filters.empty();
-    for (const auto &target : filters) {
-      if (MatchNickname_(bucket.first, target, case_sensitive)) {
-        selected = true;
-        break;
-      }
-    }
-    if (!selected) {
-      continue;
-    }
-    for (const auto &entry : bucket.second) {
-      out.push_back(
-          PublicClientInstance{bucket.first, entry.first, entry.second});
-    }
-  }
-  return out;
-}
-
-std::vector<std::string> ClientAppService::GetPublicClientNames() const {
-  std::vector<std::string> out = {};
-  auto public_clients = public_clients_.lock();
-  out.reserve(public_clients->size());
-  for (const auto &entry : *public_clients) {
-    out.push_back(entry.first);
-  }
-  return out;
-}
-
 ECM ClientAppService::RemoveClient(const std::string &nickname) {
   const std::string key = nickname;
 
@@ -682,16 +563,11 @@ ECM ClientAppService::RemoveClient(const std::string &nickname) {
     return {EC::ClientNotFound, "remove_client", key, "Client not found"};
   }
 
+  ErasePublicBucket_(key);
   {
-    auto public_clients = public_clients_.lock();
-    public_clients->erase(key);
-  }
-  {
-    auto runtime_clients = runtime_clients_.lock();
-    auto cache = runtime_clients.load();
-    if (cache.current && cache.current->ConfigPort().GetNickname() == key) {
-      cache.current = cache.local;
-      runtime_clients.store(cache);
+    const ClientHandle current = GetCurrentClient();
+    if (current && current->ConfigPort().GetNickname() == key) {
+      SetCurrentClient(GetLocalClient());
     }
   }
   return OK;
@@ -709,24 +585,15 @@ ECM ClientAppService::RemovePublicClient(const std::string &nickname,
                "Public client id is empty");
   }
 
-  auto public_clients = public_clients_.lock();
-  auto resolved_key = ResolvePublicBucketKey_(*public_clients, target, false);
+  auto resolved_key = ResolvePublicBucketKey_(target, false);
   if (!resolved_key.has_value()) {
     return Err(EC::ClientNotFound, "remove_public_client", target,
                "Public client nickname not found");
   }
-  auto bucket_it = public_clients->find(*resolved_key);
-  if (bucket_it == public_clients->end()) {
-    return Err(EC::ClientNotFound, "remove_public_client", target,
-               "Public client nickname not found");
-  }
-  if (bucket_it->second.erase(id) == 0) {
+  if (!ErasePublicClient_(*resolved_key, id)) {
     return Err(EC::ClientNotFound, "remove_public_client",
                AMStr::fmt("{}:{}", *resolved_key, id),
                "Public client id not found");
-  }
-  if (bucket_it->second.empty()) {
-    public_clients->erase(bucket_it);
   }
   return OK;
 }
@@ -745,19 +612,16 @@ ECM ClientAppService::RemovePublicClients(
 
 ECMData<ClientHandle>
 ClientAppService::GetPublicClient(const std::string &nickname) {
-  std::vector<std::pair<ClientID, ClientHandle>> candidates = {};
-  {
-    auto public_clients = public_clients_.lock();
-    auto bucket_it = public_clients->find(nickname);
-    if (bucket_it == public_clients->end() || bucket_it->second.empty()) {
-      return {nullptr,
-              {EC::ClientNotFound, "get_public_client", nickname,
-               "No public client found"}};
-    }
-    candidates.reserve(bucket_it->second.size());
-    for (const auto &entry : bucket_it->second) {
-      candidates.push_back(entry);
-    }
+  auto resolved_key = ResolvePublicBucketKey_(nickname, true);
+  if (!resolved_key.has_value()) {
+    return {nullptr, {EC::ClientNotFound, "get_public_client", nickname,
+                      "No public client found"}};
+  }
+  std::vector<std::pair<ClientID, ClientHandle>> candidates =
+      SnapshotPublicBucket_(*resolved_key);
+  if (candidates.empty()) {
+    return {nullptr, {EC::ClientNotFound, "get_public_client", nickname,
+                      "No public client found"}};
   }
 
   std::vector<ClientID> stale_ids = {};
@@ -819,15 +683,8 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
   }
 
   if (!stale_ids.empty()) {
-    auto public_clients = public_clients_.lock();
-    auto bucket_it = public_clients->find(nickname);
-    if (bucket_it != public_clients->end()) {
-      for (const auto &id : stale_ids) {
-        bucket_it->second.erase(id);
-      }
-      if (bucket_it->second.empty()) {
-        public_clients->erase(bucket_it);
-      }
+    for (const auto &id : stale_ids) {
+      (void)ErasePublicClient_(*resolved_key, id);
     }
   }
 
@@ -875,18 +732,13 @@ ECM ClientAppService::AddPublicClient(const ClientHandle &client) {
 
   ApplyCallbacksToClient_(client, GetPublicCallbacks());
 
-  auto public_clients = public_clients_.lock();
-  (*public_clients)[nickname][id] = client;
+  UpsertPublicClient_(nickname, id, client);
   return OK;
 }
 
 void ClientAppService::SetConnectHooks(ConnectHooks hooks) {
   std::lock_guard<std::mutex> lock(connect_hooks_mutex_);
   connect_hooks_ = std::move(hooks);
-}
-
-void ClientAppService::SetCurrentClient(const ClientHandle &client) {
-  runtime_clients_.lock()->current = client;
 }
 
 std::vector<std::string> ClientAppService::GetClientNames() const {

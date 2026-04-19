@@ -155,6 +155,8 @@ void vlowercase(std::string &str);
 void vuppercase(std::string &str);
 std::string lowercase(const std::string &str);
 std::string uppercase(const std::string &str);
+bool Equals(std::string_view lhs, std::string_view rhs,
+            bool case_sensitive = true);
 std::wstring wstr(const std::string &str);
 std::string wstr(const std::wstring &wstr);
 std::string wstr(wchar_t *wstr);
