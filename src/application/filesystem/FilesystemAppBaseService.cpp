@@ -1,11 +1,5 @@
 #include "application/filesystem/FilesystemAppBaseService.hpp"
-#include "application/filesystem/FilesystemAppService.hpp"
-#include "domain/filesystem/FileSystemDomainService.hpp"
-#include "foundation/tools/path.hpp"
-#include <algorithm>
-#include <chrono>
 #include <stdexcept>
-#include <thread>
 
 namespace AMApplication::filesystem {
 namespace {
@@ -17,14 +11,10 @@ void HashCombine_(size_t &seed, size_t value) {
 } // namespace
 
 FilesystemAppBaseService::FilesystemAppBaseService(
-    FilesystemArg arg, HostAppService *host_service,
-    ClientAppService *client_service)
-    : AMApplication::config::IConfigSyncPort(typeid(FilesystemArg)),
-      init_arg_(arg), host_service_(host_service),
-      client_service_(client_service), cd_history_(std::deque<PathTarget>{}) {
-  if (!host_service_) {
-    throw std::invalid_argument("host_service is null");
-  }
+    FilesystemArg arg, ClientAppService *client_service)
+    : AMDomain::config::IConfigSyncPort(typeid(FilesystemArg)),
+      init_arg_(std::move(arg)), client_service_(client_service),
+      cd_history_(std::deque<PathTarget>{}) {
   if (!client_service_) {
     throw std::invalid_argument("client_service is null");
   }
@@ -77,8 +67,8 @@ ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
       nickname.empty() ? client->ConfigPort().GetNickname() : nickname;
   const PathTarget cache_key = BuildBaseCacheKey(key_nickname, abs_path);
   if (!trace_link) {
-    auto cache_guard = base_io_cache_.stat_cache.lock();
-    const auto &cache = cache_guard.get();
+    auto cache_guard = base_io_cache_.lock();
+    const auto &cache = cache_guard->stat_cache;
     auto it = cache.find(cache_key);
     if (it != cache.end()) {
       return it->second;
@@ -92,8 +82,8 @@ ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
 
   ECMData<PathInfo> out = {stat_result.data.info, stat_result.rcm};
   if (!trace_link) {
-    auto cache_guard = base_io_cache_.stat_cache.lock();
-    cache_guard.get()[cache_key] = out;
+    auto cache_guard = base_io_cache_.lock();
+    cache_guard->stat_cache[cache_key] = out;
   }
   return out;
 }
@@ -112,8 +102,8 @@ ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
       nickname.empty() ? client->ConfigPort().GetNickname() : nickname;
   const PathTarget cache_key = BuildBaseCacheKey(key_nickname, abs_path);
   {
-    auto cache_guard = base_io_cache_.listdir_cache.lock();
-    const auto &cache = cache_guard.get();
+    auto cache_guard = base_io_cache_.lock();
+    const auto &cache = cache_guard->listdir_cache;
     auto it = cache.find(cache_key);
     if (it != cache.end()) {
       return it->second;
@@ -129,16 +119,10 @@ ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
   ECMData<std::vector<PathInfo>> out = {list_result.data.entries,
                                         list_result.rcm};
   {
-    auto cache_guard = base_io_cache_.listdir_cache.lock();
-    cache_guard.get()[cache_key] = out;
-  }
-  {
-    auto cache_guard = base_io_cache_.listnames_cache.lock();
-    cache_guard.get()[cache_key] = {std::move(names), OK};
-  }
-  {
-    auto cache_guard = base_io_cache_.stat_cache.lock();
-    auto &cache = cache_guard.get();
+    auto cache_guard = base_io_cache_.lock();
+    cache_guard->listdir_cache[cache_key] = out;
+    cache_guard->listnames_cache[cache_key] = {std::move(names), OK};
+    auto &cache = cache_guard->stat_cache;
     for (const auto &entry : list_result.data.entries) {
       if (entry.path.empty()) {
         continue;
@@ -168,25 +152,20 @@ ECMData<std::vector<std::string>> FilesystemAppBaseService::BaseListNames(
       nickname.empty() ? client->ConfigPort().GetNickname() : nickname;
   const PathTarget cache_key = BuildBaseCacheKey(key_nickname, abs_path);
   {
-    auto cache_guard = base_io_cache_.listnames_cache.lock();
-    const auto &cache = cache_guard.get();
+    auto cache_guard = base_io_cache_.lock();
+    const auto &cache = cache_guard->listnames_cache;
     auto it = cache.find(cache_key);
     if (it != cache.end()) {
       return it->second;
     }
-  }
-  {
-    auto cache_guard = base_io_cache_.listdir_cache.lock();
-    const auto &cache = cache_guard.get();
-    auto it = cache.find(cache_key);
-    if (it != cache.end()) {
-      if (!(it->second.rcm)) {
-        return {{}, it->second.rcm};
+    auto listdir_it = cache_guard->listdir_cache.find(cache_key);
+    if (listdir_it != cache_guard->listdir_cache.end()) {
+      if (!(listdir_it->second.rcm)) {
+        return {{}, listdir_it->second.rcm};
       }
       ECMData<std::vector<std::string>> out = {
-          BuildBaseListNames(it->second.data), OK};
-      auto names_guard = base_io_cache_.listnames_cache.lock();
-      names_guard.get()[cache_key] = out;
+          BuildBaseListNames(listdir_it->second.data), OK};
+      cache_guard->listnames_cache[cache_key] = out;
       return out;
     }
   }
@@ -198,24 +177,16 @@ ECMData<std::vector<std::string>> FilesystemAppBaseService::BaseListNames(
 
   ECMData<std::vector<std::string>> out = {list_result.data.names,
                                            list_result.rcm};
-  auto cache_guard = base_io_cache_.listnames_cache.lock();
-  cache_guard.get()[cache_key] = out;
+  auto cache_guard = base_io_cache_.lock();
+  cache_guard->listnames_cache[cache_key] = out;
   return out;
 }
 
 void FilesystemAppBaseService::ClearBaseIOCache() {
-  {
-    auto cache_guard = base_io_cache_.stat_cache.lock();
-    cache_guard.get().clear();
-  }
-  {
-    auto cache_guard = base_io_cache_.listdir_cache.lock();
-    cache_guard.get().clear();
-  }
-  {
-    auto cache_guard = base_io_cache_.listnames_cache.lock();
-    cache_guard.get().clear();
-  }
+  auto cache_guard = base_io_cache_.lock();
+  cache_guard->stat_cache.clear();
+  cache_guard->listdir_cache.clear();
+  cache_guard->listnames_cache.clear();
 }
 
 void FilesystemAppBaseService::ClearBaseIOCacheByNickname(
@@ -225,23 +196,17 @@ void FilesystemAppBaseService::ClearBaseIOCacheByNickname(
   }
   const std::string normalized_nickname = nickname;
   {
-    auto cache_guard = base_io_cache_.stat_cache.lock();
-    auto &cache = cache_guard.get();
+    auto cache_guard = base_io_cache_.lock();
+    auto &cache = cache_guard->stat_cache;
     std::erase_if(cache, [&](const auto &entry) {
       return entry.first.nickname == normalized_nickname;
     });
-  }
-  {
-    auto cache_guard = base_io_cache_.listdir_cache.lock();
-    auto &cache = cache_guard.get();
-    std::erase_if(cache, [&](const auto &entry) {
+    auto &listdir_cache = cache_guard->listdir_cache;
+    std::erase_if(listdir_cache, [&](const auto &entry) {
       return entry.first.nickname == normalized_nickname;
     });
-  }
-  {
-    auto cache_guard = base_io_cache_.listnames_cache.lock();
-    auto &cache = cache_guard.get();
-    std::erase_if(cache, [&](const auto &entry) {
+    auto &listnames_cache = cache_guard->listnames_cache;
+    std::erase_if(listnames_cache, [&](const auto &entry) {
       return entry.first.nickname == normalized_nickname;
     });
   }
@@ -253,24 +218,15 @@ void FilesystemAppBaseService::ClearBaseIOCacheByPath(
     return;
   }
   const PathTarget key = BuildBaseCacheKey(nickname, abs_path);
-  {
-    auto cache_guard = base_io_cache_.stat_cache.lock();
-    cache_guard.get().erase(key);
-  }
-  {
-    auto cache_guard = base_io_cache_.listdir_cache.lock();
-    cache_guard.get().erase(key);
-  }
-  {
-    auto cache_guard = base_io_cache_.listnames_cache.lock();
-    cache_guard.get().erase(key);
-  }
+  auto cache_guard = base_io_cache_.lock();
+  cache_guard->stat_cache.erase(key);
+  cache_guard->listdir_cache.erase(key);
+  cache_guard->listnames_cache.erase(key);
 }
 
 ECM FilesystemAppBaseService::Init() {
-  if (!host_service_ || !client_service_) {
-    return Err(EC::InvalidHandle, "", "",
-               "filesystem app base service deps are null");
+  if (!client_service_) {
+    return Err(EC::InvalidHandle, "", "", "client service is null");
   }
   const FilesystemArg arg = init_arg_.lock().load();
   if (arg.max_cd_history <= 0) {
@@ -292,11 +248,13 @@ FilesystemArg FilesystemAppBaseService::GetInitArg() const {
 }
 
 ECM FilesystemAppBaseService::FlushTo(
-    AMApplication::config::ConfigAppService *config_service) {
-  if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+    AMDomain::config::IConfigStorePort *store) {
+  if (store == nullptr) {
+    return Err(EC::InvalidArg, "", "", "config store is null");
   }
-  if (!config_service->Write<FilesystemArg>(GetInitArg())) {
+  const FilesystemArg snapshot = GetInitArg();
+  if (!store->Write(std::type_index(typeid(FilesystemArg)),
+                    static_cast<const void *>(&snapshot))) {
     return Err(EC::ConfigDumpFailed, "", "",
                "failed to flush filesystem config");
   }
@@ -308,187 +266,5 @@ std::string FilesystemAppBaseService::CurrentNickname() const {
     return "";
   }
   return client_service_->CurrentNickname();
-}
-
-ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
-    const std::string &nickname, const ControlComponent &control, bool detach) {
-  if (!host_service_ || !client_service_) {
-    return {nullptr, Err(EC::InvalidHandle, "", "",
-                         "filesystem app base service deps are null")};
-  }
-
-  if (nickname.empty()) {
-    return {nullptr, Err(EC::InvalidArg, "", "", "Client nickname is empty")};
-  }
-
-  auto existing = client_service_->GetClient(nickname, true);
-  if ((existing.rcm) && existing.data) {
-    return existing;
-  }
-
-  if (!host_service_->HostExists(nickname)) {
-    return {nullptr,
-            Err(EC::HostConfigNotFound, "", nickname, "Host not found")};
-  }
-  auto host_cfg = host_service_->GetClientConfig(nickname, true);
-  if (!(host_cfg.rcm)) {
-    return {nullptr, host_cfg.rcm};
-  }
-
-  auto create_result = client_service_->CreateClient(host_cfg.data, control);
-  if (!(create_result.rcm) || !create_result.data) {
-    return {create_result.data, create_result.rcm};
-  }
-
-  if (detach) {
-    return {create_result.data, OK};
-  }
-
-  const ECM add_rcm = client_service_->AddClient(create_result.data, false);
-  if (!add_rcm) {
-    auto raced = client_service_->GetClient(nickname, true);
-    if (raced.rcm && raced.data) {
-      return raced;
-    }
-    return {nullptr, add_rcm};
-  }
-
-  auto resolved = client_service_->GetClient(nickname, true);
-  if (!(resolved.rcm) || !resolved.data) {
-    resolved = {create_result.data, OK};
-  }
-  return resolved;
-}
-
-ECMData<ClientHandle>
-FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
-  if (!host_service_ || !client_service_) {
-    return {nullptr, Err(EC::InvalidHandle, "", "",
-                         "filesystem app base service deps are null")};
-  }
-
-  if (nickname.empty()) {
-    return {nullptr, Err(EC::InvalidArg, "", "", "Client nickname is empty")};
-  }
-
-  constexpr int kPublicClientLeaseRetryTimes = 8;
-  constexpr int kPublicClientLeaseRetryWaitMs = 25;
-  ECMData<ClientHandle> public_result = {};
-  for (int attempt = 0; attempt <= kPublicClientLeaseRetryTimes; ++attempt) {
-    public_result = client_service_->GetPublicClient(nickname);
-    if ((public_result.rcm) && public_result.data) {
-      return public_result;
-    }
-    if (public_result.rcm.code != EC::PathUsingByOthers) {
-      break;
-    }
-    if (attempt >= kPublicClientLeaseRetryTimes) {
-      break;
-    }
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(kPublicClientLeaseRetryWaitMs));
-  }
-
-  if (!host_service_->HostExists(nickname)) {
-    return {nullptr,
-            Err(EC::HostConfigNotFound, "", nickname, "Host not found")};
-  }
-  auto host_cfg = host_service_->GetClientConfig(nickname, true);
-  if (!(host_cfg.rcm)) {
-    return {nullptr, host_cfg.rcm};
-  }
-
-  auto create_result =
-      client_service_->CreateClient(host_cfg.data, ControlComponent{});
-  if (!(create_result.rcm) || !create_result.data) {
-    return {create_result.data, create_result.rcm};
-  }
-
-  {
-    const ECM lease_rcm = ClientAppService::TryLeaseClient(create_result.data);
-    if (!(lease_rcm)) {
-      return {nullptr, lease_rcm};
-    }
-  }
-
-  const ECM add_rcm = client_service_->AddPublicClient(create_result.data);
-  if (!(add_rcm)) {
-    (void)ClientAppService::TryReturnClient(create_result.data);
-    return {nullptr, add_rcm};
-  }
-  return {create_result.data, OK};
-}
-
-ECMData<ResolvedPath>
-FilesystemAppBaseService::ResolvePath(const PathTarget &target,
-                                      const ControlComponent &control,
-                                      ClientHandle preferred_client) {
-  if (!client_service_) {
-    return {ResolvedPath{},
-            Err(EC::InvalidHandle, "", "", "client service is null")};
-  }
-
-  ResolvedPath out = {};
-  out.target = target;
-  if (out.target.path.empty()) {
-    out.target.path = ".";
-  }
-  out.target.is_wildcard =
-      AMDomain::filesystem::service::HasWildcard(out.target.path);
-  out.target.is_user_path =
-      !out.target.path.empty() && out.target.path.front() == '~';
-
-  if (preferred_client) {
-    out.client = preferred_client;
-    if (out.target.nickname.empty()) {
-      out.target.nickname = preferred_client->ConfigPort().GetNickname();
-    }
-  } else {
-    if (out.target.nickname.empty()) {
-      out.target.nickname = client_service_->CurrentNickname();
-    }
-    auto get_result = GetClient(out.target.nickname, control);
-    if (!get_result.rcm || !get_result.data) {
-      return {ResolvedPath{}, (get_result.rcm) ? Err(EC::InvalidHandle, "", "",
-                                                     "Resolved client is null")
-                                               : get_result.rcm};
-    }
-    out.client = get_result.data;
-  }
-
-  auto abs_result = FilesystemAppService::ResolveAbsolutePath(
-      out.client, out.target.path, control);
-  if (!(abs_result.rcm)) {
-    return {ResolvedPath{}, abs_result.rcm};
-  }
-  out.abs_path = abs_result.data;
-  out.target.path = out.abs_path;
-  out.target.is_wildcard =
-      AMDomain::filesystem::service::HasWildcard(out.target.path);
-  out.target.is_user_path =
-      !out.target.path.empty() && out.target.path.front() == '~';
-
-  return {std::move(out), OK};
-}
-
-std::vector<ECMData<ResolvedPath>>
-FilesystemAppBaseService::ResolvePath(const std::vector<PathTarget> &targets,
-                                      const ControlComponent &control) {
-  std::vector<ECMData<ResolvedPath>> out = {};
-  out.reserve(targets.size());
-  for (const auto &target : targets) {
-    if (control.IsInterrupted()) {
-      out.emplace_back(ResolvedPath{},
-                       Err(EC::Terminate, "", "", "Interrupted by user"));
-      continue;
-    }
-    if (control.IsTimeout()) {
-      out.emplace_back(ResolvedPath{}, Err(EC::OperationTimeout, "", "",
-                                           "Operation timed out"));
-      continue;
-    }
-    out.push_back(ResolvePath(target, control));
-  }
-  return out;
 }
 } // namespace AMApplication::filesystem

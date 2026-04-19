@@ -1105,7 +1105,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     }
 
     auto resolved_dst =
-        filesystem_service_.ResolveTransferDst(set.dst, &clients, control);
+        transfer_app_service_.ResolveTransferDst(set.dst, &clients, control);
     if (!(resolved_dst.rcm)) {
       return resolved_dst.rcm;
     }
@@ -1113,7 +1113,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     ReportTransferSubStage_(
         stage_reporter,
         AMStr::fmt("set {}/{}: resolve source", set_index, total_sets));
-    auto resolved_src = filesystem_service_.ResolveTransferSrc(
+    auto resolved_src = transfer_app_service_.ResolveTransferSrc(
         set.srcs, &clients, control, true);
     if (!(resolved_src.rcm)) {
       return resolved_src.rcm;
@@ -1131,7 +1131,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
       }
     }
 
-    AMApplication::filesystem::BuildTransferTaskOptions options = {};
+    AMApplication::transfer::BuildTransferTaskOptions options = {};
     options.clone = set.clone;
     options.mkdir = set.mkdir;
     options.ignore_special_file = set.ignore_special_file;
@@ -1139,7 +1139,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
 
     ReportTransferSubStage_(stage_reporter, AMStr::fmt("set {}/{}: build tasks",
                                                        set_index, total_sets));
-    auto build_result = filesystem_service_.BuildTransferTasks(
+    auto build_result = transfer_app_service_.BuildTransferTasks(
         resolved_src.data, resolved_dst.data, control, options);
     if (!(build_result.rcm)) {
       return build_result.rcm;
@@ -1517,7 +1517,7 @@ ECM TransferInterfaceService::HttpGet(
     return name.empty() ? std::string("download.bin") : name;
   }();
 
-  auto plan_result = filesystem_service_.BuildHttpDownloadPlan(
+  auto plan_result = transfer_app_service_.BuildHttpDownloadPlan(
       arg.dst_target, suggested_name, control);
   if (!(plan_result.rcm)) {
     return fail(plan_result.rcm);

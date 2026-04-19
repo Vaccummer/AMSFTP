@@ -1,7 +1,6 @@
 #pragma once
 #include "application/client/ClientAppService.hpp"
-#include "application/config/ConfigAppService.hpp"
-#include "application/host/HostAppService.hpp"
+#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <deque>
@@ -16,34 +15,18 @@ using PathTarget = AMDomain::filesystem::PathTarget;
 using ResolvedPath = AMDomain::filesystem::ResolvedPath;
 using PathEntry = AMDomain::filesystem::PathEntry;
 using ClientHandle = AMDomain::client::ClientHandle;
-using HostAppService = AMApplication::host::HostAppService;
 using ClientAppService = AMApplication::client::ClientAppService;
 
-class FilesystemAppBaseService : public AMApplication::config::IConfigSyncPort {
+class FilesystemAppBaseService : public AMDomain::config::IConfigSyncPort {
 public:
-  FilesystemAppBaseService(FilesystemArg arg, HostAppService *host_service,
-                           ClientAppService *client_service);
+  FilesystemAppBaseService(FilesystemArg arg, ClientAppService *client_service);
   ~FilesystemAppBaseService() override = default;
 
   ECM Init();
 
   [[nodiscard]] FilesystemArg GetInitArg() const;
-  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
   [[nodiscard]] std::string CurrentNickname() const;
-
-  [[nodiscard]] ECMData<ClientHandle> GetClient(const std::string &nickname,
-                                                const ControlComponent &control,
-                                                bool detach = false);
-  [[nodiscard]] ECMData<ClientHandle>
-  GetTransferClient(const std::string &nickname);
-
-  [[nodiscard]] ECMData<ResolvedPath>
-  ResolvePath(const PathTarget &target, const ControlComponent &control,
-              ClientHandle preferred_client = nullptr);
-
-  [[nodiscard]] std::vector<ECMData<ResolvedPath>>
-  ResolvePath(const std::vector<PathTarget> &targets,
-              const ControlComponent &control);
 
 protected:
   struct BaseIOCache {
@@ -65,9 +48,9 @@ protected:
         std::unordered_map<PathTarget, ECMData<std::vector<std::string>>,
                            KeyHash, KeyEq>;
 
-    AMAtomic<StatCacheMap> stat_cache = {};
-    AMAtomic<ListdirCacheMap> listdir_cache = {};
-    AMAtomic<ListnamesCacheMap> listnames_cache = {};
+    StatCacheMap stat_cache = {};
+    ListdirCacheMap listdir_cache = {};
+    ListnamesCacheMap listnames_cache = {};
   };
 
   [[nodiscard]] ECMData<PathInfo> BaseStat(ClientHandle client,
@@ -94,9 +77,8 @@ protected:
   BuildBaseListNames(const std::vector<PathInfo> &entries);
 
   mutable AMAtomic<FilesystemArg> init_arg_ = {};
-  HostAppService *host_service_ = nullptr;
   ClientAppService *client_service_ = nullptr;
   mutable AMAtomic<std::deque<PathTarget>> cd_history_ = {};
-  BaseIOCache base_io_cache_ = {};
+  mutable AMAtomic<BaseIOCache> base_io_cache_ = {};
 };
 } // namespace AMApplication::filesystem

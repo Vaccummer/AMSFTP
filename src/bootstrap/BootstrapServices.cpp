@@ -344,8 +344,7 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
 
   state->filesystem_service =
       std::make_unique<AMApplication::filesystem::FilesystemAppService>(
-          snapshots.filesystem_arg, state->host_service.get(),
-          state->client_service.get());
+          snapshots.filesystem_arg, state->client_service.get());
 
   state->var_service =
       std::make_unique<AMApplication::var::VarAppService>(snapshots.var_arg);
@@ -533,7 +532,7 @@ ECM RegisterConfigSyncPorts_(AppServiceBuildState *state) {
                "<state>", "state or config service is null");
   }
 
-  auto register_port = [&](AMApplication::config::IConfigSyncPort *port,
+  auto register_port = [&](AMDomain::config::IConfigSyncPort *port,
                            const std::string &name) -> ECM {
     if (port == nullptr) {
       return Err(EC::InvalidHandle, "bootstrap register sync port", name,
@@ -684,7 +683,8 @@ ECM BuildTransferInterfaceService_(const amf &task_control_token,
 
   state->transfer_app_service =
       std::make_unique<AMApplication::transfer::TransferAppService>(
-          *state->transfer_pool, *app_state.filesystem_service);
+          *state->transfer_pool, *app_state.client_service,
+          *app_state.filesystem_service);
 
   state->transfer_service =
       std::make_unique<AMInterface::transfer::TransferInterfaceService>(

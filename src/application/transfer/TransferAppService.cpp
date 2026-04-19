@@ -13,8 +13,10 @@ using EC = ErrorCode;
 
 TransferAppService::TransferAppService(
     AMDomain::transfer::ITransferPoolPort &transfer_pool,
+    AMApplication::client::ClientAppService &client_service,
     AMApplication::filesystem::FilesystemAppService &filesystem_service)
-    : transfer_pool_(transfer_pool), filesystem_service_(filesystem_service) {}
+    : transfer_pool_(transfer_pool), client_service_(client_service),
+      filesystem_service_(filesystem_service) {}
 
 ECM TransferAppService::Submit(const TaskHandle &task_info) {
   if (!task_info) {
@@ -102,8 +104,7 @@ ECM TransferAppService::Resume(TaskID id, int timeout_ms) {
     paused->erase(it);
   }
 
-  auto recollect_result =
-      filesystem_service_.RecollectTransferClients(task_info);
+  auto recollect_result = RecollectTransferClients_(task_info);
   if (!(recollect_result.rcm)) {
     if (task_info) {
       StorePaused_(task_info);
