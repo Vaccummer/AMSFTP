@@ -1,4 +1,4 @@
-#include "infrastructure/config/SuperTomlHandle.hpp"
+#include "infrastructure/config/TomlConfigHandle.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <fstream>
@@ -56,8 +56,8 @@ bool ParseJson_(const std::string &text, Json *out, std::string *error) {
 /**
  * @brief Initialize handle with document kind, path and schema.
  */
-ECM AMInfraSuperTomlHandle::Init(
-    const AMInfra::config::ConfigDocumentSpec &spec) {
+namespace AMInfra::config {
+ECM TomlConfigHandle::Init(const ConfigDocumentSpec &spec) {
   std::lock_guard<std::mutex> lock(mtx_);
 
   if (rust_toml_handle_) {
@@ -130,7 +130,7 @@ ECM AMInfraSuperTomlHandle::Init(
 /**
  * @brief Return a copy of in-memory json document.
  */
-bool AMInfraSuperTomlHandle::GetJson(Json *out) const {
+bool TomlConfigHandle::GetJson(Json *out) const {
   if (!out) {
     return false;
   }
@@ -142,7 +142,7 @@ bool AMInfraSuperTomlHandle::GetJson(Json *out) const {
 /**
  * @brief Replace the in-memory json document and mark handle dirty.
  */
-bool AMInfraSuperTomlHandle::SetJson(const Json &json) {
+bool TomlConfigHandle::SetJson(const Json &json) {
   std::lock_guard<std::mutex> lock(mtx_);
   if (!rust_toml_handle_) {
     return false;
@@ -156,12 +156,14 @@ bool AMInfraSuperTomlHandle::SetJson(const Json &json) {
 /**
  * @brief Dump current in-memory JSON to original file path.
  */
-ECM AMInfraSuperTomlHandle::DumpInplace() { return DumpTo(spec_.data_path); }
+ECM TomlConfigHandle::DumpInplace() {
+  return DumpTo(spec_.data_path);
+}
 
 /**
  * @brief Dump current in-memory JSON to destination path.
  */
-ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
+ECM TomlConfigHandle::DumpTo(const std::filesystem::path &dst_path) {
   std::lock_guard<std::mutex> lock(mtx_);
   if (!rust_toml_handle_) {
     return Err(EC::ConfigNotInitialized, "", "",
@@ -212,7 +214,7 @@ ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
 /**
  * @brief Close underlying RustToml handle and reset state.
  */
-void AMInfraSuperTomlHandle::Close() {
+void TomlConfigHandle::Close() {
   std::lock_guard<std::mutex> lock(mtx_);
   if (rust_toml_handle_) {
     RustTomlFreeHandle(rust_toml_handle_);
@@ -227,7 +229,7 @@ void AMInfraSuperTomlHandle::Close() {
 /**
  * @brief Return whether in-memory data is dirty.
  */
-bool AMInfraSuperTomlHandle::IsDirty() const {
+bool TomlConfigHandle::IsDirty() const {
   std::lock_guard<std::mutex> lock(mtx_);
   return is_dirty_;
 }
@@ -236,9 +238,10 @@ bool AMInfraSuperTomlHandle::IsDirty() const {
  * @brief Return last modification timestamp.
  */
 std::chrono::system_clock::time_point
-AMInfraSuperTomlHandle::LastModified() const {
+TomlConfigHandle::LastModified() const {
   std::lock_guard<std::mutex> lock(mtx_);
   return last_modified_;
 }
+} // namespace AMInfra::config
 
 

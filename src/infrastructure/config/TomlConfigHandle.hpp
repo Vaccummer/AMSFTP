@@ -1,23 +1,23 @@
 #pragma once
 #include "foundation/core/RustTomlRead.h"
 #include "foundation/tools/json.hpp"
-#include "infrastructure/config/ConfigDocumentHandle.hpp"
+#include "infrastructure/config/IConfigFileHandle.hpp"
 
 /**
  * @brief Concrete RustToml-backed TOML handle with in-memory Json cache.
  */
-class AMInfraSuperTomlHandle final
-    : public AMInfra::config::IConfigDocumentHandle {
+namespace AMInfra::config {
+class TomlConfigHandle final : public IConfigFileHandle {
 public:
   /**
    * @brief Construct an empty TOML handle.
    */
-  AMInfraSuperTomlHandle() = default;
+  TomlConfigHandle() = default;
 
   /**
    * @brief Release RustToml resources.
    */
-  ~AMInfraSuperTomlHandle() override { Close(); }
+  ~TomlConfigHandle() override { Close(); }
 
   /**
    * @brief Initialize handle with document kind, path and schema.
@@ -68,3 +68,4 @@ private:
   bool is_dirty_ = false;
   std::chrono::system_clock::time_point last_modified_{};
 };
+} // namespace AMInfra::config

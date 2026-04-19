@@ -1,6 +1,6 @@
 #include "infrastructure/config/TomlConfigStore.hpp"
 
-#include "infrastructure/config/SuperTomlHandle.hpp"
+#include "infrastructure/config/TomlConfigHandle.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -83,8 +83,8 @@ ECM AMTomlConfigStore::Configure(
   return OK;
 }
 
-ECM AMTomlConfigStore::Load(std::optional<AMDomain::config::DocumentKind> kind,
-                            bool force) {
+ECM AMTomlConfigStore::Load(
+    std::optional<AMDomain::config::DocumentKind> kind, bool force) {
   if (!initialized_) {
     return Err(EC::ConfigNotInitialized, "", "",
                "config store is not initialized");
@@ -112,8 +112,9 @@ ECM AMTomlConfigStore::Load(std::optional<AMDomain::config::DocumentKind> kind,
   return OK;
 }
 
-ECM AMTomlConfigStore::Dump(AMDomain::config::DocumentKind kind,
-                            const std::filesystem::path &dst_path, bool async) {
+ECM AMTomlConfigStore::Dump(
+    AMDomain::config::DocumentKind kind, const std::filesystem::path &dst_path,
+    bool async) {
   if (async) {
     const std::filesystem::path dst_copy = dst_path;
     SubmitWriteTask([this, kind, dst_copy]() -> ECM {
@@ -168,13 +169,14 @@ void AMTomlConfigStore::Close() {
   initialized_ = false;
 }
 
-bool AMTomlConfigStore::IsDirty(AMDomain::config::DocumentKind kind) const {
+bool AMTomlConfigStore::IsDirty(
+    AMDomain::config::DocumentKind kind) const {
   auto handle = GetHandle_(kind);
   return handle && handle->IsDirty();
 }
 
-bool AMTomlConfigStore::GetDataPath(AMDomain::config::DocumentKind kind,
-                                    std::filesystem::path *out) const {
+bool AMTomlConfigStore::GetDataPath(
+    AMDomain::config::DocumentKind kind, std::filesystem::path *out) const {
   if (!out) {
     return false;
   }
@@ -206,7 +208,8 @@ bool AMTomlConfigStore::Read(const std::type_index &type_key, void *out) const {
   return DecodeArg(codec_registry_, type_key, root, out, nullptr);
 }
 
-bool AMTomlConfigStore::Write(const std::type_index &type_key, const void *in) {
+bool AMTomlConfigStore::Write(const std::type_index &type_key,
+                              const void *in) {
   if (!in) {
     return false;
   }
@@ -228,7 +231,8 @@ bool AMTomlConfigStore::Write(const std::type_index &type_key, const void *in) {
   return handle->SetJson(root);
 }
 
-bool AMTomlConfigStore::Erase(const std::type_index &type_key, const void *in) {
+bool AMTomlConfigStore::Erase(const std::type_index &type_key,
+                              const void *in) {
   if (!in) {
     return false;
   }
@@ -277,7 +281,8 @@ std::filesystem::path AMTomlConfigStore::ProjectRoot() const {
   return root_dir_;
 }
 
-ECM AMTomlConfigStore::EnsureDirectory(const std::filesystem::path &dir) {
+ECM AMTomlConfigStore::EnsureDirectory(
+    const std::filesystem::path &dir) {
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
   if (ec) {
@@ -286,8 +291,8 @@ ECM AMTomlConfigStore::EnsureDirectory(const std::filesystem::path &dir) {
   return OK;
 }
 
-void AMTomlConfigStore::PruneBackupFiles(const std::filesystem::path &bak_dir,
-                                         int64_t max_count) {
+void AMTomlConfigStore::PruneBackupFiles(
+    const std::filesystem::path &bak_dir, int64_t max_count) {
   if (max_count <= 0) {
     return;
   }
@@ -316,8 +321,8 @@ void AMTomlConfigStore::PruneBackupFiles(const std::filesystem::path &bak_dir,
   }
 }
 
-std::shared_ptr<IConfigDocumentHandle>
-AMTomlConfigStore::GetHandle_(AMDomain::config::DocumentKind kind) {
+std::shared_ptr<IConfigFileHandle> AMTomlConfigStore::GetHandle_(
+    AMDomain::config::DocumentKind kind) {
   std::lock_guard<std::mutex> lock(mtx_);
   auto it = handles_.find(kind);
   if (it == handles_.end()) {
@@ -326,8 +331,8 @@ AMTomlConfigStore::GetHandle_(AMDomain::config::DocumentKind kind) {
   return it->second;
 }
 
-std::shared_ptr<const IConfigDocumentHandle>
-AMTomlConfigStore::GetHandle_(AMDomain::config::DocumentKind kind) const {
+std::shared_ptr<const IConfigFileHandle> AMTomlConfigStore::GetHandle_(
+    AMDomain::config::DocumentKind kind) const {
   std::lock_guard<std::mutex> lock(mtx_);
   auto it = handles_.find(kind);
   if (it == handles_.end()) {
@@ -336,7 +341,8 @@ AMTomlConfigStore::GetHandle_(AMDomain::config::DocumentKind kind) const {
   return it->second;
 }
 
-ECM AMTomlConfigStore::LoadDocument_(AMDomain::config::DocumentKind kind) {
+ECM AMTomlConfigStore::LoadDocument_(
+    AMDomain::config::DocumentKind kind) {
   ConfigDocumentSpec spec = {};
   {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -347,7 +353,7 @@ ECM AMTomlConfigStore::LoadDocument_(AMDomain::config::DocumentKind kind) {
     spec = spec_it->second;
   }
 
-  auto handle = std::make_shared<AMInfraSuperTomlHandle>();
+  auto handle = std::make_shared<TomlConfigHandle>();
   ECM rcm = handle->Init(spec);
   if (!(rcm)) {
     return rcm;
