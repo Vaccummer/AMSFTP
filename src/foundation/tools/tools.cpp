@@ -298,6 +298,29 @@ std::string uppercase(const std::string &str) {
   return str_f;
 }
 
+bool Equals(std::string_view lhs, std::string_view rhs, bool case_sensitive) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  if (case_sensitive) {
+    return lhs == rhs;
+  }
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    char left = lhs[i];
+    char right = rhs[i];
+    if (left >= 'A' && left <= 'Z') {
+      left = static_cast<char>(left + 32);
+    }
+    if (right >= 'A' && right <= 'Z') {
+      right = static_cast<char>(right + 32);
+    }
+    if (left != right) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::wstring wstr(const std::string &str) {
   return boost::locale::conv::utf_to_utf<wchar_t>(str);
 }
