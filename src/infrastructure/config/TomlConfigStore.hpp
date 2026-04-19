@@ -1,8 +1,7 @@
 #pragma once
 
 #include "domain/config/ConfigStorePort.hpp"
-#include "foundation/core/DataClass.hpp"
-#include "infrastructure/config/ConfigDocumentHandle.hpp"
+#include "infrastructure/config/IConfigFileHandle.hpp"
 #include "infrastructure/config/internal/ArgCodecRegistry.hpp"
 #include "infrastructure/writer/WriteDispatcher.hpp"
 #include <memory>
@@ -68,10 +67,10 @@ public:
                            const void *in) override;
 
 private:
-  [[nodiscard]] std::shared_ptr<IConfigDocumentHandle>
+  [[nodiscard]] std::shared_ptr<IConfigFileHandle>
   GetHandle_(AMDomain::config::DocumentKind kind);
-  [[nodiscard]] std::shared_ptr<const IConfigDocumentHandle>
-  GetHandle_(AMDomain::config::DocumentKind kind) const;
+  [[nodiscard]] std::shared_ptr<const IConfigFileHandle> GetHandle_(
+      AMDomain::config::DocumentKind kind) const;
 
   ECM LoadDocument_(AMDomain::config::DocumentKind kind);
   void NotifyDumpError_(const ECM &err) const;
@@ -79,7 +78,7 @@ private:
   std::filesystem::path root_dir_;
   ConfigStoreLayout layout_;
   std::unordered_map<AMDomain::config::DocumentKind,
-                     std::shared_ptr<IConfigDocumentHandle>>
+                     std::shared_ptr<IConfigFileHandle>>
       handles_;
   mutable std::mutex mtx_;
   AMInfraAsyncWriter writer_;

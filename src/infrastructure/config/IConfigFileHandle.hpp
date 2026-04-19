@@ -13,9 +13,9 @@ using ConfigStoreLayout = AMDomain::config::ConfigStoreLayout;
 /**
  * @brief Infrastructure contract for one persisted config document handle.
  */
-class IConfigDocumentHandle : NonCopyableNonMovable {
+class IConfigFileHandle : NonCopyableNonMovable {
 public:
-  ~IConfigDocumentHandle() override = default;
+  ~IConfigFileHandle() override = default;
 
   /**
    * @brief Initialize handle from resolved infrastructure document spec.
