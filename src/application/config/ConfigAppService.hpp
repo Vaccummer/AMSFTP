@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/config/ConfigModel.hpp"
+#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/config/ConfigStorePort.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <atomic>
@@ -8,7 +9,6 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -38,42 +38,23 @@ struct StyleConfigArg;
 }
 
 namespace AMApplication::config {
-using IConfigStorePort = AMDomain::config::IConfigStorePort;
-using ConfigBackupSet = AMDomain::config::ConfigBackupSet;
-using ConfigStoreInitArg = AMDomain::config::ConfigStoreInitArg;
+using AMDomain::config::ConfigBackupSet;
+using AMDomain::config::ConfigStoreInitArg;
+using AMDomain::config::DocumentKind;
+using AMDomain::config::IConfigStorePort;
+using AMDomain::config::IConfigSyncPort;
+using DumpErrorCallback = std::function<void(ECM)>;
+using SyncParticipantId = uint64_t;
 
-class ConfigAppService;
+enum class ConfigDocumentStatus {
+  Clean = 0,
+  Dirty = 1,
+};
 
-/**
- * @brief Base port for services that flush typed config snapshots.
- */
-class IConfigSyncPort : public NonCopyableNonMovable {
-public:
-  explicit IConfigSyncPort(std::type_index config_arg_type)
-      : config_arg_type_(config_arg_type) {}
-  ~IConfigSyncPort() override = default;
-
-  [[nodiscard]] bool IsConfigDirty() const {
-    return config_dirty_.load(std::memory_order_acquire);
-  }
-
-  void MarkConfigDirty() {
-    config_dirty_.store(true, std::memory_order_release);
-  }
-
-  void ClearConfigDirty() {
-    config_dirty_.store(false, std::memory_order_release);
-  }
-
-  [[nodiscard]] std::type_index GetConfigArgTypeIndex() const {
-    return config_arg_type_;
-  }
-
-  virtual ECM FlushTo(ConfigAppService *config_service) = 0;
-
-protected:
-  const std::type_index config_arg_type_;
-  std::atomic<bool> config_dirty_{false};
+struct ConfigDocumentState {
+  DocumentKind kind = DocumentKind::Config;
+  ConfigDocumentStatus status = ConfigDocumentStatus::Clean;
+  std::filesystem::path data_path = {};
 };
 
 /**
@@ -81,9 +62,6 @@ protected:
  */
 class ConfigAppService : NonCopyable {
 public:
-  using DumpErrorCallback = std::function<void(ECM)>;
-  using SyncParticipantId = uint64_t;
-
   /**
    * @brief Construct one app service with store init payload.
    */
@@ -105,11 +83,6 @@ public:
   [[nodiscard]] ConfigStoreInitArg GetInitArg() const;
 
   /**
-   * @brief Bind store dependency.
-   */
-  void Bind(IConfigStorePort *store);
-
-  /**
    * @brief Load one document or all documents from store.
    */
   ECM Load(std::optional<AMDomain::config::DocumentKind> kind = std::nullopt,
@@ -120,11 +93,6 @@ public:
    */
   ECM Dump(AMDomain::config::DocumentKind kind,
            const std::string &dst_path = "", bool async = false);
-
-  /**
-   * @brief Dump all documents; optional async scheduling.
-   */
-  ECM DumpAll(bool async = false);
 
   /**
    * @brief Close store resources and reset app state.
@@ -154,11 +122,6 @@ public:
    */
   [[nodiscard]] bool IsBackupNeeded() const;
 
-  /**
-   * @brief Submit one asynchronous write task.
-   */
-  void SubmitWriteTask(std::function<ECM()> task);
-
   [[nodiscard]] ECMData<SyncParticipantId>
   RegisterSyncPort(IConfigSyncPort *port);
 
@@ -173,6 +136,11 @@ public:
   ECM FlushDirtyParticipants();
 
   /**
+   * @brief Return all configured document kinds with current status.
+   */
+  [[nodiscard]] std::vector<ConfigDocumentState> ListDocuments() const;
+
+  /**
    * @brief Return data file path for one document.
    */
   [[nodiscard]] bool GetDataPath(AMDomain::config::DocumentKind kind,
@@ -182,17 +150,6 @@ public:
    * @brief Return project root path.
    */
   [[nodiscard]] std::filesystem::path ProjectRoot() const;
-
-  /**
-   * @brief Ensure one directory exists.
-   */
-  ECM EnsureDirectory(const std::filesystem::path &dir);
-
-  /**
-   * @brief Prune old backup timestamp folders under one backup directory.
-   */
-  void PruneBackupFiles(const std::filesystem::path &bak_dir,
-                        int64_t max_count);
 
   /**
    * @brief Read one typed payload from store.
@@ -266,27 +223,30 @@ private:
     std::filesystem::path history_file = {};
   };
 
+  struct BackupContext {
+    int64_t now_s = 0;
+    ConfigBackupSet backup_set = {};
+    bool normalized_changed = false;
+  };
+
+  [[nodiscard]] BackupContext BuildBackupContext_() const;
+  [[nodiscard]] bool IsBackupDue_(const BackupContext &context) const;
+  [[nodiscard]] std::vector<DocumentKind> ListOwnedDocumentKinds_() const;
   [[nodiscard]] ConfigBackupSet LoadBackupSet_() const;
   [[nodiscard]] BackupTargets BuildBackupTargets_(int64_t backup_time_s) const;
-  void PruneBackupFolders_(const std::filesystem::path &bak_dir,
-                           int64_t max_count);
-  static void CleanupLegacyBackupFiles_(const std::filesystem::path &bak_dir);
-  static bool IsBackupSetEqual_(const ConfigBackupSet &lhs,
-                                const ConfigBackupSet &rhs);
-  static std::vector<AMDomain::config::DocumentKind>
-  ResolveBackupKinds_(const std::vector<AMDomain::config::DocumentKind> &kinds);
+  std::vector<ECM>
+  BackupWithContext_(const std::vector<DocumentKind> &kinds,
+                     const BackupContext &context);
   [[nodiscard]] std::filesystem::path
   ResolveBackupPath_(const BackupTargets &targets,
                      AMDomain::config::DocumentKind kind) const;
 
   mutable AMAtomic<ConfigStoreInitArg> init_arg_ = {};
   mutable AMAtomic<ConfigBackupSet> backup_set_ = {};
-  std::unique_ptr<IConfigStorePort> owned_store_ = nullptr;
-  IConfigStorePort *store_ = nullptr;
+  std::unique_ptr<IConfigStorePort> store_ = nullptr;
   DumpErrorCallback dump_error_cb_;
-  mutable std::mutex sync_participants_mtx_ = {};
-  std::vector<SyncParticipant> sync_participants_ = {};
-  uint64_t next_sync_participant_id_ = 1;
-  bool sync_flush_running_ = false;
+  mutable AMAtomic<std::vector<SyncParticipant>> sync_participants_ = {};
+  std::atomic<uint64_t> next_sync_participant_id_{1};
+  std::atomic<bool> sync_flush_running_{false};
 };
 } // namespace AMApplication::config
