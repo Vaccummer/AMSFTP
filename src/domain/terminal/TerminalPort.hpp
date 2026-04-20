@@ -7,7 +7,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace AMDomain::terminal {
 class ITerminalPort;
@@ -54,6 +53,7 @@ public:
 };
 
 [[nodiscard]] ECMData<TerminalHandle>
-CreateTerminalPort(const ClientHandle &client);
+CreateTerminalPort(const ClientHandle &client,
+                   BufferExceedCallback buffer_exceed_callback = {});
 
 } // namespace AMDomain::terminal

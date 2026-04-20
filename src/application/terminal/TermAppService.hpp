@@ -8,6 +8,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace AMApplication::terminal {
@@ -17,7 +18,9 @@ using ChannelPortHandle = AMDomain::terminal::ChannelPortHandle;
 
 class TermAppService final : public NonCopyableNonMovable {
 public:
-  TermAppService() = default;
+  explicit TermAppService(
+      AMDomain::terminal::BufferExceedCallback buffer_exceed_callback = {})
+      : buffer_exceed_callback_(std::move(buffer_exceed_callback)) {}
   ~TermAppService() override;
 
   [[nodiscard]] ECMData<TerminalHandle>
@@ -67,6 +70,7 @@ private:
 private:
   mutable std::mutex mutex_ = {};
   std::map<std::string, TerminalHandle> terminals_ = {};
+  AMDomain::terminal::BufferExceedCallback buffer_exceed_callback_ = {};
 };
 
 } // namespace AMApplication::terminal

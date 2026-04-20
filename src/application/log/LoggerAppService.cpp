@@ -90,8 +90,8 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
     std::lock_guard<std::mutex> lock(mtx_);
     auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
-      return Err(EC::InvalidArg, "", "",
-                 AMStr::fmt("Logger writer {} is not registered", logger_type));
+      return {EC::InvalidArg, "Trace", "",
+              AMStr::fmt("Logger writer {} is not registered", logger_type)};
     }
     writer = writer_iter->second;
     scheduler = scheduler_;
@@ -144,7 +144,8 @@ ECM LoggerAppService::WriteLine(AMDomain::log::LoggerType logger_type,
     std::lock_guard<std::mutex> lock(mtx_);
     auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
-      return Err(EC::InvalidArg, "", "", "Logger writer is not registered");
+      return {EC::InvalidArg, "WriteLine", line,
+              "Logger writer is not registered"};
     }
     writer = writer_iter->second;
     scheduler = scheduler_;

@@ -381,7 +381,7 @@ ClientAppService::CreateClient(const HostConfig &config,
     return {nullptr, create_rcm};
   }
   if (!client) {
-    return {nullptr, Err(EC::InvalidHandle, "", "",
+    return {nullptr, Err(EC::InvalidHandle, "create_client", "",
                          "CreateClient returned null client")};
   }
   ApplyCallbacksToClient_(client, callbacks);
@@ -519,15 +519,13 @@ ClientAppService::ChangeClient(const std::string &nickname,
 
 ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
   if (!client) {
-    return {EC::InvalidHandle, "add_client", "<client>",
-            "Client handle is null"};
+    return {EC::InvalidHandle, "add_client", "", "Client handle is null"};
   }
 
   ApplyCallbacksToClient_(client, GetMaintainerCallbacks());
   const std::string nickname = client->ConfigPort().GetNickname();
   if (nickname.empty()) {
-    return {EC::InvalidArg, "add_client", "<empty>",
-            "Client nickname is empty"};
+    return {EC::InvalidArg, "add_client", "", "Client nickname is empty"};
   }
 
   if (IsLocalNickname(nickname)) {

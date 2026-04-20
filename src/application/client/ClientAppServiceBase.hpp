@@ -1,6 +1,6 @@
 #pragma once
 
-#include "application/config/ConfigAppService.hpp"
+#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/client/ClientPort.hpp"
 
 #include <functional>
@@ -23,7 +23,7 @@ using DisconnectCallback =
 using PublicClientBucket = std::map<ClientID, ClientHandle>;
 using ClientContainer = std::map<std::string, PublicClientBucket>;
 
-class ClientAppServiceBase : public AMApplication::config::IConfigSyncPort {
+class ClientAppServiceBase : public AMDomain::config::IConfigSyncPort {
 public:
   struct RuntimeClientCache {
     ClientHandle local = nullptr;
@@ -48,7 +48,7 @@ public:
   ~ClientAppServiceBase() override = default;
 
   [[nodiscard]] ClientServiceArg GetInitArg() const;
-  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
   virtual void SetHeartbeatTimeoutMs(int timeout_ms);
   [[nodiscard]] virtual int HeartbeatTimeoutMs() const;

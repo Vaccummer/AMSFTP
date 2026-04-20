@@ -59,7 +59,8 @@ ECMData<int64_t> FilesystemAppService::GetSize(
 
   auto resolved_result = ResolvePath_(path, control);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
-    return {total_size, (resolved_result.rcm) ? Err(EC::InvalidHandle, "", "",
+    return {total_size, (resolved_result.rcm) ? Err(EC::InvalidHandle,
+                                                    "getsize.resolve", "",
                                                     "Resolved client is null")
                                               : resolved_result.rcm};
   }
@@ -98,7 +99,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
       return cb_rcm;
     }
     if (!keep_going) {
-      const ECM stop_rcm = Err(EC::Terminate, "", "",
+      const ECM stop_rcm = Err(EC::Terminate, "getsize.on_progress", "",
                                "GetSize terminated by on_progress callback");
       UpdateLastError_(&last_error, stop_rcm);
       return stop_rcm;

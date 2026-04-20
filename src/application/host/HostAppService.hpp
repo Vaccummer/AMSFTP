@@ -1,5 +1,5 @@
 #pragma once
-#include "application/config/ConfigAppService.hpp"
+#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <map>
@@ -7,15 +7,17 @@
 #include <vector>
 
 namespace AMApplication::host {
+using AMDomain::host::HostConfig;
+using AMDomain::host::HostConfigArg;
+using AMDomain::host::KnownHostEntryArg;
+using AMDomain::host::KnownHostMap;
+using AMDomain::host::KnownHostQuery;
+using HostConfigMap = std::map<std::string, HostConfig>;
 /**
  * @brief Host configuration manager for host map and local profile state.
  */
-class HostAppService : public AMApplication::config::IConfigSyncPort {
+class HostAppService : public AMDomain::config::IConfigSyncPort {
 public:
-  using HostConfigMap = std::map<std::string, AMDomain::host::HostConfig>;
-  using HostConfigArg = AMDomain::host::HostConfigArg;
-  using HostConfig = AMDomain::host::HostConfig;
-
   explicit HostAppService() : IConfigSyncPort(typeid(HostConfigArg)) {}
   ~HostAppService() override = default;
 
@@ -28,7 +30,8 @@ public:
    * @brief Return host config payload including map and local config.
    */
   [[nodiscard]] HostConfigArg GetInitArg() const;
-  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
+
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
   /**
    * @brief Return one host config by nickname.
@@ -41,14 +44,10 @@ public:
    */
   [[nodiscard]] ECMData<HostConfig> GetLocalConfig();
 
-  /**
-   * @brief Return all non-local host configs keyed by nickname.
-   */
-  [[nodiscard]] const HostConfigMap &HostConfigs() const;
-
   [[nodiscard]] std::vector<std::string> ListNames() const;
 
   [[nodiscard]] bool HostExists(const std::string &nickname) const;
+
   [[nodiscard]] ECMData<std::string>
   CheckNicknameAvailable(const std::string &nickname) const;
 
@@ -64,51 +63,35 @@ public:
 
   [[nodiscard]] std::vector<std::string> PrivateKeys() const;
 
-  mutable HostConfigMap host_configs_ = {};
-  mutable HostConfig local_config_ = {};
-  mutable std::vector<std::string> private_keys_ = {};
+  mutable AMAtomic<HostConfigMap> host_configs_ = {};
+  mutable AMAtomic<HostConfig> local_config_ = {};
+  mutable AMAtomic<std::vector<std::string>> private_keys_ = {};
 };
 
 /**
  * @brief Known-host manager for fingerprint query/upsert operations.
  */
-class KnownHostsAppService : public AMApplication::config::IConfigSyncPort {
+class KnownHostsAppService : public AMDomain::config::IConfigSyncPort {
 public:
-  using KnownHostQuery = AMDomain::host::KnownHostQuery;
-  using KnownHostMap = AMDomain::host::KnownHostMap;
-  using KnownHostEntryArg = AMDomain::host::KnownHostEntryArg;
   explicit KnownHostsAppService()
       : IConfigSyncPort(typeid(KnownHostEntryArg)) {}
   ~KnownHostsAppService() override = default;
-
-  /**
-   * @brief Initialize manager by loading known-host snapshot from store.
-   */
-  ECM Init();
 
   /**
    * @brief Initialize manager from explicit known-host snapshot.
    */
   ECM Init(const KnownHostMap &known_hosts);
 
-  /**
-   * @brief Return in-memory known-host mapping.
-   */
-  [[nodiscard]] const KnownHostMap &KnownHosts() const;
-  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
+  [[nodiscard]] KnownHostMap GetInitArg() const;
+
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
   [[nodiscard]] ECM FindKnownHost(KnownHostQuery &query) const;
+
   ECM UpsertKnownHost(const KnownHostQuery &query, bool overwrite = true);
 
 private:
-  ECM EnsureSnapshotLoaded_() const;
-  ECM LoadSnapshot_() const;
-  [[nodiscard]] KnownHostEntryArg SnapshotFromCache_() const;
-  ECM PersistSnapshot_(const KnownHostEntryArg &snapshot,
-                       bool dump_async = true);
-  void ResetSnapshotCache_();
-
-  mutable KnownHostMap known_hosts_ = {};
-  mutable bool snapshot_loaded_ = false;
+  mutable AMAtomic<KnownHostMap> known_hosts_ = {};
 };
+
 } // namespace AMApplication::host

@@ -1,9 +1,9 @@
 #include "application/terminal/TermAppService.hpp"
 
 #include "domain/host/HostDomainService.hpp"
+#include "domain/terminal/TerminalModel.hpp"
 #include "foundation/tools/string.hpp"
 
-#include <algorithm>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -11,9 +11,10 @@
 namespace AMApplication::terminal {
 namespace {
 using EC = ErrorCode;
-
-constexpr const char *kDefaultTerminalChannelName = "default";
-constexpr int kTerminalRemoveCloseTimeoutMs = 1500;
+using AMDomain::host::HostService::IsLocalNickname;
+using AMDomain::host::HostService::NormalizeNickname;
+using AMDomain::terminal::kDefaultTerminalChannelName;
+using AMDomain::terminal::kTerminalRemoveCloseTimeoutMs;
 
 [[nodiscard]] bool IsConnectionBroken_(ErrorCode code) {
   return code == EC::NoConnection || code == EC::ConnectionLost ||
@@ -55,9 +56,8 @@ std::string TermAppService::BuildTerminalKey_(const ClientHandle &client,
 }
 
 std::string TermAppService::NormalizeTerminalKey_(const std::string &nickname) {
-  std::string key =
-      AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(nickname));
-  if (AMDomain::host::HostService::IsLocalNickname(key)) {
+  std::string key = NormalizeNickname(AMStr::Strip(nickname));
+  if (IsLocalNickname(key)) {
     key = "local";
   }
   return key;
@@ -100,7 +100,8 @@ TermAppService::CreateTerminal(const ClientHandle &client, bool detach) {
     }
   }
 
-  auto create_result = AMDomain::terminal::CreateTerminalPort(client);
+  auto create_result =
+      AMDomain::terminal::CreateTerminalPort(client, buffer_exceed_callback_);
   if (!(create_result.rcm) || !create_result.data) {
     return create_result;
   }
@@ -268,14 +269,15 @@ TermAppService::EnsureChannelPort(const std::string &terminal_nickname,
   if (!(terminal_result.rcm) || !terminal_result.data) {
     return {nullptr, terminal_result.rcm};
   }
-  return terminal_result.data->GetChannelPort(std::optional<std::string>(channel),
-                                              control);
+  return terminal_result.data->GetChannelPort(
+      std::optional<std::string>(channel), control);
 }
 
 ECM TermAppService::DropChannelPort(const std::string &terminal_nickname,
                                     const std::string &channel_name,
                                     const ControlComponent &control) {
-  auto channel_result = EnsureChannelPort(terminal_nickname, channel_name, control);
+  auto channel_result =
+      EnsureChannelPort(terminal_nickname, channel_name, control);
   if (!(channel_result.rcm)) {
     if (channel_result.rcm.code == EC::ClientNotFound) {
       return OK;
@@ -313,12 +315,11 @@ void TermAppService::DropAllTerminalChannelPortsByKey_(
 }
 
 ECM TermAppService::DropTerminalChannelPorts(
-    const std::string &terminal_nickname,
-    const ControlComponent &control) {
+    const std::string &terminal_nickname, const ControlComponent &control) {
   const std::string terminal_key = NormalizeTerminalKey_(terminal_nickname);
   if (terminal_key.empty()) {
-    return Err(EC::InvalidArg, "terminal.channel.drop_all", "terminal",
-               "Terminal nickname is empty");
+    return {EC::InvalidArg, "terminal.channel.drop_all", "terminal",
+            "Terminal nickname is empty"};
   }
   DropAllTerminalChannelPortsByKey_(terminal_key, control);
   return OK;
@@ -328,8 +329,8 @@ ECM TermAppService::RemoveTerminal(const std::string &nickname,
                                    const ControlComponent &control) {
   const std::string key = NormalizeTerminalKey_(nickname);
   if (key.empty()) {
-    return Err(EC::InvalidArg, "terminal.remove", nickname,
-               "Terminal nickname is empty");
+    return {EC::InvalidArg, "terminal.remove", nickname,
+            "Terminal nickname is empty"};
   }
 
   TerminalHandle target = nullptr;
@@ -375,7 +376,7 @@ ECM TermAppService::RemoveTerminal(const std::string &nickname,
       control.RemainingTimeMs().has_value()
           ? control
           : ControlComponent(control.ControlToken(),
-                                   kTerminalRemoveCloseTimeoutMs);
+                             kTerminalRemoveCloseTimeoutMs);
 
   ECM status = OK;
   for (const auto &[name, channel_port] : list_result.data.channels) {
@@ -393,4 +394,3 @@ ECM TermAppService::RemoveTerminal(const std::string &nickname,
 }
 
 } // namespace AMApplication::terminal
-

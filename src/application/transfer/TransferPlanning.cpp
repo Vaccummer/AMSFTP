@@ -14,43 +14,11 @@ namespace {
 using EC = ErrorCode;
 using ClientHandle = AMDomain::client::ClientHandle;
 using SearchType = AMDomain::filesystem::SearchType;
+using AMDomain::filesystem::service::HasWildcard;
+using AMDomain::filesystem::service::IsPathNotExistError;
 
 bool IsStopError_(ErrorCode ec) {
   return ec == ErrorCode::Terminate || ec == ErrorCode::OperationTimeout;
-}
-
-std::string JoinPathParts_(const std::vector<std::string> &parts,
-                           size_t begin) {
-  if (begin >= parts.size()) {
-    return "";
-  }
-  std::string out = parts[begin];
-  for (size_t i = begin + 1; i < parts.size(); ++i) {
-    out = AMPath::join(out, parts[i]);
-  }
-  return out;
-}
-
-std::string RelativeFrom_(const std::string &root, const std::string &target) {
-  if (root == target) {
-    return "";
-  }
-  const std::vector<std::string> root_parts = AMPath::split(root);
-  const std::vector<std::string> target_parts = AMPath::split(target);
-  if (!root_parts.empty() && !target_parts.empty() &&
-      target_parts.size() >= root_parts.size()) {
-    bool is_prefix = true;
-    for (size_t i = 0; i < root_parts.size(); ++i) {
-      if (root_parts[i] != target_parts[i]) {
-        is_prefix = false;
-        break;
-      }
-    }
-    if (is_prefix) {
-      return JoinPathParts_(target_parts, root_parts.size());
-    }
-  }
-  return AMPath::basename(target);
 }
 
 std::string BuildTaskKey_(const AMDomain::transfer::TransferTask &task) {
@@ -94,95 +62,7 @@ void DedupAndSortTasks_(std::vector<AMDomain::transfer::TransferTask> *tasks) {
   }
   tasks->swap(uniq);
 }
-
-bool IsDescendantPath_(const std::string &candidate,
-                       const std::string &ancestor) {
-  if (candidate.empty() || ancestor.empty()) {
-    return false;
-  }
-  const std::vector<std::string> candidate_parts = AMPath::split(candidate);
-  const std::vector<std::string> ancestor_parts = AMPath::split(ancestor);
-  if (candidate_parts.empty() || ancestor_parts.empty()) {
-    return false;
-  }
-  if (candidate_parts.size() < ancestor_parts.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < ancestor_parts.size(); ++i) {
-    if (candidate_parts[i] != ancestor_parts[i]) {
-      return false;
-    }
-  }
-  return true;
-}
-
-std::vector<PathInfo> CompactMatchedPaths_(const std::vector<PathInfo> &raw) {
-  std::unordered_map<std::string, PathInfo> dedup = {};
-  dedup.reserve(raw.size());
-  for (const auto &item : raw) {
-    const std::string key = item.path;
-    if (key.empty()) {
-      continue;
-    }
-    auto it = dedup.find(key);
-    if (it == dedup.end()) {
-      dedup.emplace(key, item);
-      continue;
-    }
-    if (it->second.type != PathType::DIR && item.type == PathType::DIR) {
-      it->second = item;
-    }
-  }
-
-  std::vector<PathInfo> candidates = {};
-  candidates.reserve(dedup.size());
-  for (auto &entry : dedup) {
-    candidates.push_back(std::move(entry.second));
-  }
-  std::stable_sort(candidates.begin(), candidates.end(),
-                   [](const PathInfo &lhs, const PathInfo &rhs) {
-                     const size_t lhs_depth = AMPath::split(lhs.path).size();
-                     const size_t rhs_depth = AMPath::split(rhs.path).size();
-                     if (lhs_depth != rhs_depth) {
-                       return lhs_depth < rhs_depth;
-                     }
-                     return lhs.path < rhs.path;
-                   });
-
-  std::vector<PathInfo> compacted = {};
-  compacted.reserve(candidates.size());
-  std::vector<std::string> dir_roots = {};
-  for (const auto &item : candidates) {
-    bool covered = false;
-    for (const auto &root : dir_roots) {
-      if (IsDescendantPath_(item.path, root)) {
-        covered = true;
-        break;
-      }
-    }
-    if (covered) {
-      continue;
-    }
-    compacted.push_back(item);
-    if (item.type == PathType::DIR) {
-      dir_roots.push_back(item.path);
-    }
-  }
-  std::stable_sort(compacted.begin(), compacted.end(),
-                   [](const PathInfo &lhs, const PathInfo &rhs) {
-                     return lhs.path < rhs.path;
-                   });
-  return compacted;
-}
 } // namespace
-
-ECMData<AMDomain::client::ClientHandle>
-TransferAppService::AcquireTransferClient_(const std::string &nickname) {
-  if (nickname.empty()) {
-    return {nullptr, Err(EC::InvalidArg, "", "", "Client nickname is empty")};
-  }
-  return client_service_.AcquireTransferClient(nickname);
-}
 
 ECMData<TransferClientContainer>
 TransferAppService::RecollectTransferClients_(const TaskHandle &task_info) {
@@ -217,14 +97,14 @@ TransferAppService::RecollectTransferClients_(const TaskHandle &task_info) {
   }
 
   for (const auto &nickname : src_hosts) {
-    auto first = AcquireTransferClient_(nickname);
+    auto first = client_service_.AcquireTransferClient(nickname);
     if (!(first.rcm) || !first.data) {
       out.ReleaseAll();
       return {std::move(out), first.rcm};
     }
     ECM add_rcm = out.AddSrcClient(nickname, first.data);
     if (!(add_rcm) && add_rcm.code == EC::InvalidArg) {
-      auto second = AcquireTransferClient_(nickname);
+      auto second = client_service_.AcquireTransferClient(nickname);
       if (!(second.rcm) || !second.data) {
         out.ReleaseAll();
         return {std::move(out), second.rcm};
@@ -238,14 +118,14 @@ TransferAppService::RecollectTransferClients_(const TaskHandle &task_info) {
   }
 
   for (const auto &nickname : dst_hosts) {
-    auto first = AcquireTransferClient_(nickname);
+    auto first = client_service_.AcquireTransferClient(nickname);
     if (!(first.rcm) || !first.data) {
       out.ReleaseAll();
       return {std::move(out), first.rcm};
     }
     ECM add_rcm = out.AddDstClient(nickname, first.data);
     if (!(add_rcm) && add_rcm.code == EC::InvalidArg) {
-      auto second = AcquireTransferClient_(nickname);
+      auto second = client_service_.AcquireTransferClient(nickname);
       if (!(second.rcm) || !second.data) {
         out.ReleaseAll();
         return {std::move(out), second.rcm};
@@ -271,14 +151,14 @@ TransferAppService::ResolveTransferDst(PathTarget dst,
   }
 
   DstResolveResult out = {};
-  auto transfer_client = AcquireTransferClient_(dst.nickname);
+  auto transfer_client = client_service_.AcquireTransferClient(dst.nickname);
   if (!(transfer_client.rcm) || !transfer_client.data) {
     return {std::move(out), transfer_client.rcm};
   }
 
   ECM add_dst_rcm = clients->AddDstClient(dst.nickname, transfer_client.data);
   if (!(add_dst_rcm) && add_dst_rcm.code == EC::InvalidArg) {
-    auto second_client = AcquireTransferClient_(dst.nickname);
+    auto second_client = client_service_.AcquireTransferClient(dst.nickname);
     if (!(second_client.rcm) || !second_client.data) {
       return {std::move(out), second_client.rcm};
     }
@@ -298,7 +178,7 @@ TransferAppService::ResolveTransferDst(PathTarget dst,
   }
 
   dst.path = abs_result.data;
-  dst.is_wildcard = AMDomain::filesystem::service::HasWildcard(dst.path);
+  dst.is_wildcard = HasWildcard(dst.path);
   dst.is_user_path = !dst.path.empty() && dst.path.front() == '~';
   out.target = dst;
   out.resolved_target.target = dst;
@@ -311,8 +191,7 @@ TransferAppService::ResolveTransferDst(PathTarget dst,
     out.dst_info = stat_result.data;
     return {std::move(out), OK};
   }
-  if (AMDomain::filesystem::service::IsPathNotExistError(
-          stat_result.rcm.code)) {
+  if (IsPathNotExistError(stat_result.rcm.code)) {
     return {std::move(out), OK};
   }
   return {std::move(out), stat_result.rcm};
@@ -350,7 +229,7 @@ ECMData<SourceResolveResult> TransferAppService::ResolveTransferSrc(
       return {existing, OK};
     }
 
-    auto first = AcquireTransferClient_(nickname);
+    auto first = client_service_.AcquireTransferClient(nickname);
     if (!(first.rcm) || !first.data) {
       return first;
     }
@@ -362,7 +241,7 @@ ECMData<SourceResolveResult> TransferAppService::ResolveTransferSrc(
       return {nullptr, add_first_rcm};
     }
 
-    auto second = AcquireTransferClient_(nickname);
+    auto second = client_service_.AcquireTransferClient(nickname);
     if (!(second.rcm) || !second.data) {
       return second;
     }
@@ -393,8 +272,7 @@ ECMData<SourceResolveResult> TransferAppService::ResolveTransferSrc(
     }
 
     src.path = src.path.empty() ? "." : src.path;
-    const bool is_wildcard =
-        AMDomain::filesystem::service::HasWildcard(src.path);
+    const bool is_wildcard = HasWildcard(src.path);
     auto abs_result = AMApplication::filesystem::FilesystemAppService::
         ResolveAbsolutePath(src_transfer.data, src.path, control);
     if (!(abs_result.rcm)) {
@@ -451,7 +329,7 @@ ECMData<SourceResolveResult> TransferAppService::ResolveTransferSrc(
   }
 
   for (auto &[nickname, source_data] : out.data) {
-    source_data.paths = CompactMatchedPaths_(source_data.raw_paths);
+    source_data.paths = AMPath::CompactMatchedPaths(source_data.raw_paths);
     if (source_data.paths.empty()) {
       PathTarget err_path = source_data.resolved_target.target;
       if (err_path.path.empty()) {
@@ -594,7 +472,7 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
                      Err(EC::InvalidHandle, "", "", "Source client is null"));
       continue;
     }
-    const std::string rel = RelativeFrom_(state.root.path, state.node.path);
+    const std::string rel = AMPath::RelativeFrom(state.root.path, state.node.path);
     const std::string mapped_dst =
         rel.empty() ? state.mapped_root : AMPath::join(state.mapped_root, rel);
 
@@ -619,8 +497,7 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
                                       state.node.path, mapped_dst)));
         continue;
       }
-      if (!dst_exists && !AMDomain::filesystem::service::IsPathNotExistError(
-                             dst_stat.rcm.code)) {
+      if (!dst_exists && !IsPathNotExistError(dst_stat.rcm.code)) {
         if (IsStopError_(dst_stat.rcm.code)) {
           return {std::move(out), dst_stat.rcm};
         }
@@ -684,8 +561,7 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
                                       parent_path)));
         continue;
       }
-    } else if (!AMDomain::filesystem::service::IsPathNotExistError(
-                   parent_stat.rcm.code)) {
+    } else if (!IsPathNotExistError(parent_stat.rcm.code)) {
       if (IsStopError_(parent_stat.rcm.code)) {
         return {std::move(out), parent_stat.rcm};
       }
@@ -708,8 +584,7 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
               AMStr::fmt("Destination is directory: {}", mapped_dst)));
       continue;
     }
-    if (!dst_exists && !AMDomain::filesystem::service::IsPathNotExistError(
-                           dst_stat.rcm.code)) {
+    if (!dst_exists && !IsPathNotExistError(dst_stat.rcm.code)) {
       if (IsStopError_(dst_stat.rcm.code)) {
         return {std::move(out), dst_stat.rcm};
       }
@@ -796,7 +671,7 @@ ECMData<HttpDownloadPlan> TransferAppService::BuildHttpDownloadPlan(
     base_target.path = ".";
   }
   if (base_target.is_wildcard ||
-      AMDomain::filesystem::service::HasWildcard(base_target.path)) {
+      HasWildcard(base_target.path)) {
     return {std::move(out),
             Err(EC::InvalidArg, "", "", "wget destination cannot be wildcard")};
   }
@@ -845,8 +720,7 @@ ECMData<HttpDownloadPlan> TransferAppService::BuildHttpDownloadPlan(
     final_target.is_wildcard = false;
     final_target.is_user_path = false;
   } else if (!(base_stat.rcm) &&
-             !AMDomain::filesystem::service::IsPathNotExistError(
-                 base_stat.rcm.code)) {
+             !IsPathNotExistError(base_stat.rcm.code)) {
     return {std::move(out), base_stat.rcm};
   }
 
@@ -866,7 +740,7 @@ ECMData<HttpDownloadPlan> TransferAppService::BuildHttpDownloadPlan(
     }
     return {std::move(out), OK};
   }
-  if (AMDomain::filesystem::service::IsPathNotExistError(final_stat.rcm.code)) {
+  if (IsPathNotExistError(final_stat.rcm.code)) {
     out.dst_info = std::nullopt;
     return {std::move(out), OK};
   }

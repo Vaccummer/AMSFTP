@@ -1,14 +1,12 @@
 #include "application/var/VarAppService.hpp"
 
-#include "foundation/tools/enum_related.hpp"
-
 namespace AMApplication::var {
 namespace {
 using EC = ErrorCode;
 }
 
 VarAppService::VarAppService(VarSetArg init_arg)
-    : AMApplication::config::IConfigSyncPort(typeid(VarSetArg)),
+    : AMDomain::config::IConfigSyncPort(typeid(VarSetArg)),
       init_arg_(std::move(init_arg)), store_(VarSetArg{}) {}
 
 ECM VarAppService::Init() {
@@ -19,12 +17,13 @@ ECM VarAppService::Init() {
 
 VarSetArg VarAppService::GetInitArg() const { return init_arg_.lock().load(); }
 
-ECM VarAppService::FlushTo(
-    AMApplication::config::ConfigAppService *config_service) {
-  if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+ECM VarAppService::FlushTo(AMDomain::config::IConfigStorePort *store) {
+  if (store == nullptr) {
+    return Err(EC::InvalidArg, "", "", "config store is null");
   }
-  if (!config_service->Write<VarSetArg>(store_.lock().load())) {
+  const VarSetArg snapshot = store_.lock().load();
+  if (!store->Write(std::type_index(typeid(VarSetArg)),
+                    static_cast<const void *>(&snapshot))) {
     return Err(EC::ConfigDumpFailed, "", "", "failed to flush var config");
   }
   return OK;
@@ -33,7 +32,8 @@ ECM VarAppService::FlushTo(
 ECMData<VarInfo> VarAppService::GetVar(const std::string &zone_name,
                                        const std::string &varname) const {
   if (zone_name.empty() || varname.empty()) {
-    return {{}, Err(EC::InvalidArg, "", "", "zone_name and varname are required")};
+    return {{},
+            Err(EC::InvalidArg, "", "", "zone_name and varname are required")};
   }
 
   const auto store = store_.lock();
@@ -44,13 +44,15 @@ ECMData<VarInfo> VarAppService::GetVar(const std::string &zone_name,
 
   const auto var_it = zone_it->second.find(varname);
   if (var_it == zone_it->second.end()) {
-    return {{}, Err(EC::InvalidArg, "", "", "variable not found in target zone")};
+    return {{},
+            Err(EC::InvalidArg, "", "", "variable not found in target zone")};
   }
 
   return {{zone_name, varname, var_it->second}, OK};
 }
 
-ECMData<VarInfoList> VarAppService::SearchVar(const std::string &varname) const {
+ECMData<VarInfoList>
+VarAppService::SearchVar(const std::string &varname) const {
   if (varname.empty()) {
     return {{}, Err(EC::InvalidArg, "", "", "varname is required")};
   }
@@ -102,7 +104,8 @@ ECMData<AllVarInfoMap> VarAppService::GetAllVar() const {
 ECMData<bool> VarAppService::VarExists(const std::string &zone_name,
                                        const std::string &varname) const {
   if (zone_name.empty() || varname.empty()) {
-    return {false, Err(EC::InvalidArg, "", "", "zone_name and varname are required")};
+    return {false,
+            Err(EC::InvalidArg, "", "", "zone_name and varname are required")};
   }
 
   const auto store = store_.lock();
@@ -145,5 +148,3 @@ ECM VarAppService::DelVar(const std::string &zone_name,
   return OK;
 }
 } // namespace AMApplication::var
-
-

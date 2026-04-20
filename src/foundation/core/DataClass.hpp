@@ -470,12 +470,14 @@ public:
   [[nodiscard]] std::optional<ECM>
   BuildECM(const std::string &operation = "",
            const std::string &target = "") const {
+    const std::string resolved_operation =
+        operation.empty() ? "control.stop" : operation;
     if (interrupt_control_ && interrupt_control_->IsInterrupt()) {
-      return ECM{EC::Terminate, operation, target,
+      return ECM{EC::Terminate, resolved_operation, target,
                  "Operation interrupted by user"};
     }
     if (timeout_control_ && timeout_control_->IsTimeout()) {
-      return ECM{EC::OperationTimeout, operation, target,
+      return ECM{EC::OperationTimeout, resolved_operation, target,
                  "Operation timed out"};
     }
     return std::nullopt;
@@ -484,12 +486,14 @@ public:
   [[nodiscard]] std::optional<ECM>
   BuildRequestECM(const std::string &operation = "",
                   const std::string &target = "") const {
+    const std::string resolved_operation =
+        operation.empty() ? "control.stop" : operation;
     if (interrupt_control_ && interrupt_control_->IsInterruptRequest()) {
-      return ECM{EC::Terminate, operation, target,
+      return ECM{EC::Terminate, resolved_operation, target,
                  "Operation interrupted by user"};
     }
     if (timeout_control_ && timeout_control_->IsTimeoutRequest()) {
-      return ECM{EC::OperationTimeout, std::move(operation), std::move(target),
+      return ECM{EC::OperationTimeout, resolved_operation, target,
                  "Operation timed out"};
     }
     return std::nullopt;

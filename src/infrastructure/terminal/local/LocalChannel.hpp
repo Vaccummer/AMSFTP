@@ -1098,9 +1098,11 @@ private:
   }
 
 public:
-  LocalChannelPort(std::string terminal_key, std::string channel_name)
+  LocalChannelPort(std::string terminal_key, std::string channel_name,
+                   AMT::BufferExceedCallback buffer_exceed_callback = {})
       : identity_(std::move(terminal_key), AMStr::Strip(channel_name)),
-        cache_(identity_.channel_name) {}
+        cache_(identity_.terminal_key, identity_.channel_name,
+               std::move(buffer_exceed_callback)) {}
 
   ~LocalChannelPort() override {
     RequestStop_();

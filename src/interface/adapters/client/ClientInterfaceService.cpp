@@ -210,13 +210,6 @@ std::string PadStyledCellRight_(const std::string &styled_text,
   return styled_text + std::string(target_width - raw_display_width, ' ');
 }
 
-void FlushPromptOutputIfSafe_(PromptIOManager &prompt_io_manager) {
-  if (prompt_io_manager.IsCacheOutputOnly()) {
-    return;
-  }
-  prompt_io_manager.FlushCachedOutput();
-}
-
 AMInterface::style::StyleIndex
 ResolveClientNicknameStyleByState_(const ClientHandle &client) {
   if (!client) {
@@ -1465,7 +1458,6 @@ void ClientInterfaceService::BindInteractionCallbacks() {
                                 AMInterface::style::StyleIndex::Protocol));
       print_known_host_field("Fingerprint:",
                              AMStr::Strip(query.GetFingerprint()));
-      FlushPromptOutputIfSafe_(prompt_io_manager_);
       const bool accepted = prompt_io_manager_.PromptYesNo(
           "Trust this host key? (y/N): ", &canceled);
       if (canceled || !accepted) {
@@ -1494,7 +1486,6 @@ void ClientInterfaceService::BindInteractionCallbacks() {
     const std::string client_name =
         info.request.nickname.empty() ? "unknown" : info.request.nickname;
     if (info.NeedPassword) {
-      FlushPromptOutputIfSafe_(prompt_io_manager_);
       auto password = prompt_io_manager_.SecurePrompt(
           AMStr::fmt("Password required [{}]: ", client_name));
       if (!password.has_value()) {

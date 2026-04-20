@@ -3,7 +3,7 @@
 #include "domain/host/HostModel.hpp"
 
 namespace AMDomain::filesystem {
-using ClientNickname = AMDomain::host::ConRequest::ClientNickname;
+using AMDomain::host::ClientNickname;
 using ClientHandle = AMDomain::client::ClientHandle;
 
 struct FilesystemArg {
