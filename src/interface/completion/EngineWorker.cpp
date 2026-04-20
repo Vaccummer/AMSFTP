@@ -18,6 +18,7 @@ using AMInterface::parser::TokenTypeAnalyzer;
 
 namespace AMInterface::completer {
 namespace {
+
 /**
  * @brief Unescape backtick-escaped sequences.
  */

@@ -14,9 +14,9 @@ namespace AMInterface::parser::semantic {
 
 class SemanticAnalyzer {
 public:
-  SemanticAnalyzer(const AMInterface::parser::CommandNode *command_tree,
-                   std::shared_ptr<AMInterface::parser::ITokenAnalyzerRuntime>
-                       runtime)
+  inline SemanticAnalyzer(
+      const AMInterface::parser::CommandNode *command_tree,
+      std::shared_ptr<AMInterface::parser::ITokenAnalyzerRuntime> runtime)
       : command_tree_(command_tree), runtime_(std::move(runtime)) {}
 
   [[nodiscard]] std::vector<AMInterface::parser::model::RawToken>

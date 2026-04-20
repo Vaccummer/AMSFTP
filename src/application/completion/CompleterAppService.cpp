@@ -1,33 +1,15 @@
 #include "application/completion/CompleterAppService.hpp"
 
-#include <algorithm>
-#include <limits>
 #include <utility>
 
 namespace AMApplication::completion {
-namespace {
-void NormalizeCompleterArg_(CompleterArg *arg) {
-  if (!arg) {
-    return;
-  }
-  arg->maxnum = std::max<int64_t>(1, arg->maxnum);
-  arg->maxrows_perpage = std::max<int64_t>(1, arg->maxrows_perpage);
-  arg->complete_delay_ms = std::max<int64_t>(0, arg->complete_delay_ms);
-  arg->async_workers = std::max<int64_t>(1, arg->async_workers);
-  if (arg->maxrows_perpage >
-      static_cast<int64_t>(std::numeric_limits<long>::max())) {
-    arg->maxrows_perpage =
-        static_cast<int64_t>(std::numeric_limits<long>::max());
-  }
-}
-} // namespace
 
 CompleterConfigManager::CompleterConfigManager(CompleterArg arg)
     : IConfigSyncPort(typeid(CompleterArg)), init_arg_(std::move(arg)) {}
 
 ECM CompleterConfigManager::Init() {
   auto guard = init_arg_.lock();
-  NormalizeCompleterArg_(&guard.get());
+  AMDomain::completion::NormalizeCompleterArg(&guard.get());
   return OK;
 }
 
@@ -36,26 +18,22 @@ CompleterArg CompleterConfigManager::GetInitArg() const {
 }
 
 void CompleterConfigManager::SetInitArg(CompleterArg arg) {
-  NormalizeCompleterArg_(&arg);
+  AMDomain::completion::NormalizeCompleterArg(&arg);
   init_arg_.lock().store(std::move(arg));
   MarkConfigDirty();
 }
 
-ECM CompleterConfigManager::FlushTo(
-    AMApplication::config::ConfigAppService *config_service) {
-  if (!config_service) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+ECM CompleterConfigManager::FlushTo(AMDomain::config::IConfigStorePort *store) {
+  if (!store) {
+    return {EC::InvalidArg, "completion.flush", "", "config store is null"};
   }
-  if (!config_service->Write<CompleterArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, "", "",
-               "failed to flush completer config");
+  const CompleterArg snapshot = GetInitArg();
+  if (!store->Write(std::type_index(typeid(CompleterArg)),
+                    static_cast<const void *>(&snapshot))) {
+    return {EC::ConfigDumpFailed, "completion.flush", "",
+            "failed to flush completer config"};
   }
   return OK;
 }
 
-CompleterArg CompleterConfigManager::ExportConfigSnapshot() const {
-  return GetInitArg();
-}
-
 } // namespace AMApplication::completion
-

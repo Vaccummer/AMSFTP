@@ -1,5 +1,5 @@
-#include "interface/parser/PromptTemplateInterpreter.hpp"
 #include "foundation/tools/string.hpp"
+#include "interface/parser/LuaInterpreter.hpp"
 
 #include <cctype>
 #include <cstdlib>
@@ -110,33 +110,8 @@ std::string BuildLuaErrorMessage_(const std::string &raw,
 
 } // namespace
 
-ECMData<PromptTemplateParseResult>
-PromptTemplateInterpreter::Parse(const std::string &input) const {
-  PromptTemplateParseResult result = {};
-  result.context.source = input;
-
-  lua_State *L = luaL_newstate();
-  if (!L) {
-    const std::string msg = "failed to create lua state";
-    result.diagnostics.items.push_back({0, msg});
-    return {std::move(result), Err(EC::LUAExecutionError, "", "", msg)};
-  }
-
-  const int rc = luaL_loadstring(L, input.c_str());
-  if (rc != LUA_OK) {
-    const std::string msg = BuildLuaErrorMessage_(ReadLuaError_(L), input);
-    lua_close(L);
-    result.diagnostics.items.push_back({0, msg});
-    return {std::move(result), Err(EC::LUAExecutionError, "", "", msg)};
-  }
-
-  lua_close(L);
-  return {std::move(result), OK};
-}
-
-ECMData<std::string>
-PromptTemplateInterpreter::Render(const PromptTemplateContext &context,
-                                  const PromptVarMap &vars) const {
+ECMData<std::string> LUARender(const PromptTemplateContext &context,
+                               const PromptVarMap &vars) {
   lua_State *L = luaL_newstate();
   if (!L) {
     const std::string msg = "failed to create lua state";

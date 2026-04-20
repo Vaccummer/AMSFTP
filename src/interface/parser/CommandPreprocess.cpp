@@ -6,8 +6,6 @@
 
 #include <optional>
 
-using EC = ErrorCode;
-
 namespace AMInterface::parser {
 namespace {
 
@@ -131,14 +129,13 @@ SplitCliTokensWithMeta_(const std::string &input,
   return out;
 }
 
-void ConsumePendingOptionValue_(std::optional<CommandNode::OptionValueRule> *rule,
-                                size_t *value_index) {
+void ConsumePendingOptionValue_(
+    std::optional<CommandNode::OptionValueRule> *rule, size_t *value_index) {
   if (!rule || !value_index || !rule->has_value()) {
     return;
   }
   ++(*value_index);
-  if (!rule->value().repeat_tail &&
-      *value_index >= rule->value().value_count) {
+  if (!rule->value().repeat_tail && *value_index >= rule->value().value_count) {
     rule->reset();
     *value_index = 0;
   }
@@ -158,8 +155,8 @@ void SetPendingOptionValueByToken_(
     const size_t eq_pos = token.find('=');
     const std::string option_name =
         (eq_pos == std::string::npos) ? token : token.substr(0, eq_pos);
-    const auto rule =
-        command_tree->ResolveOptionValueRule(command_path, option_name, '\0', 0);
+    const auto rule = command_tree->ResolveOptionValueRule(
+        command_path, option_name, '\0', 0);
     if (!rule.has_value()) {
       return;
     }
@@ -282,8 +279,8 @@ void ProtectQuotedDashLiterals_(std::vector<CliTokenWithMeta_> *tokens,
     // - Shell command positionals: prefix one private sentinel to keep literal
     //   value while avoiding option classification in CLI11.
     if (token.quoted && StartsWithDashLiteral_(text)) {
-      const auto semantic =
-          command_tree->ResolvePositionalSemantic(command_path, positional_index);
+      const auto semantic = command_tree->ResolvePositionalSemantic(
+          command_path, positional_index);
       if (semantic.has_value() &&
           semantic.value() == AMCommandArgSemantic::Path) {
         auto rewritten_token = token;
@@ -378,6 +375,3 @@ AMInputPreprocess::ResolveStringMeta(const std::string &input) {
 }
 
 } // namespace AMInterface::parser
-
-
-

@@ -6,7 +6,7 @@ namespace {
 using EC = ErrorCode;
 
 std::vector<std::string>
-DedupContinuousHistory_(std::vector<std::string> history) {
+DedupContinuousHistory_(const std::vector<std::string> &history) {
   std::vector<std::string> deduped = {};
   deduped.reserve(history.size());
   for (auto &entry : history) {
@@ -24,13 +24,13 @@ void NormalizePromptHistoryArg_(PromptHistoryArg *arg) {
   }
   for (auto &[zone, history] : arg->set) {
     (void)zone;
-    history = DedupContinuousHistory_(std::move(history));
+    history = DedupContinuousHistory_(history);
   }
 }
 } // namespace
 
 PromptHistoryManager::PromptHistoryManager(PromptHistoryArg arg)
-    : AMApplication::config::IConfigSyncPort(typeid(PromptHistoryArg)),
+    : AMDomain::config::IConfigSyncPort(typeid(PromptHistoryArg)),
       init_arg_([&arg]() {
         NormalizePromptHistoryArg_(&arg);
         return std::move(arg);
@@ -42,23 +42,17 @@ PromptHistoryArg PromptHistoryManager::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-ECM PromptHistoryManager::FlushTo(
-    AMApplication::config::ConfigAppService *config_service) {
-  if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "",
-               "config service is null");
+ECM PromptHistoryManager::FlushTo(AMDomain::config::IConfigStorePort *store) {
+  if (store == nullptr) {
+    return {EC::InvalidArg, "", "", "config store is null"};
   }
-  if (!config_service->Write<PromptHistoryArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, "", "",
-               "failed to flush prompt history config");
+  const PromptHistoryArg snapshot = GetInitArg();
+  if (!store->Write(std::type_index(typeid(PromptHistoryArg)),
+                    static_cast<const void *>(&snapshot))) {
+    return {EC::ConfigDumpFailed, "", "",
+            "failed to flush prompt history config"};
   }
   return OK;
-}
-
-PromptHistoryArg PromptHistoryManager::ExportConfigSnapshot() const {
-  PromptHistoryArg out = GetInitArg();
-  NormalizePromptHistoryArg_(&out);
-  return out;
 }
 
 void PromptHistoryManager::SetInitArg(PromptHistoryArg arg) {
@@ -102,8 +96,7 @@ ECM PromptHistoryManager::SetZoneHistory(const std::string &zone,
 ECM PromptHistoryManager::AppendZoneHistory(const std::string &zone,
                                             const std::string &entry) {
   if (entry.empty()) {
-    return Err(EC::InvalidArg, "", "",
-               "Prompt history entry is empty");
+    return Err(EC::InvalidArg, "", "", "Prompt history entry is empty");
   }
   auto guard = init_arg_.lock();
   auto &bucket = guard->set[zone];
@@ -128,5 +121,3 @@ ECM PromptHistoryManager::ClearZoneHistory(const std::string &zone) {
 }
 
 } // namespace AMApplication::prompt
-
-

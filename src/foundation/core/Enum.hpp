@@ -1,6 +1,7 @@
 #pragma once
 #include <libssh2.h>
 #include <libssh2_sftp.h>
+#include <cctype>
 #include <magic_enum/magic_enum.hpp>
 #include <optional>
 #include <source_location>
@@ -249,10 +250,72 @@ struct AMError {
   std::optional<RawError> raw_error = std::nullopt;
 
 private:
+  static std::string DeriveOperationFromFunction_(
+      std::string_view function_name) {
+    std::string token(function_name);
+    if (token.empty()) {
+      return "unknown";
+    }
+
+    if (const size_t paren = token.find('('); paren != std::string::npos) {
+      token = token.substr(0, paren);
+    }
+    if (const size_t space = token.find_last_of(" \t");
+        space != std::string::npos) {
+      token = token.substr(space + 1);
+    }
+    if (const size_t scope = token.rfind("::"); scope != std::string::npos) {
+      token = token.substr(scope + 2);
+    }
+    if (const size_t tmpl = token.find('<'); tmpl != std::string::npos) {
+      token = token.substr(0, tmpl);
+    }
+    if (token.empty()) {
+      return "unknown";
+    }
+    if (token.starts_with("operator")) {
+      return "operator";
+    }
+    if (token.starts_with("~")) {
+      token.erase(0, 1);
+    }
+
+    std::string normalized = {};
+    normalized.reserve(token.size() * 2);
+    char prev = '\0';
+    for (const char ch : token) {
+      const unsigned char uch = static_cast<unsigned char>(ch);
+      if (std::isalnum(uch) != 0) {
+        const bool is_upper = std::isupper(uch) != 0;
+        const bool prev_is_lower_or_digit =
+            prev != '\0' &&
+            (std::islower(static_cast<unsigned char>(prev)) != 0 ||
+             std::isdigit(static_cast<unsigned char>(prev)) != 0);
+        if (is_upper && prev_is_lower_or_digit && !normalized.empty() &&
+            normalized.back() != '_') {
+          normalized.push_back('_');
+        }
+        normalized.push_back(
+            static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+      } else if ((ch == '_' || ch == '-' || ch == '.') && !normalized.empty() &&
+                 normalized.back() != '_') {
+        normalized.push_back('_');
+      }
+      prev = ch;
+    }
+    while (!normalized.empty() && normalized.back() == '_') {
+      normalized.pop_back();
+    }
+    if (normalized.empty()) {
+      return "unknown";
+    }
+    return normalized;
+  }
+
   static std::string ResolveOperation_(EC ec, std::string op,
                                        const std::source_location &loc) {
     if (ec != EC::Success && op.empty()) {
-      return std::string(loc.function_name());
+      return DeriveOperationFromFunction_(loc.function_name());
     }
     return op;
   }

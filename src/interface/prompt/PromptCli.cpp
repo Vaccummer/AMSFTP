@@ -294,15 +294,10 @@ void PromptIOManager::PrintOperationAbort() {
 }
 
 void PromptIOManager::FlushCachedOutput() {
-  std::string output;
-  {
-    std::lock_guard<std::mutex> lock(io_state_.cached_output_mutex_);
-    if (io_state_.cached_output_.empty()) {
-      return;
-    }
-    output.swap(io_state_.cached_output_);
+  if (IsCacheOutputOnly()) {
+    return;
   }
-
+  std::string output = TakeCachedOutput_();
   if (output.empty()) {
     return;
   }
@@ -381,6 +376,16 @@ std::string PromptIOManager::BuildReplayFrame_(const std::string &msg) {
   return out;
 }
 
+std::string PromptIOManager::TakeCachedOutput_() {
+  std::lock_guard<std::mutex> lock(io_state_.cached_output_mutex_);
+  if (io_state_.cached_output_.empty()) {
+    return {};
+  }
+  std::string output = {};
+  output.swap(io_state_.cached_output_);
+  return output;
+}
+
 bool PromptIOManager::TryCacheOutput_(const std::string &text) {
   if (!IsCacheOutputOnly()) {
     return false;
@@ -395,15 +400,26 @@ void PromptIOManager::EmitOutput_(const std::string &text, bool allow_cache) {
     return;
   }
 
+  std::string output = text;
+  if (!IsCacheOutputOnly()) {
+    std::string cached_output = TakeCachedOutput_();
+    if (!cached_output.empty()) {
+      output = std::move(cached_output) + output;
+    }
+  }
+  if (output.empty()) {
+    return;
+  }
+
   const bool replay_prompt_header = ShouldReplayPromptHeader_();
   std::string replay_frame;
   if (replay_prompt_header) {
-    replay_frame = BuildReplayFrame_(text);
+    replay_frame = BuildReplayFrame_(output);
   }
 
   if (io_state_.refresh_occupied_lines_.load(std::memory_order_relaxed) <= 0) {
     if (!replay_prompt_header && ic_is_editline_active() &&
-        ic_print_async(text.c_str())) {
+        ic_print_async(output.c_str())) {
       return;
     }
     std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
@@ -417,7 +433,7 @@ void PromptIOManager::EmitOutput_(const std::string &text, bool allow_cache) {
         (void)ic_request_refresh_async();
       }
     } else {
-      PrintSyncLocked_(text);
+      PrintSyncLocked_(output);
     }
     return;
   }
@@ -426,7 +442,7 @@ void PromptIOManager::EmitOutput_(const std::string &text, bool allow_cache) {
   if (auto profile = isocline_profile_manager_.CurrentProfile(); profile) {
     (void)profile->Use();
   }
-  PrintInsertAndRepaintLocked_(text);
+  PrintInsertAndRepaintLocked_(output);
   if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
       io_state_.secure_phase_.load(std::memory_order_relaxed)) {
     (void)ic_request_refresh_async();
@@ -670,6 +686,7 @@ std::optional<std::string> PromptIOManager::Prompt(
     const std::function<bool(const std::string &)> &checker,
     const std::vector<std::pair<std::string, std::string>> &candidates,
     const PromptReadOptions &options) {
+  FlushCachedOutput();
 
   PromptValueQueryContext query_ctx;
   query_ctx.checker = checker ? &checker : nullptr;
@@ -778,6 +795,7 @@ std::optional<std::string> PromptIOManager::LiteralPrompt(
  */
 std::optional<std::string>
 PromptIOManager::PromptCore(const std::string &prompt) {
+  FlushCachedOutput();
   std::string prompt_header;
   std::string prompt_line;
   SplitPromptForReadline_(prompt, &prompt_header, &prompt_line);
@@ -823,6 +841,7 @@ PromptIOManager::PromptCore(const std::string &prompt) {
 
 std::optional<std::string>
 PromptIOManager::SecurePrompt(const std::string &prompt) {
+  FlushCachedOutput();
   ScopedAtomicFlag_ secure_phase_guard(&io_state_.secure_phase_);
 
   char *line = ic_readline_secure(prompt.c_str(), nullptr);

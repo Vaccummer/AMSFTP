@@ -84,7 +84,7 @@ CLIPromtRender::CLIPromtRender(
 std::string
 CLIPromtRender::Render(const AMApplication::prompt::PromptRenderDTO &dto) {
   RefreshTemplateCache_();
-  if (state_.compiled_template.empty()) {
+  if (state_.context.source.empty()) {
     state_.cached_render.clear();
     state_.has_cached_render = false;
     state_.render_ok = true;
@@ -92,19 +92,7 @@ CLIPromtRender::Render(const AMApplication::prompt::PromptRenderDTO &dto) {
     return "";
   }
 
-  if (!state_.parse_ok) {
-    state_.render_ok = false;
-    state_.render_error = "core prompt template parse failed";
-    if (!state_.diagnostics.items.empty()) {
-      state_.render_error = state_.diagnostics.items.front().message;
-    }
-    state_.cached_render = NormalizePromptOutput_(BuildFallbackPrompt_(dto));
-    state_.has_cached_render = true;
-    return state_.cached_render;
-  }
-
-  const auto rendered =
-      interpreter_.Render(state_.parsed_context, BuildRenderVars_(dto));
+  const auto rendered = LUARender(state_.context, BuildRenderVars_(dto));
   if (!(rendered.rcm)) {
     state_.render_ok = false;
     state_.render_error = rendered.rcm.msg();
@@ -124,14 +112,11 @@ CLIPromtRender::Render(const AMApplication::prompt::PromptRenderDTO &dto) {
 
 void CLIPromtRender::InvalidateCache() {
   state_.template_raw.clear();
-  state_.compiled_template.clear();
   state_.cached_render.clear();
   state_.has_cached_render = false;
-  state_.parse_ok = false;
   state_.render_ok = true;
   state_.render_error.clear();
-  state_.parsed_context = {};
-  state_.diagnostics = {};
+  state_.context = {};
 }
 
 const CLIPromtRender::RuntimeState &CLIPromtRender::State() const {
@@ -175,17 +160,11 @@ void CLIPromtRender::RefreshTemplateCache_() {
   }
 
   state_.template_raw = fmt;
-  state_.compiled_template = fmt;
   state_.cached_render.clear();
   state_.has_cached_render = false;
   state_.render_ok = true;
   state_.render_error.clear();
-
-  auto parsed = interpreter_.Parse(fmt);
-  state_.parse_ok = (parsed.rcm) && !parsed.data.diagnostics.HasError();
-  state_.parsed_context = std::move(parsed.data.context);
-  state_.compiled_template = state_.parsed_context.source;
-  state_.diagnostics = std::move(parsed.data.diagnostics);
+  state_.context.source = fmt;
 }
 
 } // namespace AMInterface::prompt

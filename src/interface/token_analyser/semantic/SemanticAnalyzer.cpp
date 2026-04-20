@@ -192,6 +192,27 @@ bool IsVarShortcutDefineToken_(const std::string &raw_text) {
   return AMDomain::var::ParseVarToken(lhs);
 }
 
+bool IsIntegerLiteral_(const std::string &raw_text) {
+  const std::string text = AMStr::Strip(raw_text);
+  if (text.empty()) {
+    return false;
+  }
+
+  size_t begin = 0;
+  if (text[0] == '+' || text[0] == '-') {
+    if (text.size() == 1) {
+      return false;
+    }
+    begin = 1;
+  }
+  for (size_t idx = begin; idx < text.size(); ++idx) {
+    if (text[idx] < '0' || text[idx] > '9') {
+      return false;
+    }
+  }
+  return true;
+}
+
 AMTokenType ToPathTokenType_(PathType type) {
   switch (type) {
   case PathType::FILE:
@@ -374,6 +395,24 @@ void MarkIllegalCommandGaps_(
       tokens[idx].type = AMTokenType::IllegalCommand;
     }
     segment_begin = legal_index + 1;
+  }
+}
+
+void MarkIllegalRootTail_(std::vector<AMInterface::parser::model::RawToken> &tokens,
+                          const std::vector<std::string> &texts) {
+  bool root_illegal_seen = false;
+  for (size_t idx = 0; idx < tokens.size(); ++idx) {
+    auto &token = tokens[idx];
+    if (token.quoted || texts[idx].empty()) {
+      continue;
+    }
+    if (!root_illegal_seen) {
+      root_illegal_seen = token.type == AMTokenType::IllegalCommand;
+      continue;
+    }
+    if (token.type == AMTokenType::Common) {
+      token.type = AMTokenType::IllegalCommand;
+    }
   }
 }
 
@@ -633,6 +672,21 @@ bool TryClassifyVarReferenceToken_(
   return true;
 }
 
+bool TryClassifyGenericValueToken_(
+    AMInterface::parser::model::RawToken &token, const std::string &raw_text,
+    const TokenSemanticHint_ &hint,
+    ArgSemanticState_ &state) {
+  if (token.type != AMTokenType::Common || !hint.semantic.has_value() ||
+      *hint.semantic != AMCommandArgSemantic::None ||
+      !IsIntegerLiteral_(raw_text)) {
+    return false;
+  }
+
+  token.type = AMTokenType::ValidValue;
+  ConsumePositionalArg_(state, hint.positional_consumed);
+  return true;
+}
+
 PathTarget_ ResolvePathTarget_(const std::string &raw_text,
                                const std::string &current_nickname) {
   PathTarget_ target = {};
@@ -783,6 +837,9 @@ std::vector<AMInterface::parser::model::RawToken> SemanticAnalyzer::Classify(
   context.runtime = runtime_;
   context.command = ScanCommandPrefix_(command_tree_, tokens, texts);
   MarkIllegalCommandGaps_(command_tree_, tokens, texts);
+  if (context.command.command_tokens == 0) {
+    MarkIllegalRootTail_(tokens, texts);
+  }
   MarkOptions_(tokens, texts, context.command.node);
   context.runtime_context = BuildRuntimeContext_(runtime_);
 
@@ -820,6 +877,9 @@ std::vector<AMInterface::parser::model::RawToken> SemanticAnalyzer::Classify(
       continue;
     }
     if (TryClassifyVarReferenceToken_(token, raw_text, hint, runtime_, state)) {
+      continue;
+    }
+    if (TryClassifyGenericValueToken_(token, raw_text, hint, state)) {
       continue;
     }
     if (TryClassifyPathLikeToken_(token, raw_text, unescaped_text, hint, context,

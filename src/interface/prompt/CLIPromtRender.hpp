@@ -2,7 +2,7 @@
 
 #include "application/prompt/PromptRenderDTO.hpp"
 #include "foundation/core/DataClass.hpp"
-#include "interface/parser/PromptTemplateInterpreter.hpp"
+#include "interface/parser/LuaInterpreter.hpp"
 #include "interface/style/StyleManager.hpp"
 
 #include <string>
@@ -13,14 +13,11 @@ class CLIPromtRender : public NonCopyableNonMovable {
 public:
   struct RuntimeState {
     std::string template_raw = "";
-    std::string compiled_template = "";
     std::string cached_render = "";
     bool has_cached_render = false;
-    bool parse_ok = false;
     bool render_ok = true;
     std::string render_error = "";
-    PromptTemplateContext parsed_context = {};
-    PromptTemplateDiagnostics diagnostics = {};
+    PromptTemplateContext context = {};
   };
 
   explicit CLIPromtRender(AMInterface::style::AMStyleService &style_service);
@@ -42,7 +39,6 @@ private:
 
 private:
   AMInterface::style::AMStyleService &style_service_;
-  PromptTemplateInterpreter interpreter_ = {};
   mutable RuntimeState state_ = {};
 };
 

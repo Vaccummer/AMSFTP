@@ -7,10 +7,10 @@
 #include <limits>
 
 namespace AMInterface::searcher::detail {
-using AMInterface::parser::AMCommandArgSemantic;
-using AMInterface::parser::CommandNode;
 using AMInterface::completer::AMCompletionContext;
 using AMInterface::completer::AMCompletionTarget;
+using AMInterface::parser::AMCommandArgSemantic;
+using AMInterface::parser::CommandNode;
 
 /**
  * @brief Match result entry containing source index and score bias.
@@ -208,8 +208,7 @@ inline int ToClientTimeoutMs(size_t timeout_ms, int fallback_ms) {
   if (timeout_ms == 0) {
     return fallback_ms;
   }
-  constexpr size_t kIntMax =
-      static_cast<size_t>(std::numeric_limits<int>::max());
+  constexpr auto kIntMax = static_cast<size_t>(std::numeric_limits<int>::max());
   if (timeout_ms > kIntMax) {
     return std::numeric_limits<int>::max();
   }
@@ -416,4 +415,3 @@ inline bool IsPathSemanticState(const AMCompletionContext &ctx,
 }
 
 } // namespace AMInterface::searcher::detail
-

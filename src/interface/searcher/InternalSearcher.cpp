@@ -59,18 +59,18 @@ std::vector<HostLikeNameInfo> CollectHostLikeNames_(
     if (key.empty() || !seen.insert(key).second) {
       return;
     }
-    names.push_back({name, created});
+    names.emplace_back(name, created);
   };
 
   std::vector<std::string> created_names = runtime->ListClientNames();
-  std::sort(created_names.begin(), created_names.end());
+  std::ranges::sort(created_names.begin(), created_names.end());
   for (const auto &name : created_names) {
     add_name(name, true);
   }
   add_name("local", true);
 
   std::vector<std::string> configured_names = runtime->ListHostNames();
-  std::sort(configured_names.begin(), configured_names.end());
+  std::ranges::sort(configured_names.begin(), configured_names.end());
   for (const auto &name : configured_names) {
     add_name(name, false);
   }
@@ -95,11 +95,13 @@ std::vector<HostLikeNameInfo> CollectTerminalLikeNames_(
   };
 
   std::vector<std::string> terminal_names = runtime->ListTerminalNames();
+  std::ranges::sort(terminal_names.begin(), terminal_names.end());
   for (const auto &name : terminal_names) {
     add_name(name, true);
   }
 
   std::vector<std::string> host_names = runtime->ListHostNames();
+  std::ranges::sort(host_names.begin(), host_names.end());
   for (const auto &name : host_names) {
     add_name(name, false);
   }

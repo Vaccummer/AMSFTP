@@ -17,7 +17,6 @@ namespace {
 using shared::ClassifyNicknameTokenType;
 using shared::ClassifyVarZoneTokenType;
 using shared::FindUnescapedChar;
-using shared::IsValidOptionToken;
 using shared::IsQuotedChar;
 using shared::ParseVarTokenAt;
 using shared::TerminalTokenTypeFromState;
@@ -147,11 +146,6 @@ struct HighlightContext_ {
   const std::vector<AMInterface::parser::model::RawToken> *tokens = nullptr;
   const CommandNode *command_tree = nullptr;
   std::shared_ptr<ITokenAnalyzerRuntime> runtime = nullptr;
-};
-
-struct CommandHighlightScan_ {
-  const CommandNode *node = nullptr;
-  std::string path = {};
 };
 
 struct ParsedVarHighlight_ {
@@ -329,65 +323,19 @@ void HighlightSemanticTokenRanges_(const HighlightContext_ &context,
   }
 }
 
-CommandHighlightScan_ ScanCommandHighlightPath_(
-    const HighlightContext_ &context, HighlightBuffer_ &buffer) {
-  CommandHighlightScan_ scan = {};
-  if (!context.command_tree || !context.tokens || !context.input) {
-    return scan;
-  }
-
-  const std::string &input = *context.input;
-  for (const auto &token : *context.tokens) {
-    if (token.quoted) {
-      continue;
-    }
-
-    const std::string text = input.substr(token.start, token.end - token.start);
-    if (text.empty()) {
-      continue;
-    }
-
-    if (scan.path.empty()) {
-      if (context.command_tree->IsModule(text)) {
-        ApplyRange_(buffer, token.start, token.end, AMTokenType::Module);
-        scan.path = text;
-        scan.node = context.command_tree->FindNode(scan.path);
-        continue;
-      }
-      if (context.command_tree->IsTopCommand(text)) {
-        ApplyRange_(buffer, token.start, token.end, AMTokenType::Command);
-        scan.path = text;
-        scan.node = context.command_tree->FindNode(scan.path);
-        continue;
-      }
-      continue;
-    }
-
-    if (scan.node && scan.node->subcommands.contains(text)) {
-      ApplyRange_(buffer, token.start, token.end, AMTokenType::Command);
-      scan.path += " " + text;
-      scan.node = context.command_tree->FindNode(scan.path);
-    }
-  }
-
-  return scan;
-}
-
 void HighlightCommandsAndOptions_(const HighlightContext_ &context,
                                   HighlightBuffer_ &buffer) {
-  const CommandHighlightScan_ scan = ScanCommandHighlightPath_(context, buffer);
-  if (!scan.node || !context.tokens || !context.input) {
+  if (!context.tokens) {
     return;
   }
 
-  const std::string &input = *context.input;
   for (const auto &token : *context.tokens) {
     if (token.quoted) {
       continue;
     }
-    const std::string text = input.substr(token.start, token.end - token.start);
-    if (IsValidOptionToken(text, scan.node)) {
-      ApplyRange_(buffer, token.start, token.end, AMTokenType::Option);
+    if (token.type == AMTokenType::Module || token.type == AMTokenType::Command ||
+        token.type == AMTokenType::Option) {
+      ApplyRange_(buffer, token.start, token.end, token.type);
     }
   }
 }

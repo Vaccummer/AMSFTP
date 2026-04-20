@@ -1,6 +1,6 @@
 #pragma once
 
-#include "foundation/core/DataClass.hpp"
+#include "foundation/core/Enum.hpp"
 #include <cstddef>
 
 namespace AMInterface::parser::model {
@@ -18,4 +18,3 @@ struct RawToken {
 };
 
 } // namespace AMInterface::parser::model
-

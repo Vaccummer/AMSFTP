@@ -12,7 +12,7 @@ std::string ResolveProfileZone_(const std::string &zone) {
 } // namespace
 
 PromptProfileManager::PromptProfileManager(PromptProfileArg arg)
-    : AMApplication::config::IConfigSyncPort(typeid(PromptProfileArg)),
+    : AMDomain::config::IConfigSyncPort(typeid(PromptProfileArg)),
       init_arg_(std::move(arg)) {
   auto guard = init_arg_.lock();
   AMDomain::prompt::service::NormalizePromptProfileArg(&guard.get());
@@ -28,21 +28,17 @@ PromptProfileArg PromptProfileManager::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-ECM PromptProfileManager::FlushTo(
-    AMApplication::config::ConfigAppService *config_service) {
-  if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "",
-               "config service is null");
+ECM PromptProfileManager::FlushTo(AMDomain::config::IConfigStorePort *store) {
+  if (store == nullptr) {
+    return Err(EC::InvalidArg, "", "", "config store is null");
   }
-  if (!config_service->Write<PromptProfileArg>(ExportConfigSnapshot())) {
+  const PromptProfileArg snapshot = GetInitArg();
+  if (!store->Write(std::type_index(typeid(PromptProfileArg)),
+                    static_cast<const void *>(&snapshot))) {
     return Err(EC::ConfigDumpFailed, "", "",
                "failed to flush prompt profile config");
   }
   return OK;
-}
-
-PromptProfileArg PromptProfileManager::ExportConfigSnapshot() const {
-  return GetInitArg();
 }
 
 void PromptProfileManager::SetInitArg(PromptProfileArg arg) {
@@ -69,8 +65,7 @@ PromptProfileManager::GetZoneProfile(const std::string &zone) const {
   auto fallback_it = set.find(AMDomain::prompt::kPromptProfileDefault);
   if (fallback_it == set.end()) {
     PromptProfileSettings default_profile = {};
-    AMDomain::prompt::service::NormalizePromptProfileSettings(
-        &default_profile);
+    AMDomain::prompt::service::NormalizePromptProfileSettings(&default_profile);
     fallback_it = set.emplace(AMDomain::prompt::kPromptProfileDefault,
                               std::move(default_profile))
                       .first;
@@ -84,5 +79,3 @@ PromptProfileManager::GetZoneProfile(const std::string &zone) const {
   return out;
 }
 } // namespace AMApplication::prompt
-
-
