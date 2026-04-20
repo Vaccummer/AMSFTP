@@ -6,85 +6,23 @@
 #include "interface/parser/CommandTree.hpp"
 #include "interface/token_analyser/TokenAnalyzerRuntime.hpp"
 #include "interface/token_analyser/shared/InputTextRules.hpp"
+#include "interface/token_analyser/shared/TokenAnalyzerRules.hpp"
 #include <algorithm>
 #include <array>
+#include <optional>
 
 namespace AMInterface::parser::highlight {
 namespace {
 
-bool IsLocalNickname_(const std::string &nickname) {
-  return AMDomain::host::HostService::IsLocalNickname(nickname);
-}
-
-size_t FindUnescapedChar_(const std::string &text, char target) {
-  return shared::FindUnescapedChar(text, target);
-}
-
-std::string UnescapeBackticks_(const std::string &text) {
-  return shared::UnescapeBackticks(text, true);
-}
-
-inline bool IsQuoted(char c) { return shared::IsQuotedChar(c); }
-
-AMTokenType
-ClassifyNicknameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
-                           const std::string &nickname_raw) {
-  const std::string nickname = AMStr::Strip(nickname_raw);
-  if (IsLocalNickname_(nickname)) {
-    return AMTokenType::Nickname;
-  }
-  if (!runtime) {
-    return AMTokenType::NonexistentNickname;
-  }
-  if (auto client = runtime->GetClient(nickname); client) {
-    const auto state = client->ConfigPort().GetState();
-    if (state.data.status == AMDomain::client::ClientStatus::OK) {
-      return AMTokenType::Nickname;
-    }
-    return AMTokenType::DisconnectedNickname;
-  }
-  if (runtime->HostExists(nickname)) {
-    return AMTokenType::UnestablishedNickname;
-  }
-  return AMTokenType::NonexistentNickname;
-}
-
-AMTokenType ClassifyVarZoneTokenType_(
-    std::shared_ptr<ITokenAnalyzerRuntime> runtime,
-    const std::string &zone_raw) {
-  const std::string zone = AMStr::Strip(zone_raw);
-  if (zone.empty()) {
-    return AMTokenType::NonexistentNickname;
-  }
-  if (zone == AMDomain::var::kPublic) {
-    return AMTokenType::Nickname;
-  }
-  if (!runtime) {
-    return AMTokenType::NonexistentNickname;
-  }
-  if (runtime->HasVarDomain(zone)) {
-    return AMTokenType::Nickname;
-  }
-  if (runtime->HostExists(zone)) {
-    return AMTokenType::UnestablishedNickname;
-  }
-  return AMTokenType::NonexistentNickname;
-}
-
-AMTokenType TerminalTokenTypeFromState_(
-    ITokenAnalyzerRuntime::TerminalNameState state) {
-  switch (state) {
-  case ITokenAnalyzerRuntime::TerminalNameState::OK:
-    return AMTokenType::TerminalName;
-  case ITokenAnalyzerRuntime::TerminalNameState::Disconnected:
-    return AMTokenType::DisconnectedTerminalName;
-  case ITokenAnalyzerRuntime::TerminalNameState::Unestablished:
-    return AMTokenType::UnestablishedTerminalName;
-  case ITokenAnalyzerRuntime::TerminalNameState::Nonexistent:
-  default:
-    return AMTokenType::NonexistentTerminalName;
-  }
-}
+using shared::ClassifyNicknameTokenType;
+using shared::ClassifyVarZoneTokenType;
+using shared::FindUnescapedChar;
+using shared::IsValidOptionToken;
+using shared::IsQuotedChar;
+using shared::ParseVarTokenAt;
+using shared::TerminalTokenTypeFromState;
+using shared::UnescapeBackticks;
+using shared::VarNameTypeFor;
 
 bool IsChannelTokenType_(AMTokenType type) {
   switch (type) {
@@ -196,51 +134,78 @@ std::string FormatPathSegment_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
   return runtime->FormatPath(segment, &info);
 }
 
-bool ParseVarTokenAt_(const std::string &input, size_t pos, size_t limit,
-                      size_t *out_end) {
-  size_t parsed_end = 0;
+constexpr size_t kTokenTypeCount_ =
+    static_cast<size_t>(AMTokenType::InvalidNewChannelName) + 1;
+
+struct HighlightBuffer_ {
+  std::vector<AMTokenType> types = {};
+  std::vector<int> priorities = {};
+};
+
+struct HighlightContext_ {
+  const std::string *input = nullptr;
+  const std::vector<AMInterface::parser::model::RawToken> *tokens = nullptr;
+  const CommandNode *command_tree = nullptr;
+  std::shared_ptr<ITokenAnalyzerRuntime> runtime = nullptr;
+};
+
+struct CommandHighlightScan_ {
+  const CommandNode *node = nullptr;
+  std::string path = {};
+};
+
+struct ParsedVarHighlight_ {
   AMDomain::var::VarRef ref = {};
-  if (!AMDomain::var::ParseVarRefAt(input, pos, limit, true, true, &parsed_end,
-                                    &ref) ||
-      !ref.valid) {
-    return false;
-  }
-  if (out_end) {
-    *out_end = parsed_end;
-  }
-  return true;
+  size_t local_end = 0;
+  bool has_closing_brace = false;
+  std::string zone_token = {};
+};
+
+struct VarShortcutDefine_ {
+  size_t equal_pos = 0;
+  size_t value_begin = 0;
+  bool valid = false;
+};
+
+HighlightBuffer_ InitializeHighlightBuffer_(size_t size) {
+  HighlightBuffer_ buffer = {};
+  buffer.types.assign(size, AMTokenType::Common);
+  buffer.priorities.assign(size, 0);
+  return buffer;
 }
 
-int PriorityForType_(AMTokenType type) {
+void ApplyRange_(HighlightBuffer_ &buffer, size_t start, size_t end,
+                 AMTokenType type) {
+  const size_t size = buffer.types.size();
+  if (start >= end || start >= size) {
+    return;
+  }
+  if (end > size) {
+    end = size;
+  }
+
+  const int priority = static_cast<int>(type);
+  for (size_t i = start; i < end; ++i) {
+    if (priority >= buffer.priorities[i]) {
+      buffer.priorities[i] = priority;
+      buffer.types[i] = type;
+    }
+  }
+}
+
+bool ShouldApplySemanticTokenType_(AMTokenType type) {
   switch (type) {
   case AMTokenType::IllegalCommand:
-    return 200;
-  case AMTokenType::EscapeSign:
-    return 100;
-  case AMTokenType::BangSign:
-    return 99;
-  case AMTokenType::ShellCmd:
-    return 98;
-  case AMTokenType::EqualSign:
-    return 95;
-  case AMTokenType::VarValue:
-    return 90;
-  case AMTokenType::VarName:
-  case AMTokenType::VarNameMissing:
-  case AMTokenType::ValidValue:
-  case AMTokenType::InvalidValue:
-  case AMTokenType::ValidNewNickname:
-  case AMTokenType::InvalidNewNickname:
-  case AMTokenType::DollarSign:
-  case AMTokenType::LeftBraceSign:
-  case AMTokenType::RightBraceSign:
-  case AMTokenType::ColonSign:
-    return 80;
-  case AMTokenType::AtSign:
   case AMTokenType::Nickname:
   case AMTokenType::DisconnectedNickname:
   case AMTokenType::UnestablishedNickname:
   case AMTokenType::NonexistentNickname:
+  case AMTokenType::BuiltinArg:
+  case AMTokenType::NonexistentBuiltinArg:
+  case AMTokenType::ValidValue:
+  case AMTokenType::InvalidValue:
+  case AMTokenType::ValidNewNickname:
+  case AMTokenType::InvalidNewNickname:
   case AMTokenType::TerminalName:
   case AMTokenType::DisconnectedTerminalName:
   case AMTokenType::UnestablishedTerminalName:
@@ -250,65 +215,460 @@ int PriorityForType_(AMTokenType type) {
   case AMTokenType::NonexistentChannelName:
   case AMTokenType::ValidNewChannelName:
   case AMTokenType::InvalidNewChannelName:
-    return 70;
-  case AMTokenType::BuiltinArg:
-  case AMTokenType::NonexistentBuiltinArg:
-    return 65;
-  case AMTokenType::Option:
-    return 60;
-  case AMTokenType::Module:
-  case AMTokenType::Command:
-    return 50;
   case AMTokenType::Path:
   case AMTokenType::Nonexistentpath:
   case AMTokenType::File:
   case AMTokenType::Dir:
   case AMTokenType::Symlink:
   case AMTokenType::Special:
-    return 40;
-  case AMTokenType::String:
-    return 20;
-  case AMTokenType::Common:
+    return true;
   default:
-    return 0;
+    return false;
   }
 }
 
-AMTokenType VarNameTypeFor_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
-                            const std::string &name) {
-  if (!runtime) {
-    return AMTokenType::VarNameMissing;
+std::array<std::string, kTokenTypeCount_>
+BuildStyleTags_(std::shared_ptr<ITokenAnalyzerRuntime> runtime) {
+  std::array<std::string, kTokenTypeCount_> style_tags = {};
+  for (size_t i = 0; i < kTokenTypeCount_; ++i) {
+    style_tags[i] = ResolveStyleTagForType_(runtime, static_cast<AMTokenType>(i));
   }
-  const std::string domain = runtime->CurrentVarDomain();
-  auto scoped = runtime->GetVar(domain, name);
-  if ((scoped.rcm)) {
-    return AMTokenType::VarName;
-  }
-  auto pub = runtime->GetVar(AMDomain::var::kPublic, name);
-  return (pub.rcm) ? AMTokenType::VarName : AMTokenType::VarNameMissing;
+  return style_tags;
 }
 
-bool IsValidOptionToken_(const std::string &token, const CommandNode *node) {
-  if (!node || token.size() < 2 || token[0] != '-') {
-    return false;
+void RenderFormattedOutput_(const std::string &input,
+                            const HighlightBuffer_ &buffer,
+                            std::shared_ptr<ITokenAnalyzerRuntime> runtime,
+                            std::string *formatted) {
+  if (!formatted) {
+    return;
   }
-  if (token.starts_with("--")) {
-    std::string name = token;
-    const size_t eq = token.find('=');
-    if (eq != std::string::npos) {
-      name = token.substr(0, eq);
+
+  const auto style_tags = BuildStyleTags_(runtime);
+  formatted->reserve(input.size() + 16);
+  std::string current_tag = {};
+  for (size_t i = 0; i < input.size(); ++i) {
+    const AMTokenType cur_type = buffer.types[i];
+    if (IsPathRenderType_(cur_type)) {
+      size_t end = i + 1;
+      while (end < input.size() && buffer.types[end] == cur_type) {
+        ++end;
+      }
+      if (!current_tag.empty()) {
+        formatted->append("[/]");
+        current_tag.clear();
+      }
+      formatted->append(
+          FormatPathSegment_(runtime, input.substr(i, end - i), cur_type));
+      i = end - 1;
+      continue;
     }
-    return node->long_options.contains(name);
+
+    const std::string &tag = style_tags[static_cast<size_t>(cur_type)];
+    if (tag != current_tag) {
+      if (!current_tag.empty()) {
+        formatted->append("[/]");
+      }
+      if (!tag.empty()) {
+        formatted->append(tag);
+      }
+      current_tag = tag;
+    }
+    AppendEscapedBbcodeChar_(*formatted, input[i]);
   }
-  if (token.size() < 2) {
-    return false;
+  if (!current_tag.empty()) {
+    formatted->append("[/]");
   }
-  for (size_t i = 1; i < token.size(); ++i) {
-    if (!node->short_options.contains(token[i])) {
-      return false;
+}
+
+void HighlightEscapeSigns_(const HighlightContext_ &context,
+                           HighlightBuffer_ &buffer) {
+  if (!context.input || context.input->empty()) {
+    return;
+  }
+
+  const std::string &input = *context.input;
+  for (size_t i = 0; i + 1 < input.size(); ++i) {
+    if (input[i] != '`') {
+      continue;
+    }
+    const char next = input[i + 1];
+    if (next != '$' && next != '@' && next != '"' && next != '\'' &&
+        next != '`') {
+      continue;
+    }
+    ApplyRange_(buffer, i, i + 2, AMTokenType::EscapeSign);
+    ++i;
+  }
+}
+
+void HighlightQuotedTokens_(const HighlightContext_ &context,
+                            HighlightBuffer_ &buffer) {
+  if (!context.tokens) {
+    return;
+  }
+
+  for (const auto &token : *context.tokens) {
+    if (token.quoted) {
+      ApplyRange_(buffer, token.start, token.end, AMTokenType::String);
     }
   }
-  return true;
+}
+
+void HighlightSemanticTokenRanges_(const HighlightContext_ &context,
+                                   HighlightBuffer_ &buffer) {
+  if (!context.tokens) {
+    return;
+  }
+
+  for (const auto &token : *context.tokens) {
+    if (token.quoted || !ShouldApplySemanticTokenType_(token.type)) {
+      continue;
+    }
+    ApplyRange_(buffer, token.start, token.end, token.type);
+  }
+}
+
+CommandHighlightScan_ ScanCommandHighlightPath_(
+    const HighlightContext_ &context, HighlightBuffer_ &buffer) {
+  CommandHighlightScan_ scan = {};
+  if (!context.command_tree || !context.tokens || !context.input) {
+    return scan;
+  }
+
+  const std::string &input = *context.input;
+  for (const auto &token : *context.tokens) {
+    if (token.quoted) {
+      continue;
+    }
+
+    const std::string text = input.substr(token.start, token.end - token.start);
+    if (text.empty()) {
+      continue;
+    }
+
+    if (scan.path.empty()) {
+      if (context.command_tree->IsModule(text)) {
+        ApplyRange_(buffer, token.start, token.end, AMTokenType::Module);
+        scan.path = text;
+        scan.node = context.command_tree->FindNode(scan.path);
+        continue;
+      }
+      if (context.command_tree->IsTopCommand(text)) {
+        ApplyRange_(buffer, token.start, token.end, AMTokenType::Command);
+        scan.path = text;
+        scan.node = context.command_tree->FindNode(scan.path);
+        continue;
+      }
+      continue;
+    }
+
+    if (scan.node && scan.node->subcommands.contains(text)) {
+      ApplyRange_(buffer, token.start, token.end, AMTokenType::Command);
+      scan.path += " " + text;
+      scan.node = context.command_tree->FindNode(scan.path);
+    }
+  }
+
+  return scan;
+}
+
+void HighlightCommandsAndOptions_(const HighlightContext_ &context,
+                                  HighlightBuffer_ &buffer) {
+  const CommandHighlightScan_ scan = ScanCommandHighlightPath_(context, buffer);
+  if (!scan.node || !context.tokens || !context.input) {
+    return;
+  }
+
+  const std::string &input = *context.input;
+  for (const auto &token : *context.tokens) {
+    if (token.quoted) {
+      continue;
+    }
+    const std::string text = input.substr(token.start, token.end - token.start);
+    if (IsValidOptionToken(text, scan.node)) {
+      ApplyRange_(buffer, token.start, token.end, AMTokenType::Option);
+    }
+  }
+}
+
+void HighlightNicknameAtSigns_(const HighlightContext_ &context,
+                               HighlightBuffer_ &buffer) {
+  if (!context.tokens || !context.input) {
+    return;
+  }
+
+  const std::string &input = *context.input;
+  for (const auto &token : *context.tokens) {
+    if (token.start >= input.size()) {
+      continue;
+    }
+
+    const std::string text = input.substr(token.start, token.end - token.start);
+    size_t prefix_offset = 0;
+    if (token.start < token.end && IsQuotedChar(input[token.start])) {
+      prefix_offset = 1;
+    }
+    if (prefix_offset >= text.size()) {
+      continue;
+    }
+
+    const std::string scan = text.substr(prefix_offset);
+    const size_t at_pos_local = FindUnescapedChar(scan, '@');
+    if (at_pos_local == std::string::npos) {
+      continue;
+    }
+    if (at_pos_local == 0) {
+      if (IsChannelTokenType_(token.type)) {
+        ApplyRange_(buffer, token.start + prefix_offset,
+                    token.start + prefix_offset + 1, AMTokenType::AtSign);
+      }
+      continue;
+    }
+
+    const size_t at_pos = prefix_offset + at_pos_local;
+    const std::string prefix =
+        UnescapeBackticks(scan.substr(0, at_pos_local), true);
+    if (prefix.empty()) {
+      continue;
+    }
+
+    const size_t nick_start = token.start + prefix_offset;
+    const size_t nick_end = token.start + at_pos;
+    const size_t at_index = nick_end;
+    AMTokenType nick_type = ClassifyNicknameTokenType(context.runtime, prefix);
+    if (context.runtime && IsChannelTokenType_(token.type)) {
+      nick_type = TerminalTokenTypeFromState(
+          context.runtime->QueryTerminalNameState(prefix));
+    }
+    ApplyRange_(buffer, nick_start, nick_end, nick_type);
+    ApplyRange_(buffer, at_index, at_index + 1, AMTokenType::AtSign);
+  }
+}
+
+std::optional<ParsedVarHighlight_> ParseVarHighlight_(
+    const std::string &token) {
+  size_t parsed_end = 0;
+  ParsedVarHighlight_ parsed = {};
+  if (!AMDomain::var::ParseVarRefAt(token, 0, token.size(), true, true,
+                                    &parsed_end, &parsed.ref) ||
+      !parsed.ref.valid || parsed_end == 0) {
+    return std::nullopt;
+  }
+
+  parsed.local_end = std::min(parsed_end, token.size());
+  parsed.has_closing_brace = parsed.ref.braced && parsed.local_end > 0 &&
+                             token[parsed.local_end - 1] == '}';
+  if (!parsed.ref.explicit_domain) {
+    return parsed;
+  }
+
+  size_t body_begin = parsed.ref.braced ? 2 : 1;
+  size_t body_end = parsed.local_end;
+  if (parsed.has_closing_brace && body_end > 0) {
+    --body_end;
+  }
+  if (body_end <= body_begin || body_begin >= token.size()) {
+    return parsed;
+  }
+
+  const std::string body = token.substr(body_begin, body_end - body_begin);
+  const size_t colon = body.find(':');
+  if (colon != std::string::npos) {
+    parsed.zone_token = body.substr(0, colon);
+  }
+  return parsed;
+}
+
+void HighlightSingleVarToken_(const HighlightContext_ &context,
+                              HighlightBuffer_ &buffer, size_t token_start,
+                              size_t token_end) {
+  if (!context.input || token_end <= token_start ||
+      token_start >= context.input->size()) {
+    return;
+  }
+
+  const size_t bounded_end = std::min(token_end, context.input->size());
+  const std::string token = context.input->substr(token_start,
+                                                  bounded_end - token_start);
+  const auto parsed = ParseVarHighlight_(token);
+  if (!parsed.has_value()) {
+    return;
+  }
+
+  ApplyRange_(buffer, token_start, token_start + 1, AMTokenType::DollarSign);
+  size_t cursor = token_start + 1;
+  if (parsed->ref.braced && cursor < token_start + parsed->local_end) {
+    ApplyRange_(buffer, cursor, cursor + 1, AMTokenType::LeftBraceSign);
+    ++cursor;
+  }
+
+  if (parsed->ref.explicit_domain) {
+    const size_t zone_begin = cursor;
+    const size_t zone_end =
+        std::min(zone_begin + parsed->zone_token.size(), token_start + parsed->local_end);
+    if (zone_end > zone_begin) {
+      const AMTokenType zone_type =
+          ClassifyVarZoneTokenType(context.runtime, parsed->zone_token);
+      ApplyRange_(buffer, zone_begin, zone_end, zone_type);
+    }
+    cursor = zone_end;
+    if (cursor < token_start + parsed->local_end) {
+      ApplyRange_(buffer, cursor, cursor + 1, AMTokenType::ColonSign);
+      ++cursor;
+    }
+  }
+
+  const AMTokenType var_type = [&]() {
+    if (parsed->ref.varname.empty()) {
+      return AMTokenType::VarNameMissing;
+    }
+    if (parsed->ref.explicit_domain && context.runtime) {
+      auto scoped = context.runtime->GetVar(parsed->ref.domain, parsed->ref.varname);
+      return (scoped.rcm) ? AMTokenType::VarName : AMTokenType::VarNameMissing;
+    }
+    return VarNameTypeFor(context.runtime, parsed->ref.varname);
+  }();
+
+  const size_t var_end = std::min(cursor + parsed->ref.varname.size(),
+                                  token_start + parsed->local_end);
+  if (var_end > cursor) {
+    ApplyRange_(buffer, cursor, var_end, var_type);
+  }
+
+  if (parsed->ref.braced && parsed->has_closing_brace &&
+      token_start + parsed->local_end > token_start) {
+    const size_t close_pos = token_start + parsed->local_end - 1;
+    if (close_pos >= token_start + 1) {
+      ApplyRange_(buffer, close_pos, close_pos + 1,
+                  AMTokenType::RightBraceSign);
+    }
+  }
+}
+
+void HighlightVarReferences_(const HighlightContext_ &context,
+                             HighlightBuffer_ &buffer) {
+  if (!context.input || context.input->empty()) {
+    return;
+  }
+
+  const std::string &input = *context.input;
+  for (size_t i = 0; i < input.size(); ++i) {
+    if (input[i] == '`' && i + 1 < input.size() && input[i + 1] == '$') {
+      ++i;
+      continue;
+    }
+    if (input[i] != '$') {
+      continue;
+    }
+
+    size_t end = 0;
+    if (!ParseVarTokenAt(input, i, input.size(), &end)) {
+      continue;
+    }
+    HighlightSingleVarToken_(context, buffer, i, end);
+    i = end - 1;
+  }
+}
+
+std::optional<VarShortcutDefine_>
+FindVarShortcutDefine_(const HighlightContext_ &context) {
+  if (!context.tokens || !context.input || context.tokens->empty()) {
+    return std::nullopt;
+  }
+
+  const std::string &input = *context.input;
+  const size_t size = input.size();
+  const auto &tokens = *context.tokens;
+  const auto &first = tokens.front();
+  if (first.quoted || first.content_start >= size ||
+      first.content_end <= first.content_start || first.content_end > size) {
+    return std::nullopt;
+  }
+
+  size_t var_end = 0;
+  if (!ParseVarTokenAt(input, first.content_start, first.content_end, &var_end)) {
+    return std::nullopt;
+  }
+
+  VarShortcutDefine_ define = {};
+  if (var_end < first.content_end && input[var_end] == '=') {
+    define.equal_pos = var_end;
+    define.value_begin = var_end + 1;
+    define.valid = true;
+    return define;
+  }
+  if (tokens.size() < 2) {
+    return std::nullopt;
+  }
+
+  const auto &second = tokens[1];
+  if (second.quoted || second.content_start >= size ||
+      second.content_end <= second.content_start || second.content_end > size) {
+    return std::nullopt;
+  }
+
+  const std::string second_text =
+      input.substr(second.content_start, second.content_end - second.content_start);
+  if (second_text == "=") {
+    define.equal_pos = second.content_start;
+    define.value_begin = size;
+    if (tokens.size() >= 3 && tokens[2].content_start < size) {
+      define.value_begin = tokens[2].content_start;
+    }
+    define.valid = true;
+    return define;
+  }
+  if (!second_text.empty() && second_text.front() == '=') {
+    define.equal_pos = second.content_start;
+    define.value_begin = second.content_start + 1;
+    define.valid = true;
+    return define;
+  }
+
+  return std::nullopt;
+}
+
+void ApplyVarShortcutDefine_(HighlightBuffer_ &buffer,
+                             const VarShortcutDefine_ &define) {
+  if (!define.valid) {
+    return;
+  }
+
+  ApplyRange_(buffer, define.equal_pos, define.equal_pos + 1,
+              AMTokenType::EqualSign);
+  ApplyRange_(buffer, define.value_begin, buffer.types.size(),
+              AMTokenType::VarValue);
+}
+
+void HighlightVars_(const HighlightContext_ &context, HighlightBuffer_ &buffer) {
+  HighlightVarReferences_(context, buffer);
+  const auto define = FindVarShortcutDefine_(context);
+  if (define.has_value()) {
+    ApplyVarShortcutDefine_(buffer, *define);
+  }
+}
+
+void HighlightShellMode_(const HighlightContext_ &context,
+                         HighlightBuffer_ &buffer) {
+  if (!context.input) {
+    return;
+  }
+
+  const std::string &input = *context.input;
+  size_t shell_head = 0;
+  while (shell_head < input.size() && AMStr::IsWhitespace(input[shell_head])) {
+    ++shell_head;
+  }
+
+  if (shell_head >= input.size() || input[shell_head] != '!') {
+    return;
+  }
+
+  ApplyRange_(buffer, shell_head, shell_head + 1, AMTokenType::BangSign);
+  if (shell_head + 1 < input.size()) {
+    ApplyRange_(buffer, shell_head + 1, input.size(), AMTokenType::ShellCmd);
+  }
 }
 
 class TokenHighlightFormatter final {
@@ -329,407 +689,22 @@ public:
       return;
     }
 
-    std::vector<AMTokenType> types(size, AMTokenType::Common);
-    std::vector<int> priorities(size, 0);
+    HighlightContext_ context = {};
+    context.input = &input;
+    context.tokens = &tokens;
+    context.command_tree = command_tree_;
+    context.runtime = runtime_;
 
-    auto apply_range = [&](size_t start, size_t end, AMTokenType type) {
-      if (start >= end || start >= size) {
-        return;
-      }
-      if (end > size) {
-        end = size;
-      }
-      const int priority = PriorityForType_(type);
-      for (size_t i = start; i < end; ++i) {
-        if (priority >= priorities[i]) {
-          priorities[i] = priority;
-          types[i] = type;
-        }
-      }
-    };
+    HighlightBuffer_ buffer = InitializeHighlightBuffer_(size);
+    HighlightEscapeSigns_(context, buffer);
+    HighlightQuotedTokens_(context, buffer);
+    HighlightSemanticTokenRanges_(context, buffer);
+    HighlightCommandsAndOptions_(context, buffer);
+    HighlightNicknameAtSigns_(context, buffer);
+    HighlightVars_(context, buffer);
+    HighlightShellMode_(context, buffer);
 
-    auto highlight_var_token = [&](size_t token_start, size_t token_end) {
-      if (token_end <= token_start || token_start >= input.size()) {
-        return;
-      }
-      if (token_end > input.size()) {
-        token_end = input.size();
-      }
-      const std::string token =
-          input.substr(token_start, token_end - token_start);
-      size_t parsed_end = 0;
-      AMDomain::var::VarRef ref = {};
-      if (!AMDomain::var::ParseVarRefAt(token, 0, token.size(), true, true,
-                                        &parsed_end, &ref) ||
-          !ref.valid || parsed_end == 0) {
-        return;
-      }
-
-      const size_t local_end = std::min(parsed_end, token.size());
-      const bool braced = ref.braced;
-      const bool explicit_domain = ref.explicit_domain;
-      const std::string varname = ref.varname;
-      const bool has_closing_brace =
-          braced && local_end > 0 && token[local_end - 1] == '}';
-      std::string zone_token = {};
-      if (explicit_domain) {
-        size_t body_begin = braced ? 2 : 1;
-        size_t body_end = local_end;
-        if (has_closing_brace && body_end > 0) {
-          --body_end;
-        }
-        if (body_end > body_begin && body_begin < token.size()) {
-          const std::string body =
-              token.substr(body_begin, body_end - body_begin);
-          const size_t colon = body.find(':');
-          if (colon != std::string::npos) {
-            zone_token = body.substr(0, colon);
-          }
-        }
-      }
-
-      apply_range(token_start, token_start + 1, AMTokenType::DollarSign);
-      size_t cursor = token_start + 1;
-
-      if (braced && cursor < token_start + local_end) {
-        apply_range(cursor, cursor + 1, AMTokenType::LeftBraceSign);
-        ++cursor;
-      }
-
-      if (explicit_domain) {
-        const size_t zone_begin = cursor;
-        const size_t zone_end =
-            std::min(zone_begin + zone_token.size(), token_start + local_end);
-        if (zone_end > zone_begin) {
-          const AMTokenType zone_type =
-              ClassifyVarZoneTokenType_(runtime_, zone_token);
-          apply_range(zone_begin, zone_end, zone_type);
-        }
-        cursor = zone_end;
-        if (cursor < token_start + local_end) {
-          apply_range(cursor, cursor + 1, AMTokenType::ColonSign);
-          ++cursor;
-        }
-      }
-
-      const AMTokenType var_type = [&]() {
-        if (varname.empty()) {
-          return AMTokenType::VarNameMissing;
-        }
-        if (explicit_domain && runtime_) {
-          auto scoped = runtime_->GetVar(ref.domain, varname);
-          return (scoped.rcm) ? AMTokenType::VarName
-                              : AMTokenType::VarNameMissing;
-        }
-        return VarNameTypeFor_(runtime_, varname);
-      }();
-
-      const size_t var_end =
-          std::min(cursor + varname.size(), token_start + local_end);
-      if (var_end > cursor) {
-        apply_range(cursor, var_end, var_type);
-        cursor = var_end;
-      }
-
-      if (braced && has_closing_brace && token_start + local_end > token_start) {
-        const size_t close_pos = token_start + local_end - 1;
-        if (close_pos >= token_start + 1) {
-          apply_range(close_pos, close_pos + 1, AMTokenType::RightBraceSign);
-        }
-      }
-    };
-
-    auto highlight_var_references = [&]() {
-      if (input.empty()) {
-        return;
-      }
-      for (size_t i = 0; i < input.size(); ++i) {
-        if (input[i] == '`' && i + 1 < input.size() && input[i + 1] == '$') {
-          ++i;
-          continue;
-        }
-        if (input[i] != '$') {
-          continue;
-        }
-        size_t end = 0;
-        if (!ParseVarTokenAt_(input, i, input.size(), &end)) {
-          continue;
-        }
-        highlight_var_token(i, end);
-        i = end - 1;
-      }
-    };
-
-    auto highlight_var_shortcut_define = [&]() {
-      if (tokens.empty()) {
-        return;
-      }
-      const auto &first = tokens.front();
-      if (first.quoted || first.content_start >= size ||
-          first.content_end <= first.content_start || first.content_end > size) {
-        return;
-      }
-      size_t var_end = 0;
-      if (!ParseVarTokenAt_(input, first.content_start, first.content_end,
-                            &var_end)) {
-        return;
-      }
-
-      auto apply_define_tail = [&](size_t eq_pos, size_t value_begin) {
-        if (eq_pos < size) {
-          apply_range(eq_pos, eq_pos + 1, AMTokenType::EqualSign);
-        }
-        if (value_begin < size) {
-          apply_range(value_begin, size, AMTokenType::VarValue);
-        }
-      };
-
-      if (var_end < first.content_end && input[var_end] == '=') {
-        apply_define_tail(var_end, var_end + 1);
-        return;
-      }
-      if (tokens.size() < 2) {
-        return;
-      }
-
-      const auto &second = tokens[1];
-      if (second.quoted || second.content_start >= size ||
-          second.content_end <= second.content_start ||
-          second.content_end > size) {
-        return;
-      }
-      const std::string second_text = input.substr(
-          second.content_start, second.content_end - second.content_start);
-      if (second_text == "=") {
-        size_t value_begin = size;
-        if (tokens.size() >= 3) {
-          const auto &value_token = tokens[2];
-          if (value_token.content_start < size) {
-            value_begin = value_token.content_start;
-          }
-        }
-        apply_define_tail(second.content_start, value_begin);
-        return;
-      }
-      if (!second_text.empty() && second_text.front() == '=') {
-        apply_define_tail(second.content_start, second.content_start + 1);
-      }
-    };
-
-    auto highlight_escape_signs = [&]() {
-      if (input.empty()) {
-        return;
-      }
-      for (size_t i = 0; i + 1 < input.size(); ++i) {
-        if (input[i] != '`') {
-          continue;
-        }
-        const char next = input[i + 1];
-        if (next != '$' && next != '@' && next != '"' && next != '\'' &&
-            next != '`') {
-          continue;
-        }
-        apply_range(i, i + 2, AMTokenType::EscapeSign);
-        ++i;
-      }
-    };
-
-    auto highlight_nickname_at_sign = [&]() {
-      for (const auto &token : tokens) {
-        if (token.start >= input.size()) {
-          continue;
-        }
-        const std::string text = input.substr(token.start, token.end - token.start);
-        size_t prefix_offset = 0;
-        if (token.start < token.end && IsQuoted(input[token.start])) {
-          prefix_offset = 1;
-        }
-        if (prefix_offset >= text.size()) {
-          continue;
-        }
-        const std::string scan = text.substr(prefix_offset);
-        const size_t at_pos_local = FindUnescapedChar_(scan, '@');
-        if (at_pos_local == std::string::npos) {
-          continue;
-        }
-        if (at_pos_local == 0) {
-          if (IsChannelTokenType_(token.type)) {
-            apply_range(token.start + prefix_offset, token.start + prefix_offset + 1,
-                        AMTokenType::AtSign);
-          }
-          continue;
-        }
-        const size_t at_pos = prefix_offset + at_pos_local;
-        const std::string prefix = UnescapeBackticks_(scan.substr(0, at_pos_local));
-        if (prefix.empty()) {
-          continue;
-        }
-        const size_t nick_start = token.start + prefix_offset;
-        const size_t nick_end = token.start + at_pos;
-        const size_t at_index = nick_end;
-        AMTokenType nick_type = ClassifyNicknameTokenType_(runtime_, prefix);
-        if (runtime_ && IsChannelTokenType_(token.type)) {
-          nick_type = TerminalTokenTypeFromState_(
-              runtime_->QueryTerminalNameState(prefix));
-        }
-        apply_range(nick_start, nick_end, nick_type);
-        apply_range(at_index, at_index + 1, AMTokenType::AtSign);
-      }
-    };
-
-    auto highlight_commands_and_options = [&]() {
-      const CommandNode *node = nullptr;
-      std::string path = {};
-      if (!command_tree_) {
-        return;
-      }
-      for (const auto &token : tokens) {
-        if (token.quoted) {
-          continue;
-        }
-        const std::string text = input.substr(token.start, token.end - token.start);
-        if (text.empty()) {
-          continue;
-        }
-        if (path.empty()) {
-          if (command_tree_->IsModule(text)) {
-            apply_range(token.start, token.end, AMTokenType::Module);
-            path = text;
-            node = command_tree_->FindNode(path);
-            continue;
-          }
-          if (command_tree_->IsTopCommand(text)) {
-            apply_range(token.start, token.end, AMTokenType::Command);
-            path = text;
-            node = command_tree_->FindNode(path);
-            continue;
-          }
-          continue;
-        }
-        if (node && node->subcommands.contains(text)) {
-          apply_range(token.start, token.end, AMTokenType::Command);
-          path += " " + text;
-          node = command_tree_->FindNode(path);
-        }
-      }
-
-      if (!node) {
-        return;
-      }
-      for (const auto &token : tokens) {
-        if (token.quoted) {
-          continue;
-        }
-        const std::string text = input.substr(token.start, token.end - token.start);
-        if (IsValidOptionToken_(text, node)) {
-          apply_range(token.start, token.end, AMTokenType::Option);
-        }
-      }
-    };
-
-    highlight_escape_signs();
-    for (const auto &token : tokens) {
-      if (token.quoted) {
-        apply_range(token.start, token.end, AMTokenType::String);
-      }
-    }
-    for (const auto &token : tokens) {
-      if (token.quoted) {
-        continue;
-      }
-      switch (token.type) {
-      case AMTokenType::IllegalCommand:
-      case AMTokenType::Nickname:
-      case AMTokenType::DisconnectedNickname:
-      case AMTokenType::UnestablishedNickname:
-      case AMTokenType::NonexistentNickname:
-      case AMTokenType::BuiltinArg:
-      case AMTokenType::NonexistentBuiltinArg:
-      case AMTokenType::ValidValue:
-      case AMTokenType::InvalidValue:
-      case AMTokenType::ValidNewNickname:
-      case AMTokenType::InvalidNewNickname:
-      case AMTokenType::TerminalName:
-      case AMTokenType::DisconnectedTerminalName:
-      case AMTokenType::UnestablishedTerminalName:
-      case AMTokenType::NonexistentTerminalName:
-      case AMTokenType::ChannelName:
-      case AMTokenType::DisconnectedChannelName:
-      case AMTokenType::NonexistentChannelName:
-      case AMTokenType::ValidNewChannelName:
-      case AMTokenType::InvalidNewChannelName:
-      case AMTokenType::Path:
-      case AMTokenType::Nonexistentpath:
-      case AMTokenType::File:
-      case AMTokenType::Dir:
-      case AMTokenType::Symlink:
-      case AMTokenType::Special:
-        apply_range(token.start, token.end, token.type);
-        break;
-      default:
-        break;
-      }
-    }
-
-    highlight_commands_and_options();
-    highlight_nickname_at_sign();
-    highlight_var_references();
-    highlight_var_shortcut_define();
-
-    size_t shell_head = 0;
-    while (shell_head < size && AMStr::IsWhitespace(input[shell_head])) {
-      ++shell_head;
-    }
-    const bool shell_mode = shell_head < size && input[shell_head] == '!';
-    if (shell_mode) {
-      apply_range(shell_head, shell_head + 1, AMTokenType::BangSign);
-      if (shell_head + 1 < size) {
-        apply_range(shell_head + 1, size, AMTokenType::ShellCmd);
-      }
-    }
-
-    constexpr size_t kTokenTypeCount =
-        static_cast<size_t>(AMTokenType::InvalidNewChannelName) + 1;
-    std::array<std::string, kTokenTypeCount> style_tags = {};
-    for (size_t i = 0; i < kTokenTypeCount; ++i) {
-      style_tags[i] =
-          ResolveStyleTagForType_(runtime_, static_cast<AMTokenType>(i));
-    }
-
-    formatted->reserve(input.size() + 16);
-    std::string current_tag = {};
-    for (size_t i = 0; i < size; ++i) {
-      const AMTokenType cur_type = types[i];
-      if (IsPathRenderType_(cur_type)) {
-        size_t end = i + 1;
-        while (end < size && types[end] == cur_type) {
-          ++end;
-        }
-        if (!current_tag.empty()) {
-          formatted->append("[/]");
-          current_tag.clear();
-        }
-        formatted->append(
-            FormatPathSegment_(runtime_, input.substr(i, end - i), cur_type));
-        i = end - 1;
-        continue;
-      }
-
-      const std::string &tag = style_tags[static_cast<size_t>(types[i])];
-      if (tag != current_tag) {
-        if (!current_tag.empty()) {
-          formatted->append("[/]");
-        }
-        if (!tag.empty()) {
-          formatted->append(tag);
-        }
-        current_tag = tag;
-      }
-      AppendEscapedBbcodeChar_(*formatted, input[i]);
-    }
-    if (!current_tag.empty()) {
-      formatted->append("[/]");
-    }
+    RenderFormattedOutput_(input, buffer, runtime_, formatted);
   }
 
 private:
