@@ -1,10 +1,18 @@
 #include "interface/token_analyser/TokenAnalyzerRuntimeAdapter.hpp"
 
+#include "application/client/ClientAppService.hpp"
+#include "application/host/HostAppService.hpp"
+#include "application/prompt/PromptProfileManager.hpp"
+#include "application/terminal/TermAppService.hpp"
+#include "application/var/VarAppService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
+#include "interface/adapters/var/VarInterfaceService.hpp"
+#include "interface/style/StyleManager.hpp"
+
 #include <chrono>
 #include <optional>
 
@@ -48,6 +56,19 @@ std::string NormalizeNicknameOrDefault_(const std::string &nickname,
 }
 
 } // namespace
+
+TokenAnalyzerRuntimeAdapter::TokenAnalyzerRuntimeAdapter(
+    AMApplication::client::ClientAppService &client_service,
+    AMApplication::host::HostAppService &host_service,
+    AMApplication::terminal::TermAppService &terminal_service,
+    AMApplication::var::VarAppService &var_service,
+    AMInterface::var::VarInterfaceService &var_interface_service,
+    AMInterface::style::AMStyleService &style_service,
+    AMApplication::prompt::PromptProfileManager &prompt_profile_manager)
+    : client_service_(client_service), host_service_(host_service),
+      terminal_service_(terminal_service), var_service_(var_service),
+      var_interface_service_(var_interface_service), style_service_(style_service),
+      prompt_profile_manager_(prompt_profile_manager) {}
 
 AMDomain::client::ClientHandle
 TokenAnalyzerRuntimeAdapter::CurrentClient() const {
@@ -165,9 +186,9 @@ TokenAnalyzerRuntimeAdapter::ResolveTerminalSnapshot_(
 
   const auto now = std::chrono::steady_clock::now();
   {
-    std::lock_guard<std::mutex> lock(terminal_snapshot_mutex_);
-    auto it = terminal_snapshots_.find(key);
-    if (it != terminal_snapshots_.end() &&
+    auto cache_guard = terminal_snapshot_cache_.lock();
+    auto it = cache_guard->values.find(key);
+    if (it != cache_guard->values.end() &&
         (now - it->second.updated_at) <= kTerminalSnapshotTtl) {
       return it->second;
     }
@@ -180,7 +201,8 @@ TokenAnalyzerRuntimeAdapter::ResolveTerminalSnapshot_(
     snapshot.status = terminal_result.data->GetSessionState().status;
     auto channels_result = terminal_result.data->ListChannels({}, {});
     if (channels_result.rcm) {
-      for (const auto &[channel, channel_port] : channels_result.data.channels) {
+      for (const auto &[channel, channel_port] :
+           channels_result.data.channels) {
         snapshot.channel_ok[channel] =
             channel_port != nullptr && !channel_port->GetState().closed;
       }
@@ -189,8 +211,8 @@ TokenAnalyzerRuntimeAdapter::ResolveTerminalSnapshot_(
   snapshot.updated_at = now;
 
   {
-    std::lock_guard<std::mutex> lock(terminal_snapshot_mutex_);
-    terminal_snapshots_[key] = snapshot;
+    auto cache_guard = terminal_snapshot_cache_.lock();
+    cache_guard->values[key] = snapshot;
   }
   return snapshot;
 }
