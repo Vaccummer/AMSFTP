@@ -4432,3 +4432,45 @@ remember to escape [
 6. ssh cli command complete improvement
 
 completion should be inteligent just like var zone and varname complete, detect cursor_prefix and cursor_postfix whether has @ then decide which part to complete
+代码优化
+
+# 通用规范
+
+1. using用法:
+   ✅使用直接导入: using AMDomain::client::ClientHandle;
+   ❌而非别名: using ClientHandle = AMDomain::client::ClientHandle;
+2. using位置
+
+classITerminalPort;
+
+usingAMDomain::client::ClientHandle;
+
+usingAMDomain::client::ControlComponent;
+
+usingAMDomain::host::ConRequest;
+
+usingTerminalHandle = std::shared_ptr `<ITerminalPort>`;
+
+尽量集中靠前, 顺序为: forward delcare, 其他作用域引用, 该作用域别名定义
+
+3. helper 规则
+   1. 优先复用foundation/tools里的函数
+   2. 如果某个函数具有跨layer通用性, 考虑将其放到tools中
+   3. 如果函数具有单层通用性, 而且这类函数较多, 则创建一个专属头文件放置
+   4. 如果函数只在当前文件使用, 则应写在cpp的匿名作用域内
+
+# Foundation 层
+
+@src\foundation\core\Enum.hpp
+非全项目共享的enum, 需要移到相应的层, 例如TransferControl 应移到domain/transfer
+SearchType 也需要移动到相应层
+
+# Domain层
+
+Domain层的service namespace统一为AMDomain::xx::service, 只允许有一个service namespace
+删除usingAMLoggerWritePort = AMDomain::log::ILoggerWritePort; 类似这样的兼容alias
+
+@src\domain\prompt\PromptDomainService.hpp
+
+@src\domain\style\StyleDomainService.hpp
+将这些文件拆分为头文件和cpp文件

@@ -1,18 +1,10 @@
-Refactor terminal and channel related codes to current structure:
+Infrastruture Client Part Refactor
 
-1. ports
-   include terminal port and channel port, both are abstract classes
-   defines interfaces signatures
-   in domain layer
-   Channel Port: supplies all kinds of interfaces that operate on channels iteself, for example: read, write,close, read_write loop
+# 通用规则
 
-   Terminal port: supplies interfaces to manage channels, for example: create, remove, rename channels, or get channel name list
-   some terminal port interfaces may rely on channel port, like: terminal->remove relies on channel->close. terminal->rename will change channel name related attr
-2. implemention
-
-in infra layer, includes three parts:
-
-1. libssh2 implemention, implement terminal port and channel port with libssh2
-2. local implemention, implemention ports with local terminal
-3. some shared helper functions or classes
-   ps: intermeidiate class like CachedChannelPort is not allowed now
+1. 基础排版格式
+   1.1 两个文件, 例如FTP.hpp, FTP.cpp
+   1.2 FTP.hpp: 存放完整的核心类FTPBase, AMFTPIOCore, 在匿名空间中声明辅助函数
+   1.3 FTP.cpp: 实现辅助函数
+   1.4 尽量维持核心类不太臃肿, 抽离类的静态函数, 或者与类绑定不深的函数为辅助函数
+2.
