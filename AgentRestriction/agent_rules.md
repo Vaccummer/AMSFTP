@@ -9,7 +9,7 @@
 
 ## 2. Code Style Constraints
 
-1. Use C++17 style by default.
+1. Use C++20 style by default.
 2. Avoid C-style code when a C++ alternative is reasonable.
 3. Follow the repository `clang-format` style.
 4. don't use const & on pointer and enum data type in function partameters

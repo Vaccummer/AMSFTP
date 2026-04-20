@@ -15,7 +15,3 @@
 
 task thread 3
 num "3" is valid but styled as "cli.unexpected"
-
-2. add a module "pool"
-
-pool is the counterpart of module "client", they share the same output format and function logic, but "pool" manages clients from the public pool instead of maintainer

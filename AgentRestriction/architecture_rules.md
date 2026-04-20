@@ -11,24 +11,3 @@
 7. Bootstrap is composition-only and must not include use-case business logic.
 8. Enforce include/dependency boundary checks via guardrail scripts.
 9. Refactor execution should proceed by vertical slices, not big-bang rewrites.
-
-## Confirmation-Required Operation Rule
-
-For operations affected by user confirmation:
-
-1. Split at confirmation point:
-   - pre-confirm app slice (analyze/plan/validate)
-   - interface confirmation step
-   - post-confirm app slice (execute/abort)
-2. Interface owns user interaction and decision collection.
-3. Application owns behavior and state transition for both approve and reject paths.
-
-## Non-Interactive Policy Rule
-
-Use explicit confirm policy in interface-to-app request:
-
-- `RequireConfirm`
-- `AutoApprove` (force/yes mode)
-- `DenyIfConfirmNeeded`
-
-No hidden interactive fallback in non-interactive mode.
