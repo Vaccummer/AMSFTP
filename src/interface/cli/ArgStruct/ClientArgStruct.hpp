@@ -66,5 +66,3 @@ struct DisconnectArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
-
-
