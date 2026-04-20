@@ -27,6 +27,7 @@ private:
   struct TerminalBinding_ {
     AMT::ClientHandle owner_client = nullptr;
     AMSFTPIOCore *sftp_core = nullptr;
+    AMT::BufferExceedCallback buffer_exceed_callback = {};
   };
 
   struct TerminalStateCache {
@@ -90,7 +91,8 @@ private:
   }
 
 public:
-  SSHTerminalPort(AMT::ClientHandle owner_client) {
+  SSHTerminalPort(AMT::ClientHandle owner_client,
+                  AMT::BufferExceedCallback buffer_exceed_callback = {}) {
     if (!owner_client) {
       throw std::invalid_argument("owner_client cannot be null");
     }
@@ -105,7 +107,8 @@ public:
     }
     {
       auto binding = binding_.lock();
-      binding.store({std::move(owner_client), sftp_core});
+      binding.store(
+          {std::move(owner_client), sftp_core, std::move(buffer_exceed_callback)});
     }
   }
 
@@ -139,8 +142,8 @@ public:
     }
 
     const auto binding = GetBindingSnapshot_();
-    auto port = std::make_shared<RealtimeSSHChannelPort>(binding.owner_client,
-                                                         channel_name);
+    auto port = std::make_shared<RealtimeSSHChannelPort>(
+        binding.owner_client, channel_name, binding.buffer_exceed_callback);
     if (!port) {
       out.rcm = Err(EC::InvalidHandle, "terminal.open", channel_name,
                     "Failed to create realtime SSH channel port");

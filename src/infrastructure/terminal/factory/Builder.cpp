@@ -3,7 +3,9 @@
 #include "infrastructure/terminal/sftp/SSHTerminal.hpp"
 
 namespace AMDomain::terminal {
-ECMData<TerminalHandle> CreateTerminalPort(const ClientHandle &client) {
+ECMData<TerminalHandle>
+CreateTerminalPort(const ClientHandle &client,
+                   BufferExceedCallback buffer_exceed_callback) {
   if (!client) {
     return {nullptr, Err(EC::InvalidHandle, "CreateTerminalPort", "<client>",
                          "Client handle is null")};
@@ -25,7 +27,8 @@ ECMData<TerminalHandle> CreateTerminalPort(const ClientHandle &client) {
     }
 
     auto terminal =
-        std::make_shared<AMInfra::terminal::SFTP::SSHTerminalPort>(client);
+        std::make_shared<AMInfra::terminal::SFTP::SSHTerminalPort>(
+            client, buffer_exceed_callback);
     if (!terminal) {
       return {nullptr,
               Err(EC::InvalidHandle, "CreateTerminalPort", request.nickname,
@@ -44,7 +47,7 @@ ECMData<TerminalHandle> CreateTerminalPort(const ClientHandle &client) {
     }
     auto terminal =
         std::make_shared<AMInfra::client::LOCAL::terminal::LocalTerminalPort>(
-            client);
+            client, buffer_exceed_callback);
     if (!terminal) {
       return {nullptr,
               Err(EC::InvalidHandle, "CreateTerminalPort", request.nickname,

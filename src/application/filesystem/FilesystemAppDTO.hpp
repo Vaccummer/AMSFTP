@@ -1,7 +1,6 @@
 #pragma once
 
 #include "domain/filesystem/FileSystemModel.hpp"
-#include "foundation/core/DataClass.hpp"
 
 #include <map>
 #include <string>

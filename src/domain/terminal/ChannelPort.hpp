@@ -4,12 +4,12 @@
 #include "foundation/core/DataClass.hpp"
 
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <winsock2.h>
 
 namespace AMDomain::terminal {
 class IChannelPort;
@@ -61,6 +61,20 @@ struct ChannelCacheTruncateResult {
   bool truncated = false;
 };
 
+enum class BufferExceedThresholdKind { Soft, Hard };
+
+struct BufferExceedEvent {
+  std::string terminal_key = {};
+  std::string channel_name = {};
+  BufferExceedThresholdKind threshold_kind = BufferExceedThresholdKind::Soft;
+  size_t cached_bytes = 0;
+  size_t threshold_bytes = 0;
+  bool in_alternate_screen = false;
+  ECM last_error = OK;
+};
+
+using BufferExceedCallback = std::function<void(const BufferExceedEvent &)>;
+
 struct ChannelPortState {
   bool attached = false;
   bool closed = false;
@@ -86,7 +100,7 @@ struct ChannelLoopStartArgs {
 
 struct ChannelForegroundBindArgs {
   ChannelOutputProcessor processor = {};
-  std::intptr_t key_event_handle = -1;
+  SOCKET key_event_handle = INVALID_SOCKET;
   AMAtomic<std::vector<char>> *key_cache = nullptr;
   ControlComponent control = {};
   int write_kick_timeout_ms = 0;
@@ -98,7 +112,7 @@ struct ChannelLoopState {
   bool closed = false;
   bool detach_requested = false;
   bool has_error = false;
-  std::intptr_t state_wait_handle = -1;
+  SOCKET state_wait_handle = INVALID_SOCKET;
   ECM last_error = OK;
 };
 
@@ -109,7 +123,7 @@ public:
   [[nodiscard]] virtual std::string GetTerminalKey() const = 0;
   [[nodiscard]] virtual std::string GetChannelName() const = 0;
 
-  [[nodiscard]] virtual ECMData<std::intptr_t> GetWaitHandle() const = 0;
+  [[nodiscard]] virtual ECMData<SOCKET> GetWaitHandle() const = 0;
 
   virtual ECM Init(const ChannelInitArgs &init_args,
                    const ControlComponent &control = {}) = 0;

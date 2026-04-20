@@ -17,6 +17,7 @@ inline constexpr int DefaultSFTPPort = 22;
 inline constexpr int DefaultFTPPort = 21;
 inline constexpr int DefaultHTTPPort = 80;
 inline constexpr const char *const klocalname = "local";
+using ClientNickname = std::string;
 
 enum class ClientProtocol {
   UnInitilized = -1,
@@ -145,7 +146,6 @@ struct ConRequest {
     keyfile = 17,
     compression = 19,
   };
-  using ClientNickname = std::string;
 
   ClientNickname nickname = "";
   ClientProtocol protocol = ClientProtocol::SFTP;

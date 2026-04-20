@@ -59,8 +59,11 @@ private:
   };
 
 public:
-  explicit ChannelCacheStore(std::string channel_name)
-      : channel_name_(std::move(channel_name)) {}
+  explicit ChannelCacheStore(std::string terminal_key, std::string channel_name,
+                             AMT::BufferExceedCallback buffer_exceed_callback = {})
+      : terminal_key_(std::move(terminal_key)),
+        channel_name_(std::move(channel_name)),
+        buffer_exceed_callback_(std::move(buffer_exceed_callback)) {}
 
   ~ChannelCacheStore() { (void)DetachConsumer(); }
 
@@ -259,6 +262,9 @@ public:
     out.data.eof = read_result.data.eof;
 
     AMT::ChannelOutputProcessor consumer = {};
+    AMT::BufferExceedCallback buffer_exceed_callback = {};
+    std::optional<AMT::BufferExceedEvent> soft_limit_event = std::nullopt;
+    std::optional<AMT::BufferExceedEvent> hard_limit_event = std::nullopt;
     bool hard_limit_hit_now = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -285,13 +291,21 @@ public:
         state_.cached_bytes += parsed.appended_bytes;
         if (!state_.soft_limit_hit && state_.cached_bytes >= kSoftLimitBytes) {
           state_.soft_limit_hit = true;
+          soft_limit_event = AMT::BufferExceedEvent{
+              terminal_key_,
+              channel_name_,
+              AMT::BufferExceedThresholdKind::Soft,
+              state_.cached_bytes,
+              kSoftLimitBytes,
+              state_.cache.in_alternate_screen,
+              state_.last_error};
           if (state_.soft_warn_epoch != state_.attach_epoch) {
             out.data.soft_limit_hit_now = true;
             state_.soft_warn_epoch = state_.attach_epoch;
           }
         }
 
-        if (state_.cached_bytes >= kHardLimitBytes) {
+        if (!state_.hard_limit_hit && state_.cached_bytes >= kHardLimitBytes) {
           state_.hard_limit_hit = true;
           hard_limit_hit_now = true;
           state_.last_error = Err(ErrorCode::FilesystemNoSpace,
@@ -299,10 +313,21 @@ public:
                                   "Terminal output cache hard limit exceeded "
                                   "(128MB); channel closed");
           state_.closed = true;
+          hard_limit_event = AMT::BufferExceedEvent{
+              terminal_key_,
+              channel_name_,
+              AMT::BufferExceedThresholdKind::Hard,
+              state_.cached_bytes,
+              kHardLimitBytes,
+              state_.cache.in_alternate_screen,
+              state_.last_error};
         }
 
         if (state_.attached && state_.consumer) {
           consumer = state_.consumer;
+        }
+        if (buffer_exceed_callback_) {
+          buffer_exceed_callback = buffer_exceed_callback_;
         }
       }
 
@@ -319,6 +344,21 @@ public:
       try {
         consumer(out.data.output);
       } catch (...) {
+      }
+    }
+
+    if (buffer_exceed_callback) {
+      if (soft_limit_event.has_value()) {
+        try {
+          buffer_exceed_callback(*soft_limit_event);
+        } catch (...) {
+        }
+      }
+      if (hard_limit_event.has_value()) {
+        try {
+          buffer_exceed_callback(*hard_limit_event);
+        } catch (...) {
+        }
       }
     }
 
@@ -508,7 +548,9 @@ public:
   }
 
 private:
+  std::string terminal_key_ = {};
   std::string channel_name_ = {};
+  AMT::BufferExceedCallback buffer_exceed_callback_ = {};
 
   mutable std::mutex mutex_ = {};
   RuntimeState_ state_ = {};

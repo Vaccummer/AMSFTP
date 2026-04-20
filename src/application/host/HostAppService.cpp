@@ -1,5 +1,4 @@
 #include "application/host/HostAppService.hpp"
-
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/string.hpp"
 
@@ -21,9 +20,7 @@ using AMDomain::host::HostService::ValidateNickname;
 } // namespace
 
 ECM HostAppService::Init(const HostConfigArg &host_config_arg) {
-  host_configs_.clear();
-  private_keys_.clear();
-
+  HostConfigMap host_configs = {};
   HostConfig local_candidate = host_config_arg.local_config;
   for (const auto &[raw_name, cfg] : host_config_arg.host_configs) {
     std::string key = NormalizeNickname(raw_name);
@@ -33,40 +30,54 @@ ECM HostAppService::Init(const HostConfigArg &host_config_arg) {
       local_candidate = value;
       continue;
     }
-    host_configs_[key] = value;
+    host_configs[key] = value;
   }
 
   local_candidate.request.nickname = "local";
   local_candidate.request.protocol = ClientProtocol::LOCAL;
+  HostConfig local_config = {};
   const ECM local_validate = ValidateConfig(local_candidate);
   if (!(local_validate)) {
-    local_config_ = AMDomain::host::HostService::LocalConfigFallback();
+    local_config = AMDomain::host::HostService::LocalConfigFallback();
   } else {
-    local_config_ = std::move(local_candidate);
+    local_config = std::move(local_candidate);
   }
-  if (!host_configs_.contains(AMDomain::host::klocalname)) {
-    host_configs_[AMDomain::host::klocalname] = local_config_;
+  if (!host_configs.contains(AMDomain::host::klocalname)) {
+    host_configs[AMDomain::host::klocalname] = local_config;
   }
 
-  private_keys_ = host_config_arg.private_keys;
+  {
+    auto guard = host_configs_.lock();
+    guard.store(std::move(host_configs));
+  }
+  {
+    auto guard = local_config_.lock();
+    guard.store(std::move(local_config));
+  }
+  {
+    auto guard = private_keys_.lock();
+    guard.store(host_config_arg.private_keys);
+  }
   return OK;
 }
 
 HostConfigArg HostAppService::GetInitArg() const {
   HostConfigArg out = {};
-  out.host_configs = host_configs_;
-  out.local_config = local_config_;
-  out.private_keys = private_keys_;
+  out.host_configs = host_configs_.lock().load();
+  out.local_config = local_config_.lock().load();
+  out.private_keys = private_keys_.lock().load();
   return out;
 }
 
-ECM HostAppService::FlushTo(
-    AMApplication::config::ConfigAppService *config_service) {
-  if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+ECM HostAppService::FlushTo(AMDomain::config::IConfigStorePort *store) {
+  if (store == nullptr) {
+    return Err(EC::InvalidArg, "host.flush", "", "config store is null");
   }
-  if (!config_service->Write<HostConfigArg>(GetInitArg())) {
-    return Err(EC::ConfigDumpFailed, "", "", "failed to flush host config");
+  const HostConfigArg snapshot = GetInitArg();
+  if (!store->Write(std::type_index(typeid(HostConfigArg)),
+                    static_cast<const void *>(&snapshot))) {
+    return Err(EC::ConfigDumpFailed, "host.flush", "",
+               "failed to flush host config");
   }
   return OK;
 }
@@ -75,61 +86,60 @@ ECMData<HostConfig> HostAppService::GetClientConfig(const std::string &nickname,
                                                     bool case_sensitive) {
   const std::string key = AMStr::Strip(nickname);
   if (key.empty()) {
-    return {HostConfig{}, Err(EC::HostConfigNotFound, "", "",
-                              "Host not found")};
+    return {HostConfig{},
+            Err(EC::HostConfigNotFound, "host.get", "", "Host not found")};
   }
 
   const std::string normalized_key = NormalizeNickname(key);
   if (IsLocalNickname(normalized_key)) {
-    return {local_config_, OK};
+    return {local_config_.lock().load(), OK};
   }
 
-  auto it = host_configs_.find(normalized_key);
-  if (it != host_configs_.end()) {
+  const auto host_configs = host_configs_.lock();
+  auto it = host_configs->find(normalized_key);
+  if (it != host_configs->end()) {
     return {it->second, OK};
   }
 
   if (!case_sensitive) {
     const std::string lowered = AMStr::lowercase(key);
     std::vector<std::string> matched = {};
-    for (const auto &[name, _] : host_configs_) {
+    for (const auto &[name, _] : *host_configs) {
       if (AMStr::lowercase(name) == lowered) {
         matched.push_back(name);
       }
     }
     if (matched.size() == 1) {
-      auto matched_it = host_configs_.find(matched.front());
-      if (matched_it != host_configs_.end()) {
+      auto matched_it = host_configs->find(matched.front());
+      if (matched_it != host_configs->end()) {
         return {matched_it->second, OK};
       }
     }
     if (matched.size() > 1) {
       return {HostConfig{},
-              Err(EC::HostConfigNotFound, "", key,
+              Err(EC::HostConfigNotFound, "host.get", key,
                   AMStr::fmt("Ambiguous host nickname, candidates: {}",
                              AMStr::join(matched, ", ")))};
     }
   }
 
-  return {HostConfig{}, Err(EC::HostConfigNotFound, "", normalized_key,
+  return {HostConfig{}, Err(EC::HostConfigNotFound, "host.get", normalized_key,
                             "Host not found")};
 }
 
 ECMData<HostConfig> HostAppService::GetLocalConfig() {
-  if (local_config_.request.nickname.empty()) {
-    local_config_ = AMDomain::host::HostService::LocalConfigFallback();
+  auto local_config = local_config_.lock();
+  if (local_config->request.nickname.empty()) {
+    local_config.store(AMDomain::host::HostService::LocalConfigFallback());
   }
-  return {local_config_, OK};
-}
-
-const HostAppService::HostConfigMap &HostAppService::HostConfigs() const {
-  return host_configs_;
+  return {local_config.load(), OK};
 }
 
 std::vector<std::string> HostAppService::ListNames() const {
+  const auto host_configs = host_configs_.lock();
   std::vector<std::string> names = {};
-  names.reserve(host_configs_.size());
-  for (const auto &[name, _] : host_configs_) {
+  names.reserve(host_configs->size());
+  for (const auto &[name, _] : *host_configs) {
     (void)_;
     names.push_back(name);
   }
@@ -142,20 +152,23 @@ bool HostAppService::HostExists(const std::string &nickname) const {
   if (IsLocalNickname(key)) {
     return true;
   }
-  return host_configs_.contains(key);
+  return host_configs_.lock()->contains(key);
 }
 
 ECMData<std::string>
 HostAppService::CheckNicknameAvailable(const std::string &nickname) const {
   const std::string normalized = NormalizeNickname(AMStr::Strip(nickname));
   if (normalized.empty() || !ValidateNickname(normalized)) {
-    return {"", Err(EC::InvalidArg, "", "", "invalid host nickname")};
+    return {"", Err(EC::InvalidArg, "host.check_nickname", "",
+                    "invalid host nickname")};
   }
   if (IsLocalNickname(normalized)) {
-    return {"", Err(EC::InvalidArg, "", "", "Nickname 'local' is reserved")};
+    return {"", Err(EC::InvalidArg, "host.check_nickname", "",
+                    "Nickname 'local' is reserved")};
   }
-  if (host_configs_.contains(normalized)) {
-    return {"", Err(EC::KeyAlreadyExists, "", "", AMStr::fmt("host already exists: {}", normalized))};
+  if (host_configs_.lock()->contains(normalized)) {
+    return {"", Err(EC::KeyAlreadyExists, "host.check_nickname", "",
+                    AMStr::fmt("host already exists: {}", normalized))};
   }
   return {normalized, OK};
 }
@@ -164,7 +177,7 @@ ECM HostAppService::AddHost(const HostConfig &entry, bool overwrite) {
   HostConfig normalized = entry;
   normalized.request.nickname = NormalizeNickname(normalized.request.nickname);
   if (!ValidateNickname(normalized.request.nickname)) {
-    return Err(EC::InvalidArg, "", "", "invalid host nickname");
+    return Err(EC::InvalidArg, "host.add", "", "invalid host nickname");
   }
 
   ECM validate_rcm = ValidateConfig(normalized);
@@ -173,19 +186,22 @@ ECM HostAppService::AddHost(const HostConfig &entry, bool overwrite) {
   }
 
   if (IsLocalNickname(normalized.request.nickname)) {
-    local_config_ = normalized;
-    local_config_.request.nickname = "local";
-    local_config_.request.protocol = ClientProtocol::LOCAL;
+    auto local_config = local_config_.lock();
+    local_config.store(normalized);
+    local_config->request.nickname = "local";
+    local_config->request.protocol = ClientProtocol::LOCAL;
     MarkConfigDirty();
     return OK;
   }
 
-  auto it = host_configs_.find(normalized.request.nickname);
-  if (it != host_configs_.end() && !overwrite) {
-    return Err(EC::KeyAlreadyExists, "", "", AMStr::fmt("host already exists: {}",
-                                                normalized.request.nickname));
+  auto host_configs = host_configs_.lock();
+  auto it = host_configs->find(normalized.request.nickname);
+  if (it != host_configs->end() && !overwrite) {
+    return Err(
+        EC::KeyAlreadyExists, "host.add", "",
+        AMStr::fmt("host already exists: {}", normalized.request.nickname));
   }
-  host_configs_[normalized.request.nickname] = std::move(normalized);
+  (*host_configs)[normalized.request.nickname] = std::move(normalized);
   MarkConfigDirty();
   return OK;
 }
@@ -193,64 +209,57 @@ ECM HostAppService::AddHost(const HostConfig &entry, bool overwrite) {
 ECM HostAppService::DelHost(const std::string &nickname) {
   const std::string key = NormalizeNickname(nickname);
   if (IsLocalNickname(key)) {
-    return Err(EC::InvalidArg, "", "", "local host cannot be removed");
+    return Err(EC::InvalidArg, "host.del", "", "local host cannot be removed");
   }
-  auto it = host_configs_.find(key);
-  if (it == host_configs_.end()) {
-    return Err(EC::HostConfigNotFound, "", "", AMStr::fmt("host not found: {}", key));
+  auto host_configs = host_configs_.lock();
+  auto it = host_configs->find(key);
+  if (it == host_configs->end()) {
+    return Err(EC::HostConfigNotFound, "host.del", "",
+               AMStr::fmt("host not found: {}", key));
   }
-  host_configs_.erase(it);
+  host_configs->erase(it);
   MarkConfigDirty();
   return OK;
 }
 
 std::vector<std::string> HostAppService::PrivateKeys() const {
-  return private_keys_;
-}
-
-ECM KnownHostsAppService::Init() {
-  known_hosts_.clear();
-  snapshot_loaded_ = true;
-  return OK;
+  return private_keys_.lock().load();
 }
 
 ECM KnownHostsAppService::Init(const KnownHostMap &known_hosts) {
-  known_hosts_ = known_hosts;
-  snapshot_loaded_ = true;
+  auto guard = known_hosts_.lock();
+  guard.store(known_hosts);
   return OK;
 }
 
-const KnownHostsAppService::KnownHostMap &
-KnownHostsAppService::KnownHosts() const {
-  (void)EnsureSnapshotLoaded_();
-  return known_hosts_;
+KnownHostMap KnownHostsAppService::GetInitArg() const {
+  return known_hosts_.lock().load();
 }
 
-ECM KnownHostsAppService::FlushTo(
-    AMApplication::config::ConfigAppService *config_service) {
-  if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config service is null");
+ECM KnownHostsAppService::FlushTo(AMDomain::config::IConfigStorePort *store) {
+  if (store == nullptr) {
+    return Err(EC::InvalidArg, "known_hosts.flush", "", "config store is null");
   }
-  const KnownHostEntryArg snapshot = SnapshotFromCache_();
-  if (!config_service->Write<KnownHostEntryArg>(snapshot)) {
-    return Err(EC::ConfigDumpFailed, "", "", "failed to flush known-hosts config");
+  const KnownHostEntryArg snapshot = {GetInitArg()};
+  if (!store->Write(std::type_index(typeid(KnownHostEntryArg)),
+                    static_cast<const void *>(&snapshot))) {
+    return Err(EC::ConfigDumpFailed, "known_hosts.flush", "",
+               "failed to flush known-hosts config");
   }
   return OK;
 }
 
 ECM KnownHostsAppService::FindKnownHost(KnownHostQuery &query) const {
-  ECM load_rcm = EnsureSnapshotLoaded_();
-  if (!(load_rcm)) {
-    return load_rcm;
-  }
   ECM validate_rcm = AMDomain::host::KnownHostRules::ValidateConfig(query);
   if (!(validate_rcm)) {
     return validate_rcm;
   }
   const auto key = AMDomain::host::KnownHostRules::BuildKnownHostKey(query);
-  auto it = known_hosts_.find(key);
-  if (it == known_hosts_.end()) {
-    return Err(EC::HostConfigNotFound, "", "", "known host entry not found");
+  const auto known_hosts = known_hosts_.lock();
+  auto it = known_hosts->find(key);
+  if (it == known_hosts->end()) {
+    return Err(EC::HostConfigNotFound, "known_hosts.find", "",
+               "known host entry not found");
   }
   query = it->second;
   return OK;
@@ -258,51 +267,19 @@ ECM KnownHostsAppService::FindKnownHost(KnownHostQuery &query) const {
 
 ECM KnownHostsAppService::UpsertKnownHost(const KnownHostQuery &query,
                                           bool overwrite) {
-  ECM load_rcm = EnsureSnapshotLoaded_();
-  if (!(load_rcm)) {
-    return load_rcm;
-  }
   ECM validate_rcm = AMDomain::host::KnownHostRules::ValidateConfig(query);
   if (!(validate_rcm)) {
     return validate_rcm;
   }
   const auto key = AMDomain::host::KnownHostRules::BuildKnownHostKey(query);
-  if (!overwrite && known_hosts_.contains(key)) {
-    return Err(EC::KeyAlreadyExists, "", "", "known host entry already exists");
+  auto known_hosts = known_hosts_.lock();
+  if (!overwrite && known_hosts->contains(key)) {
+    return Err(EC::KeyAlreadyExists, "known_hosts.upsert", "",
+               "known host entry already exists");
   }
-  known_hosts_[key] = query;
+  (*known_hosts)[key] = query;
   MarkConfigDirty();
   return OK;
 }
 
-ECM KnownHostsAppService::EnsureSnapshotLoaded_() const {
-  return snapshot_loaded_ ? OK : LoadSnapshot_();
-}
-
-ECM KnownHostsAppService::LoadSnapshot_() const {
-  if (snapshot_loaded_) {
-    return OK;
-  }
-  known_hosts_.clear();
-  snapshot_loaded_ = true;
-  return OK;
-}
-
-KnownHostEntryArg KnownHostsAppService::SnapshotFromCache_() const {
-  KnownHostEntryArg out = {};
-  out.entries = known_hosts_;
-  return out;
-}
-
-ECM KnownHostsAppService::PersistSnapshot_(const KnownHostEntryArg &snapshot,
-                                           bool dump_async) {
-  (void)dump_async;
-  return Init(snapshot.entries);
-}
-
-void KnownHostsAppService::ResetSnapshotCache_() {
-  known_hosts_.clear();
-  snapshot_loaded_ = false;
-}
 } // namespace AMApplication::host
-

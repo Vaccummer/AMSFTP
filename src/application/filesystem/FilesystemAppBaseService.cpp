@@ -57,10 +57,14 @@ ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
     const std::string &abs_path, const ControlComponent &control,
     bool trace_link) {
   if (!client) {
-    return {{}, Err(EC::InvalidHandle, "", "", "Client handle is null")};
+    return {{},
+            Err(EC::InvalidHandle, "filesystem.base_stat", "",
+                "Client handle is null")};
   }
   if (abs_path.empty()) {
-    return {{}, Err(EC::InvalidArg, "", "", "Absolute path is empty")};
+    return {{},
+            Err(EC::InvalidArg, "filesystem.base_stat", "",
+                "Absolute path is empty")};
   }
 
   const std::string key_nickname =
@@ -92,10 +96,14 @@ ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
     ClientHandle client, const std::string &nickname,
     const std::string &abs_path, const ControlComponent &control) {
   if (!client) {
-    return {{}, Err(EC::InvalidHandle, "", "", "Client handle is null")};
+    return {{},
+            Err(EC::InvalidHandle, "filesystem.base_listdir", "",
+                "Client handle is null")};
   }
   if (abs_path.empty()) {
-    return {{}, Err(EC::InvalidArg, "", "", "Absolute path is empty")};
+    return {{},
+            Err(EC::InvalidArg, "filesystem.base_listdir", "",
+                "Absolute path is empty")};
   }
 
   const std::string key_nickname =
@@ -142,10 +150,14 @@ ECMData<std::vector<std::string>> FilesystemAppBaseService::BaseListNames(
     ClientHandle client, const std::string &nickname,
     const std::string &abs_path, const ControlComponent &control) {
   if (!client) {
-    return {{}, Err(EC::InvalidHandle, "", "", "Client handle is null")};
+    return {{},
+            Err(EC::InvalidHandle, "filesystem.base_listnames", "",
+                "Client handle is null")};
   }
   if (abs_path.empty()) {
-    return {{}, Err(EC::InvalidArg, "", "", "Absolute path is empty")};
+    return {{},
+            Err(EC::InvalidArg, "filesystem.base_listnames", "",
+                "Absolute path is empty")};
   }
 
   const std::string key_nickname =
@@ -226,18 +238,20 @@ void FilesystemAppBaseService::ClearBaseIOCacheByPath(
 
 ECM FilesystemAppBaseService::Init() {
   if (!client_service_) {
-    return Err(EC::InvalidHandle, "", "", "client service is null");
+    return Err(EC::InvalidHandle, "filesystem.init", "",
+               "client service is null");
   }
   const FilesystemArg arg = init_arg_.lock().load();
   if (arg.max_cd_history <= 0) {
-    return Err(EC::InvalidArg, "", "", "max_cd_history must be greater than 0");
+    return Err(EC::InvalidArg, "filesystem.init", "",
+               "max_cd_history must be greater than 0");
   }
   if (arg.terminal_read_timeout_ms == 0 || arg.terminal_read_timeout_ms < -1) {
-    return Err(EC::InvalidArg, "", "",
+    return Err(EC::InvalidArg, "filesystem.init", "",
                "terminal_read_timeout_ms must be -1 or > 0");
   }
   if (arg.terminal_send_timeout_ms < -1) {
-    return Err(EC::InvalidArg, "", "",
+    return Err(EC::InvalidArg, "filesystem.init", "",
                "terminal_send_timeout_ms must be -1 or >= 0");
   }
   return OK;
@@ -250,12 +264,12 @@ FilesystemArg FilesystemAppBaseService::GetInitArg() const {
 ECM FilesystemAppBaseService::FlushTo(
     AMDomain::config::IConfigStorePort *store) {
   if (store == nullptr) {
-    return Err(EC::InvalidArg, "", "", "config store is null");
+    return Err(EC::InvalidArg, "filesystem.flush", "", "config store is null");
   }
   const FilesystemArg snapshot = GetInitArg();
   if (!store->Write(std::type_index(typeid(FilesystemArg)),
                     static_cast<const void *>(&snapshot))) {
-    return Err(EC::ConfigDumpFailed, "", "",
+    return Err(EC::ConfigDumpFailed, "filesystem.flush", "",
                "failed to flush filesystem config");
   }
   return OK;

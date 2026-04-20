@@ -1,7 +1,7 @@
 #pragma once
 
 #include "domain/var/VarModel.hpp"
-#include "application/config/ConfigAppService.hpp"
+#include "domain/config/ConfigSyncPort.hpp"
 #include "foundation/core/DataClass.hpp"
 
 #include <map>
@@ -17,14 +17,14 @@ using ZoneVarInfoMap = std::map<std::string, VarInfo>;
 using AllVarInfoMap = std::map<std::string, ZoneVarInfoMap>;
 using VarInfoList = std::vector<VarInfo>;
 
-class VarAppService final : public AMApplication::config::IConfigSyncPort {
+class VarAppService final : public AMDomain::config::IConfigSyncPort {
 public:
   explicit VarAppService(VarSetArg init_arg = {});
   ~VarAppService() override = default;
 
   ECM Init();
   [[nodiscard]] VarSetArg GetInitArg() const;
-  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
   [[nodiscard]] ECMData<VarInfo> GetVar(const std::string &zone_name,
                                         const std::string &varname) const;
   [[nodiscard]] ECMData<VarInfoList>

@@ -246,9 +246,9 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   auto resolved_result = ResolvePath_(path, control);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
     return {{},
-            (resolved_result.rcm)
-                ? Err(EC::InvalidHandle, "", "", "Resolved client is null")
-                : resolved_result.rcm};
+            (resolved_result.rcm) ? Err(EC::InvalidHandle, "find.resolve", "",
+                                        "Resolved client is null")
+                                  : resolved_result.rcm};
   }
   const auto &resolved = resolved_result.data;
 
@@ -291,8 +291,8 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
       return false;
     }
     if (!match_rcm.data) {
-      final_rcm =
-          Err(EC::Terminate, "", "", "Find terminated by on_match callback");
+      final_rcm = Err(EC::Terminate, "find.on_match", "",
+                      "Find terminated by on_match callback");
       match_requested_stop = true;
       return false;
     }

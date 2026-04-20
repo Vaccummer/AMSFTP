@@ -4,7 +4,7 @@
 
 namespace AMApplication::client {
 ClientAppServiceBase::ClientAppServiceBase(ClientServiceArg arg)
-    : AMApplication::config::IConfigSyncPort(typeid(ClientServiceArg)),
+    : AMDomain::config::IConfigSyncPort(typeid(ClientServiceArg)),
       init_arg_(std::move(arg)), control_token_(nullptr),
       private_keys_(std::vector<std::string>{}),
       maintainer_callbacks_(ClientCallbacks{}),
@@ -15,13 +15,15 @@ ClientServiceArg ClientAppServiceBase::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-ECM ClientAppServiceBase::FlushTo(
-    AMApplication::config::ConfigAppService *config_service) {
-  if (config_service == nullptr) {
-    return {EC::InvalidArg, "", "", "config service is null"};
+ECM ClientAppServiceBase::FlushTo(AMDomain::config::IConfigStorePort *store) {
+  if (store == nullptr) {
+    return {EC::InvalidArg, "client.flush", "", "config store is null"};
   }
-  if (!config_service->Write<ClientServiceArg>(GetInitArg())) {
-    return {EC::ConfigDumpFailed, "", "", "failed to flush client config"};
+  const ClientServiceArg snapshot = GetInitArg();
+  if (!store->Write(std::type_index(typeid(ClientServiceArg)),
+                    static_cast<const void *>(&snapshot))) {
+    return {EC::ConfigDumpFailed, "client.flush", "",
+            "failed to flush client config"};
   }
   return OK;
 }

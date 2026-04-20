@@ -1,16 +1,16 @@
 #pragma once
 
 #include "domain/client/ClientModel.hpp"
+#include <cstddef>
 #include <map>
 #include <memory>
-#include <cstddef>
-#include <optional>
 #include <string>
-#include <vector>
 
 namespace AMDomain::terminal {
 class IChannelPort;
 using ClientStatus = AMDomain::client::ClientStatus;
+constexpr const char *kDefaultTerminalChannelName = "default";
+constexpr int kTerminalRemoveCloseTimeoutMs = 1500;
 
 struct ChannelOpenArgs {
   std::string channel_name = "";
@@ -108,4 +108,3 @@ struct CheckSessionResult {
 };
 
 } // namespace AMDomain::terminal
-

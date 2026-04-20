@@ -76,8 +76,6 @@ private:
   static void ReleaseClients_(const TaskHandle &task_info);
   [[nodiscard]] ECMData<AMDomain::transfer::TransferClientContainer>
   RecollectTransferClients_(const TaskHandle &task_info);
-  [[nodiscard]] ECMData<AMDomain::client::ClientHandle>
-  AcquireTransferClient_(const std::string &nickname);
   void StorePaused_(const TaskHandle &task_info);
   void StoreFinished_(const TaskHandle &task_info);
 

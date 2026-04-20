@@ -23,6 +23,7 @@ private:
   struct TerminalBinding_ {
     AMT::ClientHandle owner_client = nullptr;
     AMLocalIOCore *local_core = nullptr;
+    AMT::BufferExceedCallback buffer_exceed_callback = {};
   };
 
   struct TerminalStateCache_ {
@@ -93,7 +94,9 @@ private:
   }
 
 public:
-  explicit LocalTerminalPort(AMT::ClientHandle owner_client) {
+  explicit LocalTerminalPort(
+      AMT::ClientHandle owner_client,
+      AMT::BufferExceedCallback buffer_exceed_callback = {}) {
     if (!owner_client) {
       throw std::invalid_argument("owner_client cannot be null");
     }
@@ -107,7 +110,8 @@ public:
           "owner_client's IOPort is not compatible with AMLocalIOCore");
     }
     auto binding = binding_.lock();
-    binding.store({std::move(owner_client), local_core});
+    binding.store(
+        {std::move(owner_client), local_core, std::move(buffer_exceed_callback)});
   }
 
   ~LocalTerminalPort() override = default;
@@ -146,8 +150,10 @@ public:
     const auto request = GetRequestSnapshot_();
     const std::string terminal_key =
         AMDomain::host::HostService::NormalizeNickname(request.nickname);
+    const auto binding = GetBindingSnapshot_();
     AMT::ChannelPortHandle port =
-        std::make_shared<LocalChannelPort>(terminal_key, channel_name);
+        std::make_shared<LocalChannelPort>(
+            terminal_key, channel_name, binding.buffer_exceed_callback);
     if (!port) {
       out.rcm = Err(EC::InvalidHandle, "terminal.open", channel_name,
                     "Failed to create local channel port");
