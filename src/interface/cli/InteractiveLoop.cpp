@@ -5,14 +5,13 @@
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/cli/CLIBind.hpp"
+#include "interface/cli/CliParseFlow.hpp"
 #include "interface/cli/InteractiveLoopRuntime.hpp"
-#include "interface/cli/ParseErrorFormatter.hpp"
 #include "interface/completion/Engine.hpp"
 #include "interface/parser/CommandPreprocess.hpp"
 #include "interface/parser/CommandTree.hpp"
 #include "interface/prompt/CLIPromtRender.hpp"
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -26,33 +25,6 @@ namespace {
 using OS_TYPE = AMDomain::client::OS_TYPE;
 using ClientStatus = AMDomain::client::ClientStatus;
 using DocumentKind = AMDomain::config::DocumentKind;
-
-std::string BuildUnknownCommandError_(
-    const std::vector<std::string> &tokens,
-    const AMInterface::parser::CommandNode &command_tree,
-    const AMInterface::style::AMStyleService &style_service) {
-  std::string invalid_token = {};
-  const auto *matched = AMInterface::parser::MatchSubcommand(
-      tokens, command_tree, &invalid_token);
-  if (invalid_token.empty()) {
-    return {};
-  }
-
-  const std::string invalid = style_service.Format(
-      invalid_token, AMInterface::style::StyleIndex::IllegalCommand);
-  if (!matched) {
-    return "❌ " + invalid + " is not a valid module or command";
-  }
-
-  const bool is_module = !matched->subcommands.empty();
-  const auto kind_style = is_module ? AMInterface::style::StyleIndex::Module
-                                    : AMInterface::style::StyleIndex::Command;
-  const std::string kind_text = is_module ? "module" : "command";
-  const std::string matched_name =
-      style_service.Format(matched->name, kind_style);
-  return "❌ " + invalid + " is not a valid module or command, did you mean " +
-         kind_text + ": " + matched_name;
-}
 
 /**
  * @brief Return the active client or the local client fallback.
@@ -460,60 +432,26 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     if (cli_args.empty()) {
       continue;
     }
-    const std::string invalid_command_error = BuildUnknownCommandError_(
-        cli_args, command_tree, managers.interfaces.style_service.Get());
-    if (!invalid_command_error.empty()) {
-      managers.interfaces.prompt_io_manager->Print(invalid_command_error);
-      ECM parse_rcm = {EC::InvalidArg, "", "", invalid_command_error};
-      store_exit_code(static_cast<int>(parse_rcm.code));
-      prompt_dto = BuildPromptRenderDTO_(
-          managers, parse_rcm,
-          std::max<int64_t>(
-              0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
-      continue;
-    }
-    // CLI11 consumes args via pop_back, so reverse to preserve order.
-    std::ranges::reverse(cli_args.begin(), cli_args.end());
 
-    try {
-      app.clear();
-      app.parse(cli_args);
-    } catch (const CLI::CallForHelp &e) {
-      managers.interfaces.prompt_io_manager->Print(app.help());
-      ECM parse_rcm = OK;
-      store_exit_code(e.get_exit_code());
+    const CliParseOutcome parse_outcome = ParseCliTokens(
+        {
+            .app = &app,
+            .command_tree = &command_tree,
+            .style_service = &managers.interfaces.style_service.Get(),
+            .validate_unknown_command = true,
+            .require_command = false,
+            .show_all_help_when_no_command = false,
+        },
+        std::move(cli_args));
+    if (!parse_outcome.ShouldDispatch()) {
+      if (!parse_outcome.message.empty()) {
+        managers.interfaces.prompt_io_manager->Print(parse_outcome.message);
+      }
+      store_exit_code(parse_outcome.exit_code != 0
+                          ? parse_outcome.exit_code
+                          : static_cast<int>(parse_outcome.rcm.code));
       prompt_dto = BuildPromptRenderDTO_(
-          managers, parse_rcm,
-          std::max<int64_t>(
-              0, std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::steady_clock::now() - dispatch_begin)
-                     .count()));
-      continue;
-    } catch (const CLI::CallForAllHelp &e) {
-      managers.interfaces.prompt_io_manager->Print(
-          app.help("", CLI::AppFormatMode::All));
-      ECM parse_rcm = OK;
-      store_exit_code(e.get_exit_code());
-      prompt_dto = BuildPromptRenderDTO_(
-          managers, parse_rcm,
-          AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
-      continue;
-    } catch (const CLI::CallForVersion &e) {
-      managers.interfaces.prompt_io_manager->Print(app.version());
-      ECM parse_rcm = OK;
-      store_exit_code(e.get_exit_code());
-      prompt_dto = BuildPromptRenderDTO_(
-          managers, parse_rcm,
-          std::max<int64_t>(
-              0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
-      continue;
-    } catch (const CLI::ParseError &e) {
-      const std::string parse_msg = FormatCliParseErrorMessage(e);
-      managers.interfaces.prompt_io_manager->Print(parse_msg);
-      ECM parse_rcm = {EC::InvalidArg, "", "", parse_msg};
-      store_exit_code(static_cast<int>(parse_rcm.code));
-      prompt_dto = BuildPromptRenderDTO_(
-          managers, parse_rcm,
+          managers, parse_outcome.rcm,
           std::max<int64_t>(
               0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
       continue;
