@@ -4,8 +4,6 @@
 
 namespace AMInterface::var {
 namespace {
-using EC = ErrorCode;
-
 enum class ShortcutVarKind { None, GetVar, ListAll, ListDomain };
 
 bool ParseShortcutVarToken_(const std::string &token, ShortcutVarKind *out_kind,
@@ -467,5 +465,3 @@ bool VarInterfaceService::RewriteVarShortcutTokens(
   return false;
 }
 } // namespace AMInterface::var
-
-

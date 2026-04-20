@@ -4,10 +4,9 @@
 #include "application/host/HostAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/core/Enum.hpp"
+#include "interface/adapters/filesystem/FilesystemInterfaceDTO.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <optional>
-#include <string>
-#include <vector>
 
 namespace AMInterface::filesystem {
 using PathTarget = AMDomain::filesystem::PathTarget;
@@ -19,81 +18,6 @@ class AMStyleService;
 }
 
 namespace AMInterface::filesystem {
-
-struct FilesystemStatArg {
-  std::vector<std::string> raw_paths = {};
-  bool trace_link = false;
-};
-
-struct FilesystemLsArg {
-  std::string raw_path = {};
-  bool list_like = false;
-  bool show_all = false;
-};
-
-struct FilesystemCdArg {
-  std::string raw_path = {};
-};
-
-struct FilesystemMkdirsArg {
-  std::vector<std::string> raw_paths = {};
-};
-
-struct FilesystemGetSizeArg {
-  std::vector<std::string> raw_paths = {};
-};
-
-struct FilesystemFindArg {
-  std::string raw_path = {};
-};
-
-struct FilesystemRealpathArg {
-  std::string raw_path = {};
-};
-
-struct FilesystemTreeArg {
-  std::string raw_path = {};
-  int max_depth = -1;
-  bool only_dir = false;
-  bool show_all = false;
-  bool ignore_special_file = true;
-  bool quiet = false;
-};
-
-struct FilesystemTestRTTArg {
-  int times = 1;
-};
-
-struct FilesystemRenameArg {
-  std::string target = {};
-  std::string dst = {};
-  bool mkdir = true;
-  bool overwrite = false;
-};
-
-struct FilesystemMoveArg {
-  std::string target = {};
-  std::string dst = {};
-  bool mkdir = true;
-  bool overwrite = false;
-};
-
-struct FilesystemSafermArg {
-  std::vector<std::string> targets = {};
-};
-
-struct FilesystemRmfileArg {
-  std::vector<std::string> targets = {};
-};
-
-struct FilesystemRmdirArg {
-  std::vector<std::string> targets = {};
-};
-
-struct FilesystemPermanentRemoveArg {
-  std::vector<std::string> targets = {};
-  bool quiet = false;
-};
 
 class FilesystemInterfaceSerivce final : public NonCopyableNonMovable {
 public:
@@ -111,63 +35,63 @@ public:
   [[nodiscard]] ECMData<PathTarget>
   SplitRawTarget(const std::string &token) const;
 
-  ECM Stat(
+  [[nodiscard]] ECM Stat(
       const FilesystemStatArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Ls(
+  [[nodiscard]] ECM Ls(
       const FilesystemLsArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Cd(
+  [[nodiscard]] ECM Cd(
       const FilesystemCdArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Mkdirs(
+  [[nodiscard]] ECM Mkdirs(
       const FilesystemMkdirsArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM GetSize(
+  [[nodiscard]] ECM GetSize(
       const FilesystemGetSizeArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Find(
+  [[nodiscard]] ECM Find(
       const FilesystemFindArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Realpath(
+  [[nodiscard]] ECM Realpath(
       const FilesystemRealpathArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Tree(
+  [[nodiscard]] ECM Tree(
       const FilesystemTreeArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM TestRTT(
+  [[nodiscard]] ECM TestRTT(
       const FilesystemTestRTTArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Rename(
+  [[nodiscard]] ECM Rename(
       const FilesystemRenameArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Move(
+  [[nodiscard]] ECM Move(
       const FilesystemMoveArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Saferm(
+  [[nodiscard]] ECM Saferm(
       const FilesystemSafermArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Rmfile(
+  [[nodiscard]] ECM Rmfile(
       const FilesystemRmfileArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM Rmdir(
+  [[nodiscard]] ECM Rmdir(
       const FilesystemRmdirArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM PermanentRemove(
+  [[nodiscard]] ECM PermanentRemove(
       const FilesystemPermanentRemoveArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
