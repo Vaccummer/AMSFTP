@@ -9,7 +9,7 @@
 namespace AMInterface::cli {
 namespace task_arg_detail {
 
-inline ECM UnsupportedCommand(AMInterface::prompt::AMPromptIOManager &prompt,
+inline ECM UnsupportedCommand(AMInterface::prompt::PromptIOManager &prompt,
                               const std::string &message) {
   (void)prompt;
   const ECM rcm = Err(EC::OperationUnsupported, "", "", message);

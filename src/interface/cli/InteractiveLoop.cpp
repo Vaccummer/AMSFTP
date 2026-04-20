@@ -5,15 +5,12 @@
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/cli/CLIBind.hpp"
-#include "interface/cli/CliCommandValidation.hpp"
+#include "interface/cli/InteractiveLoopRuntime.hpp"
 #include "interface/cli/ParseErrorFormatter.hpp"
-#include "interface/completion/CompletionRuntimeAdapter.hpp"
 #include "interface/completion/Engine.hpp"
 #include "interface/parser/CommandPreprocess.hpp"
 #include "interface/parser/CommandTree.hpp"
 #include "interface/prompt/CLIPromtRender.hpp"
-#include "interface/token_analyser/TokenAnalyzerRuntimeAdapter.hpp"
-#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -29,18 +26,32 @@ namespace {
 using OS_TYPE = AMDomain::client::OS_TYPE;
 using ClientStatus = AMDomain::client::ClientStatus;
 using DocumentKind = AMDomain::config::DocumentKind;
-constexpr int kEventIdCorePromptFilesystemCacheClear = 7001;
-constexpr int kEventIdCorePromptHighlightCacheClear = 7002;
-constexpr int kEventIdCorePromptCompletionCacheClear = 7003;
-constexpr int kEventIdCorePromptBackupIfNeeded = 7004;
-constexpr int kEventIdCorePromptCompletionCancelAsync = 7005;
-constexpr int kEventIdLoopExitConfigSaveAll = 7101;
 
-void FlushPromptOutputIfSafe_(AMInterface::prompt::PromptIOManager &prompt) {
-  if (prompt.IsCacheOutputOnly()) {
-    return;
+std::string BuildUnknownCommandError_(
+    const std::vector<std::string> &tokens,
+    const AMInterface::parser::CommandNode &command_tree,
+    const AMInterface::style::AMStyleService &style_service) {
+  std::string invalid_token = {};
+  const auto *matched = AMInterface::parser::MatchSubcommand(
+      tokens, command_tree, &invalid_token);
+  if (invalid_token.empty()) {
+    return {};
   }
-  prompt.FlushCachedOutput();
+
+  const std::string invalid = style_service.Format(
+      invalid_token, AMInterface::style::StyleIndex::IllegalCommand);
+  if (!matched) {
+    return "❌ " + invalid + " is not a valid module or command";
+  }
+
+  const bool is_module = !matched->subcommands.empty();
+  const auto kind_style = is_module ? AMInterface::style::StyleIndex::Module
+                                    : AMInterface::style::StyleIndex::Command;
+  const std::string kind_text = is_module ? "module" : "command";
+  const std::string matched_name =
+      style_service.Format(matched->name, kind_style);
+  return "❌ " + invalid + " is not a valid module or command, did you mean " +
+         kind_text + ": " + matched_name;
 }
 
 /**
@@ -275,8 +286,7 @@ BuildPromptRenderDTO_(const CLIServices &managers, const ECM &result,
   dto.task_num = std::max<int64_t>(0, dto.task_pending) +
                  std::max<int64_t>(0, dto.task_running);
 
-  dto.time_now =
-      FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
+  dto.time_now = FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
   dto.time_clock = dto.time_now;
   dto.elapsed = AMStr::fmt("{}ms", std::max<int64_t>(0, elapsed_time_ms));
   dto.success = (result.code == EC::Success);
@@ -296,27 +306,43 @@ public:
       return;
     }
     for (const auto &entry : entries_) {
-      (void)registry_->Unregister(entry.first, entry.second);
+      (void)registry_->Unregister(entry.category, entry.id);
     }
   }
 
-  bool Register(InteractiveEventCategory category, int id,
-                std::function<void()> fn) {
+  InteractiveEventRegistry::RegistrationId
+  Register(InteractiveEventCategory category, std::function<void()> fn) {
     if (!registry_) {
-      return false;
+      return 0;
     }
-    (void)registry_->Unregister(category, id);
-    const bool ok = registry_->Register(category, id, std::move(fn));
-    if (ok) {
+    const auto id = registry_->Register(category, std::move(fn));
+    if (id != 0) {
       entries_.push_back({category, id});
     }
-    return ok;
+    return id;
   }
 
 private:
+  struct ScopedEntry {
+    InteractiveEventCategory category =
+        InteractiveEventCategory::CorePromptReturn;
+    InteractiveEventRegistry::RegistrationId id = 0;
+  };
+
   AMInterface::cli::InteractiveEventRegistry *registry_ = nullptr;
-  std::vector<std::pair<InteractiveEventCategory, int>> entries_ = {};
+  std::vector<ScopedEntry> entries_ = {};
 };
+
+ECM EnsureInteractiveLoopRuntime_(
+    AMInterface::parser::CommandNode &command_tree,
+    const CLIServices &managers) {
+  if (!managers.runtime.interactive_loop_runtime.IsReady()) {
+    managers.runtime.interactive_loop_runtime.SetInstance(
+        std::make_unique<InteractiveLoopRuntime>());
+  }
+  return managers.runtime.interactive_loop_runtime->Setup(command_tree,
+                                                          managers);
+}
 } // namespace
 
 /**
@@ -334,71 +360,49 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     }
   };
 
-  AMInterface::parser::TokenTypeAnalyzer token_type_analyzer;
-  token_type_analyzer.SetCommandTree(&command_tree);
-  auto analyzer_runtime =
-      std::make_shared<AMInterface::parser::TokenAnalyzerRuntimeAdapter>(
-          managers.application.client_service.Get(),
-          managers.application.host_service.Get(),
-          managers.application.terminal_service.Get(),
-          managers.application.var_service.Get(),
-          managers.interfaces.var_interface_service.Get(),
-          managers.interfaces.style_service.Get(),
-          managers.application.prompt_profile_manager.Get());
-  auto completion_runtime =
-      std::make_shared<AMInterface::completion::CompletionRuntimeAdapter>(
-          managers.application.client_service.Get(),
-          managers.application.host_service.Get(),
-          managers.application.terminal_service.Get(),
-          managers.application.var_service.Get(),
-          managers.interfaces.var_interface_service.Get(),
-          managers.interfaces.style_service.Get(),
-          managers.application.prompt_profile_manager.Get(),
-          managers.application.transfer_service.Get());
-  token_type_analyzer.SetRuntime(analyzer_runtime);
+  const ECM setup_rcm = EnsureInteractiveLoopRuntime_(command_tree, managers);
+  if (setup_rcm.code != EC::Success) {
+    PrintECM_(managers.interfaces.prompt_io_manager.Get(), setup_rcm);
+    store_exit_code(static_cast<int>(setup_rcm.code));
+    ctx.is_interactive->store(false, std::memory_order_relaxed);
+    return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed)
+                         : static_cast<int>(setup_rcm.code);
+  }
+
+  auto &interactive_runtime = managers.runtime.interactive_loop_runtime.Get();
+  auto &token_type_analyzer = interactive_runtime.TokenAnalyzer();
+  auto &completion_engine = interactive_runtime.CompletionEngine();
   AMInterface::parser::AMInputPreprocess input_preprocess(
       managers.interfaces.var_interface_service.Get(), token_type_analyzer);
-
-  AMInterface::completer::AMCompleteEngine completion_engine{
-      &command_tree, &token_type_analyzer, completion_runtime,
-      &managers.application.completer_config_manager.Get(),
-      &managers.interfaces.style_service.Get()};
-  completion_engine.LoadConfig();
-  completion_engine.Install();
 
   ScopedInteractiveEventCallbacks_ interactive_callbacks(
       &managers.runtime.interactive_event_registry);
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
-      kEventIdCorePromptFilesystemCacheClear,
       [&managers]() { managers.application.filesystem_service->ClearCache(); });
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
-      kEventIdCorePromptHighlightCacheClear,
       []() { AMInterface::parser::TokenTypeAnalyzer::ClearTokenCache(); });
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
-      kEventIdCorePromptCompletionCacheClear,
       [&completion_engine]() { completion_engine.ClearCache(); });
   (void)interactive_callbacks.Register(
-      InteractiveEventCategory::CorePromptReturn,
-      kEventIdCorePromptBackupIfNeeded, [&managers]() {
-        managers.interfaces.prompt_io_manager->SyncCurrentHistory();
+      InteractiveEventCategory::CorePromptReturn, [&managers]() {
+        if (managers.application.config_service->IsBackupNeeded()) {
+          managers.interfaces.prompt_io_manager->SyncCurrentHistory();
+        }
         (void)managers.application.config_service->BackupIfNeeded();
       });
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
-      kEventIdCorePromptCompletionCancelAsync,
       [&completion_engine]() { completion_engine.CancelPendingAsync(); });
   (void)interactive_callbacks.Register(
-      InteractiveEventCategory::InteractiveLoopExit,
-      kEventIdLoopExitConfigSaveAll, [&managers]() {
+      InteractiveEventCategory::InteractiveLoopExit, [&managers]() {
         (void)managers.interfaces.config_interface_service->SaveAll();
       });
 
   AMInterface::prompt::CLIPromtRender core_prompt(
       managers.interfaces.style_service.Get());
-  std::string last_core_prompt_parse_error = "";
   std::string last_core_prompt_render_error = "";
 
   AMApplication::prompt::PromptRenderDTO prompt_dto = {};
@@ -408,66 +412,29 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       ctx.task_control_token->ClearInterrupt();
       continue;
     }
-    FlushPromptOutputIfSafe_(managers.interfaces.prompt_io_manager.Get());
-
-    // bool settings_reloaded = false;
-    // ECM reload_settings_rcm =
-    //     ReloadSettingsIfUpdated_(prompt_profile_history_manager,
-    //                              managers.application.config_service,
-    //                              &settings_reloaded);
-    // if (reload_settings_rcm.code != EC::Success) {
-    //   PrintECM_(prompt, reload_settings_rcm);
-    // } else if (settings_reloaded) {
-    //   core_prompt.InvalidateCache();
-    // }
-
     prompt_dto = BuildPromptRenderDTO_(managers, OK, 0);
 
     // managers.interfaces.prompt_io_manager->Print("");
     const std::string prompt_text = core_prompt.Render(prompt_dto);
-    if (!core_prompt.State().parse_ok) {
-      std::string err = "failed to parse core prompt template";
-      if (!core_prompt.State().diagnostics.items.empty()) {
-        err = core_prompt.State().diagnostics.items.front().message;
+    if (!core_prompt.State().render_ok) {
+      std::string err = core_prompt.State().render_error;
+      if (err.empty()) {
+        err = "failed to render core prompt template";
       }
-      if (err != last_core_prompt_parse_error) {
+      if (err != last_core_prompt_render_error) {
         managers.interfaces.prompt_io_manager->FmtPrint(
-            "❌ CorePrompt parse failed: {}", AMStr::BBCEscape(err));
-        last_core_prompt_parse_error = err;
+            "❌ CorePrompt render failed: {}", AMStr::BBCEscape(err));
+        last_core_prompt_render_error = err;
       }
     } else {
-      last_core_prompt_parse_error.clear();
-      if (!core_prompt.State().render_ok) {
-        std::string err = core_prompt.State().render_error;
-        if (err.empty()) {
-          err = "failed to render core prompt template";
-        }
-        if (err != last_core_prompt_render_error) {
-          managers.interfaces.prompt_io_manager->FmtPrint(
-              "❌ CorePrompt render failed: {}", AMStr::BBCEscape(err));
-          last_core_prompt_render_error = err;
-        }
-      } else {
-        last_core_prompt_render_error.clear();
-      }
+      last_core_prompt_render_error.clear();
     }
 
     std::optional<std::string> line_opt = std::nullopt;
-    if (auto profile = managers.interfaces.prompt_profile_history_manager
-                           ->CurrentProfile();
-        profile && profile->Use()) {
-      completion_engine.Install();
-      auto highlighter_guard = profile->TemporarySetHighlighter(
-          &AMInterface::parser::TokenTypeAnalyzer::PromptHighlighter_,
-          &token_type_analyzer);
-      (void)highlighter_guard;
-      line_opt = managers.interfaces.prompt_io_manager->PromptCore(prompt_text);
-    } else {
-      line_opt = managers.interfaces.prompt_io_manager->PromptCore(prompt_text);
-    }
+    line_opt = managers.interfaces.prompt_io_manager->PromptCore(prompt_text);
+
     managers.runtime.interactive_event_registry.Run(
         InteractiveEventCategory::CorePromptReturn);
-    FlushPromptOutputIfSafe_(managers.interfaces.prompt_io_manager.Get());
 
     if (!line_opt.has_value()) {
       prompt_dto = BuildPromptRenderDTO_(managers, OK, 0);
@@ -493,11 +460,11 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     if (cli_args.empty()) {
       continue;
     }
-    if (const auto invalid_command_error = BuildUnknownCommandError(
-            cli_args, command_tree, managers.interfaces.style_service.Get());
-        invalid_command_error.has_value()) {
-      managers.interfaces.prompt_io_manager->Print(*invalid_command_error);
-      ECM parse_rcm = {EC::InvalidArg, "", "", *invalid_command_error};
+    const std::string invalid_command_error = BuildUnknownCommandError_(
+        cli_args, command_tree, managers.interfaces.style_service.Get());
+    if (!invalid_command_error.empty()) {
+      managers.interfaces.prompt_io_manager->Print(invalid_command_error);
+      ECM parse_rcm = {EC::InvalidArg, "", "", invalid_command_error};
       store_exit_code(static_cast<int>(parse_rcm.code));
       prompt_dto = BuildPromptRenderDTO_(
           managers, parse_rcm,
@@ -506,7 +473,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       continue;
     }
     // CLI11 consumes args via pop_back, so reverse to preserve order.
-    std::reverse(cli_args.begin(), cli_args.end());
+    std::ranges::reverse(cli_args.begin(), cli_args.end());
 
     try {
       app.clear();
@@ -537,9 +504,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       store_exit_code(e.get_exit_code());
       prompt_dto = BuildPromptRenderDTO_(
           managers, parse_rcm,
-          std::max<int64_t>(0,
-                            AMTime::IntervalMS(dispatch_begin,
-                                               AMTime::SteadyNow())));
+          std::max<int64_t>(
+              0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
       continue;
     } catch (const CLI::ParseError &e) {
       const std::string parse_msg = FormatCliParseErrorMessage(e);
@@ -558,8 +524,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     DispatchCliCommands(cli_commands, managers, ctx);
     prompt_dto = BuildPromptRenderDTO_(
         managers, ctx.rcm,
-        std::max<int64_t>(0,
-                          AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
+        std::max<int64_t>(
+            0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
 
     if (ctx.request_exit) {
       break;
@@ -570,10 +536,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     managers.runtime.interactive_event_registry.Run(
         InteractiveEventCategory::InteractiveLoopExit);
   }
-  FlushPromptOutputIfSafe_(managers.interfaces.prompt_io_manager.Get());
   ctx.is_interactive->store(false, std::memory_order_relaxed);
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
 
 } // namespace AMInterface::cli
-
