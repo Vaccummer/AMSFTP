@@ -21,7 +21,7 @@ public:
   TransferInterfaceService(
       AMApplication::filesystem::FilesystemAppService &filesystem_service,
       AMApplication::transfer::TransferAppService &transfer_service,
-      AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+      AMInterface::prompt::PromptIOManager &prompt_io_manager,
       std::function<ControlComponent(AMDomain::client::amf)>
           control_component_factory = {},
       AMInterface::style::AMStyleService *style_service = nullptr,
@@ -83,7 +83,7 @@ private:
 
 private:
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
-  AMInterface::prompt::AMPromptIOManager &prompt_io_manager_;
+  AMInterface::prompt::PromptIOManager &prompt_io_manager_;
   AMApplication::transfer::TransferAppService &transfer_app_service_;
   AMInterface::style::AMStyleService *style_service_ = nullptr;
   int transfer_bar_refresh_interval_ms_ = 0;

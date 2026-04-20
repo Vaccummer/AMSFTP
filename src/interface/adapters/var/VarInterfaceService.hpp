@@ -8,7 +8,7 @@
 namespace AMInterface::var {
 using VarAppService = AMApplication::var::VarAppService;
 using ClientAppService = AMApplication::client::ClientAppService;
-using AMPromptIOManager = AMInterface::prompt::AMPromptIOManager;
+using PromptIOManager = AMInterface::prompt::PromptIOManager;
 using ParsedVarToken = AMDomain::var::ParsedVarToken;
 using VarInfo = AMDomain::var::VarInfo;
 using AllVarInfoMap = AMApplication::var::AllVarInfoMap;
@@ -17,7 +17,7 @@ class VarInterfaceService final : public NonCopyableNonMovable {
 public:
   VarInterfaceService(VarAppService &var_service,
                       ClientAppService &client_service,
-                      AMPromptIOManager &prompt_io_manager);
+                      PromptIOManager &prompt_io_manager);
   ~VarInterfaceService() override = default;
 
   [[nodiscard]] ECMData<ParsedVarToken>
@@ -50,6 +50,6 @@ private:
 
   VarAppService &var_service_;
   ClientAppService &client_service_;
-  AMPromptIOManager &prompt_io_manager_;
+  PromptIOManager &prompt_io_manager_;
 };
 } // namespace AMInterface::var

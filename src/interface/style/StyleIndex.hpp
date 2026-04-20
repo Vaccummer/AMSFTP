@@ -44,14 +44,6 @@ enum class StyleIndex : uint8_t {
   Number,
   Timestamp,
   PathLike,
-  PromptUn,
-  PromptAt,
-  PromptHn,
-  PromptEn,
-  PromptNn,
-  PromptCwd,
-  PromptDs,
-  PromptWhite,
   Error
 };
 } // namespace AMInterface::style

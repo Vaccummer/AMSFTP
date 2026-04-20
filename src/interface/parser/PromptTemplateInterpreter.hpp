@@ -2,14 +2,17 @@
 
 #include "foundation/core/DataClass.hpp"
 
+#include <cstdint>
 #include <map>
-#include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace AMInterface::prompt {
 
-using PromptVarMap = std::map<std::string, std::optional<std::string>>;
+using PromptVarValue =
+    std::variant<std::monostate, std::string, bool, int64_t, double>;
+using PromptVarMap = std::map<std::string, PromptVarValue>;
 
 struct PromptTemplateDiagnostic {
   size_t offset = 0;

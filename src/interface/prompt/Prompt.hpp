@@ -1,16 +1,11 @@
 #pragma once
-#include "application/prompt/PromptHistoryManager.hpp"
-#include "application/prompt/PromptProfileManager.hpp"
-#include "application/style/StyleAppService.hpp"
-#include "domain/prompt/PromptDomainModel.hpp"
 #include "domain/transfer/TransferDomainModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/tools/string.hpp"
-#include "interface/prompt/IsoclineProfile.hpp"
+#include "interface/prompt/IsoclineProfileManager.hpp"
+
 #include <atomic>
 #include <functional>
-#include <map>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -19,55 +14,6 @@
 #include <vector>
 
 namespace AMInterface::prompt {
-using AMApplication::prompt::PromptHistoryManager;
-using AMApplication::prompt::PromptProfileManager;
-using AMApplication::style::StyleConfigManager;
-using AMDomain::prompt::PromptProfileSettings;
-
-namespace kvars {
-static const std::string inline_hint_key = "ic-hint";
-static const std::string default_prompt_key = "ic-prompt";
-static const std::string invalid_value_key = "typein_invalid_value";
-static const std::string valid_value_key = "typein_valid_value";
-static const std::string operation_abort_text = "Operation Abort !";
-static const std::string default_profile_name = "*";
-} // namespace kvars
-
-class IsoclineProfileManager : NonCopyableNonMovable {
-public:
-  IsoclineProfileManager(PromptProfileManager &profile_manager,
-                         PromptHistoryManager &history_manager,
-                         StyleConfigManager &style_config_manager);
-  ~IsoclineProfileManager() override;
-
-  ECM Init();
-  void AddHistoryEntry(const std::string &line);
-  void RemoveLastHistoryEntry();
-  void SyncCurrentHistory();
-  ECM ChangeClient(const std::string &nickname);
-  [[nodiscard]] std::shared_ptr<IsoclineProfile> CurrentProfile() const;
-  [[nodiscard]] std::string CurrentNickname() const;
-  [[nodiscard]] PromptProfileSettings CurrentProfileArgs() const;
-
-private:
-  friend class PromptIOManager;
-
-  [[nodiscard]] std::shared_ptr<IsoclineProfile>
-  BuildProfile_(const std::string &nickname,
-                const PromptProfileSettings &profile_args,
-                const AMDomain::style::StyleConfigArg &style_arg,
-                const std::vector<std::string> &history_records) const;
-  void WriteBackCurrentProfile_();
-  PromptProfileManager &profile_manager_;
-  PromptHistoryManager &history_manager_;
-  StyleConfigManager &style_config_manager_;
-  mutable std::mutex profiles_mtx_;
-  std::map<std::string, std::shared_ptr<IsoclineProfile>> profile_cache_ = {};
-  std::shared_ptr<IsoclineProfile> current_profile_ = nullptr;
-  std::string current_nickname_ = kvars::default_profile_name;
-  PromptProfileSettings current_profile_args_ = {};
-};
-
 class PromptIOManager : NonCopyableNonMovable {
 public:
   struct PromptReadOptions {
@@ -96,6 +42,7 @@ public:
   }
 
   void Print(const std::string &text);
+
   /**
    * @brief Print text via isocline without loading/changing any prompt profile.
    *
@@ -103,6 +50,7 @@ public:
    * PromptIOManager instances may not be initialized yet.
    */
   static void StaticPrint(const std::string &text, bool ensure_newline = true);
+
   void PrintOperationAbort();
 
   template <typename... Args> void FmtPrint(Args &&...args) {
@@ -144,14 +92,9 @@ public:
    * lines and only passes the last line into readline as the editable prompt.
    */
   std::optional<std::string> PromptCore(const std::string &prompt);
-
-  ECM Edit(const std::string &nickname);
-  ECM Get(const std::vector<std::string> &nicknames);
   void FlushCachedOutput();
   void SetCacheOutputOnly(bool enabled);
   [[nodiscard]] bool IsCacheOutputOnly() const;
-  void SetRefreshDiffMode(bool enabled);
-  [[nodiscard]] bool IsRefreshDiffMode() const;
 
 private:
   struct IOState {
@@ -162,7 +105,6 @@ private:
     std::atomic<int> refresh_occupied_lines_{0};
     std::atomic<bool> prompt_active_{false};
     std::atomic<bool> secure_phase_{false};
-    std::atomic<bool> refresh_diff_mode_{true};
     std::atomic<bool> refresh_detached_mode_{false};
     std::string active_prompt_header_;
     std::atomic<bool> has_active_prompt_header_{false};
@@ -172,62 +114,25 @@ private:
     bool has_last_typein_result_ = false;
   };
 
-  static std::string EnsureTrailingNewline_(const std::string &text);
-  static bool IsAsciiText_(const std::string &text);
-  static size_t CommonPrefixAscii_(const std::string &lhs,
-                                   const std::string &rhs);
-  static void AppendMoveUpRows_(std::string *frame, int rows);
-  static void AppendClearRows_(std::string *frame, int rows);
-  static std::string StripStyleForMeasure_(const std::string &text);
-  static std::string NormalizeMeasureLine_(const std::string &text);
-  static int TerminalCols_();
-  static size_t BuildRefreshHash_(const std::vector<std::string> &lines,
-                                  int cols);
-  int ComputeRefreshRowsLocked_(const std::vector<std::string> &lines,
-                                int cols) const;
-  void AppendRenderLinesToFrameLocked_(std::string *frame,
-                                       const std::vector<std::string> &lines) const;
-  std::string BuildRepaintFrameLocked_(
-      int old_rows, int new_rows,
-      const std::vector<std::string> &new_lines) const;
-  std::string BuildInsertAndRepaintFrameLocked_(
-      int old_rows, const std::string &msg, int new_rows,
-      const std::vector<std::string> &new_lines) const;
-  std::string BuildClearFrameLocked_(int old_rows) const;
   void ResetRefreshStateLocked_();
   void AssignRefreshRowsFromRenderInputLocked_(
       const std::vector<std::optional<std::string>> &lines);
-  void AppendRowDiffUpdate_(std::string *frame, const std::string &old_line,
-                            const std::string &new_line) const;
   void SetActivePromptHeader_(const std::string &header);
   void ClearActivePromptHeader_();
   [[nodiscard]] bool ShouldReplayPromptHeader_() const;
   [[nodiscard]] std::string BuildReplayFrame_(const std::string &msg);
   [[nodiscard]] bool TryCacheOutput_(const std::string &text);
-  bool IsContinuousDuplicateTypein_(const std::string &value,
-                                    const std::string &nickname);
-  void CacheTypeinResult_(const std::string &value,
-                          const std::string &nickname);
-  void DedupCurrentHistoryTail_(const std::string &current_input = "");
   void EmitOutput_(const std::string &text, bool allow_cache = true);
   void PrintSyncLocked_(const std::string &text);
   void PrintSyncRefreshLocked_(const std::string &text);
   void PrintInsertAndRepaintLocked_(const std::string &msg);
   void RepaintRefreshLocked_();
   void ClearRefreshLocked_();
-  ECM EditProfile_(const std::string &nickname);
-
-  enum class RefreshCursorMode {
-    TailAnchored,
-  };
 
   struct RefreshRuntimeState {
     bool active = false;
     int rows_painted = 0;
     std::vector<std::string> logical_lines = {};
-    size_t last_emitted_frame_hash = 0;
-    int last_cols = 0;
-    RefreshCursorMode cursor_mode = RefreshCursorMode::TailAnchored;
   };
 
   IsoclineProfileManager &isocline_profile_manager_;
@@ -235,11 +140,4 @@ private:
   RefreshRuntimeState refresh_state_{};
 };
 
-class AMPromptIOManager final : public PromptIOManager {
-public:
-  using PromptIOManager::PromptIOManager;
-  ~AMPromptIOManager() override = default;
-};
-
 } // namespace AMInterface::prompt
-

@@ -24,6 +24,7 @@
 #include "interface/adapters/transfer/TransferInterfaceService.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/prompt/Prompt.hpp"
+#include "interface/prompt/ProfileEditor.hpp"
 #include "interface/style/StyleManager.hpp"
 
 #include <atomic>
@@ -84,7 +85,7 @@ struct AppServiceBuildState final {
   std::unique_ptr<AMInterface::style::AMStyleService> style_service = nullptr;
   std::unique_ptr<AMInterface::prompt::IsoclineProfileManager>
       prompt_profile_history_manager = nullptr;
-  std::unique_ptr<AMInterface::prompt::AMPromptIOManager> prompt_io_manager =
+  std::unique_ptr<AMInterface::prompt::PromptIOManager> prompt_io_manager =
       nullptr;
   std::unique_ptr<AMApplication::log::LoggerAppService> log_manager = nullptr;
   AMDomain::transfer::TransferManagerArg transfer_manager_arg = {};
@@ -513,7 +514,7 @@ ECM BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
   }
 
   state->prompt_io_manager =
-      std::make_unique<AMInterface::prompt::AMPromptIOManager>(
+      std::make_unique<AMInterface::prompt::PromptIOManager>(
           *state->prompt_profile_history_manager);
   {
     const ECM rcm = state->prompt_io_manager->Init();
@@ -633,7 +634,8 @@ ECM BuildClientInterfaceServices_(const amf &task_control_token,
   state->config_interface_service =
       std::make_unique<AMInterface::config::ConfigInterfaceService>(
           *app_state.config_service, *app_state.host_service,
-          *app_state.prompt_io_manager);
+          *app_state.prompt_io_manager, *app_state.prompt_profile_manager,
+          *app_state.prompt_profile_history_manager);
 
   state->client_interface_service =
       std::make_unique<AMInterface::client::ClientInterfaceService>(

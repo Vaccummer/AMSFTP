@@ -7,16 +7,6 @@
 namespace AMInterface::style {
 namespace detail {
 const std::string *
-LookupPromptShortcut_(const AMDomain::style::StyleConfig &cfg,
-                      const std::string &key) {
-  const auto it = cfg.cli_prompt.shortcut.find(key);
-  if (it == cfg.cli_prompt.shortcut.end()) {
-    return nullptr;
-  }
-  return &it->second;
-}
-
-const std::string *
 ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
                          StyleIndex style_index) {
   switch (style_index) {
@@ -100,22 +90,6 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.common.timestamp;
   case StyleIndex::PathLike:
     return &cfg.common.path_like;
-  case StyleIndex::PromptUn:
-    return LookupPromptShortcut_(cfg, "un");
-  case StyleIndex::PromptAt:
-    return LookupPromptShortcut_(cfg, "at");
-  case StyleIndex::PromptHn:
-    return LookupPromptShortcut_(cfg, "hn");
-  case StyleIndex::PromptEn:
-    return LookupPromptShortcut_(cfg, "en");
-  case StyleIndex::PromptNn:
-    return LookupPromptShortcut_(cfg, "nn");
-  case StyleIndex::PromptCwd:
-    return LookupPromptShortcut_(cfg, "cwd");
-  case StyleIndex::PromptDs:
-    return LookupPromptShortcut_(cfg, "ds");
-  case StyleIndex::PromptWhite:
-    return LookupPromptShortcut_(cfg, "white");
   case StyleIndex::Error:
     return &cfg.system_info.error;
   case StyleIndex::None:

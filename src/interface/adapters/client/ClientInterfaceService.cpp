@@ -24,7 +24,7 @@
 namespace AMInterface::client {
 class ClientConnectSpinner final : public NonCopyableNonMovable {
 public:
-  explicit ClientConnectSpinner(AMPromptIOManager &prompt_io_manager)
+  explicit ClientConnectSpinner(PromptIOManager &prompt_io_manager)
       : prompt_io_manager_(prompt_io_manager) {}
   ~ClientConnectSpinner() override { Stop(); }
 
@@ -120,7 +120,7 @@ private:
     }
   }
 
-  AMPromptIOManager &prompt_io_manager_;
+  PromptIOManager &prompt_io_manager_;
   mutable std::mutex mutex_ = {};
   std::jthread worker_ = {};
   std::atomic<bool> running_ = false;
@@ -210,7 +210,7 @@ std::string PadStyledCellRight_(const std::string &styled_text,
   return styled_text + std::string(target_width - raw_display_width, ' ');
 }
 
-void FlushPromptOutputIfSafe_(AMPromptIOManager &prompt_io_manager) {
+void FlushPromptOutputIfSafe_(PromptIOManager &prompt_io_manager) {
   if (prompt_io_manager.IsCacheOutputOnly()) {
     return;
   }
@@ -231,7 +231,7 @@ ResolveClientNicknameStyleByState_(const ClientHandle &client) {
 }
 
 void PrintStyledNicknamesCompact_(
-    AMPromptIOManager &prompt, AMStyleService &style_service,
+    PromptIOManager &prompt, AMStyleService &style_service,
     const std::vector<std::pair<std::string, AMInterface::style::StyleIndex>>
         &nicknames) {
   if (nicknames.empty()) {
@@ -336,7 +336,7 @@ ECM ValidateChangeClientNickname_(
   return OK;
 }
 
-ECM ResolveChangeClientNickname_(AMPromptIOManager &prompt,
+ECM ResolveChangeClientNickname_(PromptIOManager &prompt,
                                  const ClientAppService &client_service,
                                  const AMHostConfigManager &host_config_manager,
                                  const std::string &raw_nickname,
@@ -467,7 +467,7 @@ std::vector<size_t> ParseOrderNumbers_(const std::string &raw, bool *ok) {
 }
 
 namespace render {
-void PrintClientStatusLine(AMPromptIOManager &prompt,
+void PrintClientStatusLine(PromptIOManager &prompt,
                            const std::string &nickname,
                            const ClientHandle &client, const ECM &rcm,
                            const ClientStatusFormat &format,
@@ -499,7 +499,7 @@ void PrintClientStatusLine(AMPromptIOManager &prompt,
   prompt.Print(line.str());
 }
 
-void PrintHostConfigDetail(AMPromptIOManager &prompt,
+void PrintHostConfigDetail(PromptIOManager &prompt,
                            const std::string &nickname,
                            const HostConfig &config,
                            const AMStyleService &style_service) {
@@ -540,7 +540,7 @@ void PrintHostConfigDetail(AMPromptIOManager &prompt,
 }
 
 void PrintClientDetail(
-    AMPromptIOManager &prompt, const std::string &nickname,
+    PromptIOManager &prompt, const std::string &nickname,
     const ClientHandle &client,
     const std::optional<ECMData<AMDomain::filesystem::CheckResult>>
         &check_result,
@@ -597,7 +597,7 @@ void PrintClientDetail(
 }
 
 void PrintPoolClientDetail(
-    AMPromptIOManager &prompt, const std::string &nickname,
+    PromptIOManager &prompt, const std::string &nickname,
     const std::string &id, bool is_leased, const ClientHandle &client,
     const std::optional<ECMData<AMDomain::filesystem::CheckResult>>
         &check_result,
@@ -742,7 +742,7 @@ std::string DefaultUsernameForProtocol_(ClientProtocol protocol) {
   return ResolveLocalUsername_();
 }
 
-bool PromptHostText_(AMPromptIOManager &prompt, const std::string &label,
+bool PromptHostText_(PromptIOManager &prompt, const std::string &label,
                      const std::string &placeholder, std::string *out,
                      bool allow_empty) {
   if (!out) {
@@ -759,7 +759,7 @@ bool PromptHostText_(AMPromptIOManager &prompt, const std::string &label,
   return true;
 }
 
-bool PromptHostBool_(AMPromptIOManager &prompt, const std::string &label,
+bool PromptHostBool_(PromptIOManager &prompt, const std::string &label,
                      bool current, bool *out) {
   if (!out) {
     return false;
@@ -782,7 +782,7 @@ bool PromptHostBool_(AMPromptIOManager &prompt, const std::string &label,
   return true;
 }
 
-bool PromptHostProtocol_(AMPromptIOManager &prompt, ClientProtocol current,
+bool PromptHostProtocol_(PromptIOManager &prompt, ClientProtocol current,
                          ClientProtocol *out) {
   if (!out) {
     return false;
@@ -806,7 +806,7 @@ bool PromptHostProtocol_(AMPromptIOManager &prompt, ClientProtocol current,
   return true;
 }
 
-bool PromptHostInt64_(AMPromptIOManager &prompt, const std::string &label,
+bool PromptHostInt64_(PromptIOManager &prompt, const std::string &label,
                       int64_t current, int64_t min_v, int64_t max_v,
                       int64_t *out, bool allow_empty = false) {
   if (!out) {
@@ -870,7 +870,7 @@ ECM ResolveHostConfig_(AMHostConfigManager &host_config_manager,
 }
 
 void PrintHostCompact_(
-    AMPromptIOManager &prompt, AMStyleService &style_service,
+    PromptIOManager &prompt, AMStyleService &style_service,
     const std::vector<std::string> &nicknames,
     const std::unordered_set<std::string> *established_nicknames = nullptr,
     const std::unordered_set<std::string> *configured_nicknames = nullptr) {
@@ -934,7 +934,7 @@ HostListRow BuildHostListRow_(const std::string &nickname,
   return row;
 }
 
-void PrintHostListTable_(AMPromptIOManager &prompt,
+void PrintHostListTable_(PromptIOManager &prompt,
                          AMStyleService &style_service,
                          const std::vector<HostListRow> &rows) {
   if (rows.empty()) {
@@ -1030,7 +1030,7 @@ std::string HostFieldDisplay_(const HostConfig &entry,
   return "";
 }
 
-ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
+ECM PromptAddHostConfig_(PromptIOManager &prompt,
                          AMHostConfigManager &host_config_manager,
                          const std::string &nickname, HostConfig *out) {
   if (!out) {
@@ -1196,7 +1196,7 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
   return OK;
 }
 
-ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
+ECM PromptModifyHostConfig_(PromptIOManager &prompt,
                             const std::string &nickname, HostConfig *inout) {
   if (!inout) {
     return Err(EC::InvalidArg, "", "", "null host config");
@@ -1356,7 +1356,7 @@ ClientInterfaceService::ClientInterfaceService(
     FilesystemAppService &filesystem_service,
     AMHostConfigManager &host_config_manager,
     AMKnownHostsManager &known_hosts_manager,
-    AMPromptIOManager &prompt_io_manager, AMStyleService &style_service)
+    PromptIOManager &prompt_io_manager, AMStyleService &style_service)
     : client_service_(client_service), terminal_service_(terminal_service),
       filesystem_service_(filesystem_service),
       host_config_manager_(host_config_manager),

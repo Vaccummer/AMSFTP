@@ -95,7 +95,7 @@ struct CLIServices : public NonCopyableNonMovable {
         config_interface_service = {};
     mutable ServiceHolder<AMInterface::prompt::IsoclineProfileManager>
         prompt_profile_history_manager = {};
-    mutable ServiceHolder<AMInterface::prompt::AMPromptIOManager>
+    mutable ServiceHolder<AMInterface::prompt::PromptIOManager>
         prompt_io_manager = {};
     mutable ServiceHolder<AMInterface::client::ClientInterfaceService>
         client_interface_service = {};

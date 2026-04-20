@@ -59,9 +59,13 @@ ResolveExportFileName_(AMApplication::config::ConfigAppService &config_service,
 ConfigInterfaceService::ConfigInterfaceService(
     AMApplication::config::ConfigAppService &config_service,
     AMApplication::host::HostAppService &host_service,
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager)
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
+    AMApplication::prompt::PromptProfileManager &prompt_profile_manager,
+    AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager)
     : config_service_(config_service), host_service_(host_service),
-      prompt_io_manager_(prompt_io_manager) {}
+      prompt_io_manager_(prompt_io_manager),
+      prompt_profile_editor_(prompt_io_manager, prompt_profile_manager,
+                             prompt_profile_history_manager) {}
 
 ECM ConfigInterfaceService::PrintPaths() const {
   const std::filesystem::path project_dir = config_service_.ProjectRoot();
@@ -168,7 +172,7 @@ ECM ConfigInterfaceService::Export(const std::string &path) const {
   return first_error;
 }
 
-ECM ConfigInterfaceService::EditProfile(const std::string &nickname) const {
+ECM ConfigInterfaceService::EditProfile(const std::string &nickname) {
   const std::string stripped = AMStr::Strip(nickname);
   if (stripped.empty()) {
     return {EC::InvalidArg, "profile edit", "", "empty profile nickname"};
@@ -187,11 +191,11 @@ ECM ConfigInterfaceService::EditProfile(const std::string &nickname) const {
     return {EC::HostConfigNotFound, "profile edit", target,
             AMStr::fmt("host nickname not found: {}", target)};
   }
-  return prompt_io_manager_.Edit(target);
+  return prompt_profile_editor_.Edit(target);
 }
 
 ECM ConfigInterfaceService::GetProfile(
-    const std::vector<std::string> &nicknames) const {
+    const std::vector<std::string> &nicknames) {
   if (nicknames.empty()) {
     return {EC::InvalidArg, "profile get", "",
             "profile get requires at least one nickname"};
@@ -223,7 +227,7 @@ ECM ConfigInterfaceService::GetProfile(
       targets.push_back(target);
     }
   }
-  return prompt_io_manager_.Get(targets);
+  return prompt_profile_editor_.Get(targets);
 }
 
 } // namespace AMInterface::config
