@@ -20,7 +20,7 @@ using TermAppService = AMApplication::terminal::TermAppService;
 using FilesystemAppService = AMApplication::filesystem::FilesystemAppService;
 using AMHostConfigManager = AMApplication::host::HostAppService;
 using AMKnownHostsManager = AMApplication::host::KnownHostsAppService;
-using AMPromptIOManager = AMInterface::prompt::AMPromptIOManager;
+using PromptIOManager = AMInterface::prompt::PromptIOManager;
 using AMStyleService = AMInterface::style::AMStyleService;
 using amf = AMDomain::client::amf;
 using ClientHandle = AMDomain::client::ClientHandle;
@@ -35,7 +35,7 @@ public:
                          FilesystemAppService &filesystem_service,
                          AMHostConfigManager &host_config_manager,
                          AMKnownHostsManager &known_hosts_manager,
-                         AMPromptIOManager &prompt_io_manager,
+                         PromptIOManager &prompt_io_manager,
                          AMStyleService &style_service);
   ~ClientInterfaceService() override;
 
@@ -97,7 +97,7 @@ private:
   FilesystemAppService &filesystem_service_;
   AMHostConfigManager &host_config_manager_;
   AMKnownHostsManager &known_hosts_manager_;
-  AMPromptIOManager &prompt_io_manager_;
+  PromptIOManager &prompt_io_manager_;
   AMStyleService &style_service_;
   std::unique_ptr<ClientConnectSpinner> spinner_ = nullptr;
   amf default_control_token_ = nullptr;

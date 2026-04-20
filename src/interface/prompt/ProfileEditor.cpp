@@ -1,6 +1,6 @@
+#include "interface/prompt/ProfileEditor.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/prompt/PromptDomainService.hpp"
-#include "interface/prompt/Prompt.hpp"
 #include <sstream>
 #include <unordered_set>
 
@@ -81,12 +81,7 @@ void PrintPromptProfile_(PromptIOManager &prompt, const std::string &name,
 
 } // namespace
 
-void PromptIOManager::PrintTaskResult(
-    const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info) {
-  (void)task_info;
-}
-
-ECM PromptIOManager::Edit(const std::string &nickname) {
+ECM PromptProfileEditor::Edit(const std::string &nickname) {
   const std::string target = NormalizeProfileNickname_(nickname);
   if (target.empty()) {
     return Err(EC::InvalidArg, "", "", "empty profile nickname");
@@ -98,7 +93,7 @@ ECM PromptIOManager::Edit(const std::string &nickname) {
   return EditProfile_(target);
 }
 
-ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
+ECM PromptProfileEditor::Get(const std::vector<std::string> &nicknames) {
   if (nicknames.empty()) {
     return Err(EC::InvalidArg, "", "",
                "profile get requires at least one nickname");
@@ -123,28 +118,27 @@ ECM PromptIOManager::Get(const std::vector<std::string> &nicknames) {
 
   bool first = true;
   for (const auto &target : targets) {
-    const auto profile_query =
-        isocline_profile_manager_.profile_manager_.GetZoneProfile(target);
+    const auto profile_query = prompt_profile_manager_.GetZoneProfile(target);
     PromptProfileSettings profile = profile_query.profile;
     AMDomain::prompt::service::NormalizePromptProfileSettings(&profile);
     if (!first) {
-      Print("");
+      prompt_io_manager_.Print("");
     }
     first = false;
-    PrintPromptProfile_(*this, target, profile);
+    PrintPromptProfile_(prompt_io_manager_, target, profile);
   }
 
   return OK;
 }
 
-ECM PromptIOManager::EditProfile_(const std::string &nickname) {
+ECM PromptProfileEditor::EditProfile_(const std::string &nickname) {
   const std::string target = NormalizeProfileNickname_(nickname);
   if (target.empty()) {
     return Err(EC::InvalidArg, "", "", "empty profile nickname");
   }
 
   PromptProfileSettings working =
-      isocline_profile_manager_.profile_manager_.GetZoneProfile(target).profile;
+      prompt_profile_manager_.GetZoneProfile(target).profile;
   AMDomain::prompt::service::NormalizePromptProfileSettings(&working);
 
   PromptProfileSettings defaults = {};
@@ -155,7 +149,7 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
     if (!value) {
       return false;
     }
-    auto out = Prompt(label, *value);
+    auto out = prompt_io_manager_.Prompt(label, *value);
     if (!out.has_value()) {
       return false;
     }
@@ -172,7 +166,8 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
     }
     while (true) {
       const std::string placeholder = *value ? "true" : "false";
-      auto out = LiteralPrompt(label, placeholder, bool_literals);
+      auto out =
+          prompt_io_manager_.LiteralPrompt(label, placeholder, bool_literals);
       if (!out.has_value()) {
         return false;
       }
@@ -181,7 +176,8 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
         *value = parsed;
         return true;
       }
-      ErrorFormat(Err(EC::InvalidArg, "", "", "value must be true or false"));
+      prompt_io_manager_.ErrorFormat(
+          Err(EC::InvalidArg, "", "", "value must be true or false"));
     }
   };
 
@@ -204,7 +200,7 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
         }
         return parsed >= min_value && parsed <= max_value;
       };
-      auto out = Prompt(label, placeholder, checker);
+      auto out = prompt_io_manager_.Prompt(label, placeholder, checker);
       if (!out.has_value()) {
         return false;
       }
@@ -214,11 +210,12 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
       }
       int64_t parsed = *value;
       if (!TryParseInt64Strict_(trimmed, &parsed)) {
-        ErrorFormat(Err(EC::InvalidArg, "", "", "invalid integer value"));
+        prompt_io_manager_.ErrorFormat(
+            Err(EC::InvalidArg, "", "", "invalid integer value"));
         continue;
       }
       if (parsed < min_value || parsed > max_value) {
-        ErrorFormat(Err(
+        prompt_io_manager_.ErrorFormat(Err(
             EC::InvalidArg, "", "",
             AMStr::fmt("value out of range [{}, {}]", min_value, max_value)));
         continue;
@@ -333,20 +330,17 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
     working.highlight.path.timeout_ms = defaults.highlight.path.timeout_ms;
   }
 
-  auto profile_document =
-      isocline_profile_manager_.profile_manager_.GetInitArg();
+  auto profile_document = prompt_profile_manager_.GetInitArg();
   profile_document.set[target] = working;
   AMDomain::prompt::service::NormalizePromptProfileArg(&profile_document);
-  isocline_profile_manager_.profile_manager_.SetInitArg(
-      std::move(profile_document));
+  prompt_profile_manager_.SetInitArg(std::move(profile_document));
 
   const std::string current_nickname =
-      NormalizeProfileNickname_(isocline_profile_manager_.CurrentNickname());
+      NormalizeProfileNickname_(profile_runtime_manager_.CurrentNickname());
   if (!current_nickname.empty() && current_nickname == target) {
-    return isocline_profile_manager_.ChangeClient(current_nickname);
+    return profile_runtime_manager_.ChangeClient(current_nickname);
   }
   return OK;
 }
 
 } // namespace AMInterface::prompt
-

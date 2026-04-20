@@ -26,7 +26,7 @@ public:
       AMApplication::host::HostAppService &host_service,
       AMApplication::filesystem::FilesystemAppService &filesystem_service,
       AMInterface::style::AMStyleService &style_service,
-      AMInterface::prompt::AMPromptIOManager &prompt_io_manager);
+      AMInterface::prompt::PromptIOManager &prompt_io_manager);
   ~FilesystemInterfaceSerivce() override = default;
 
   void SetDefaultControlToken(const AMDomain::client::amf &token);
@@ -102,7 +102,7 @@ private:
   AMApplication::host::HostAppService &host_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   AMInterface::style::AMStyleService &style_service_;
-  AMInterface::prompt::AMPromptIOManager &prompt_io_manager_;
+  AMInterface::prompt::PromptIOManager &prompt_io_manager_;
   AMDomain::client::amf default_interrupt_flag_ = nullptr;
 };
 } // namespace AMInterface::filesystem

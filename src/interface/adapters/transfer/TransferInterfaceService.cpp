@@ -86,7 +86,7 @@ TaskID BuildTaskId_() {
   return seq.fetch_add(1, std::memory_order_relaxed);
 }
 
-void PrintTransferStage_(AMInterface::prompt::AMPromptIOManager &prompt,
+void PrintTransferStage_(AMInterface::prompt::PromptIOManager &prompt,
                          bool quiet, int index, int total,
                          const std::string &name) {
   if (quiet) {
@@ -417,7 +417,7 @@ TaskTableRow_ BuildTaskTableRow_(const std::shared_ptr<TaskInfo> &task_info) {
   return row;
 }
 
-void PrintTaskTable_(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+void PrintTaskTable_(AMInterface::prompt::PromptIOManager &prompt_io_manager,
                      const std::vector<TaskTableRow_> &rows) {
   if (rows.empty()) {
     return;
@@ -578,7 +578,7 @@ BuildTaskInspectSnapshot_(const std::shared_ptr<TaskInfo> &task_info,
 }
 
 void PrintTaskInspectSummary_(
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     const TaskInspectSnapshot_ &snapshot) {
   const auto state_view = BuildInspectStateView_(snapshot);
   prompt_io_manager.FmtPrint("[Task {}] {} {}", snapshot.id, state_view.icon,
@@ -652,7 +652,7 @@ void PrintTaskInspectSummary_(
 }
 
 void PrintTaskInspectSets_(
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     const TaskInspectSnapshot_ &snapshot) {
   prompt_io_manager.Print("");
   prompt_io_manager.Print("Transfer Sets:");
@@ -682,7 +682,7 @@ void PrintTaskInspectSets_(
 }
 
 void PrintTaskInspectEntries_(
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     const TaskInspectSnapshot_ &snapshot) {
   prompt_io_manager.Print("");
   prompt_io_manager.Print("Entries:");
@@ -789,7 +789,7 @@ void PrintTaskInspectEntries_(
 }
 
 bool PrintWaitTaskResultSummary_(
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     const std::shared_ptr<TaskInfo> &task_info, const ECM &result) {
   if (!task_info || task_info->Set.quiet) {
     return false;
@@ -866,7 +866,7 @@ bool PrintWaitTaskResultSummary_(
 TransferInterfaceService::TransferInterfaceService(
     AMApplication::filesystem::FilesystemAppService &filesystem_service,
     AMApplication::transfer::TransferAppService &transfer_service,
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     std::function<ControlComponent(AMDomain::client::amf)>
         control_component_factory,
     AMInterface::style::AMStyleService *style_service,
@@ -1256,7 +1256,7 @@ ECM TransferInterfaceService::WaitTask_(
       style_service_, transfer_bar_refresh_interval_ms_);
 
   struct ScopedRefresh_ {
-    AMInterface::prompt::AMPromptIOManager *prompt = nullptr;
+    AMInterface::prompt::PromptIOManager *prompt = nullptr;
     bool active = false;
     ~ScopedRefresh_() {
       if (active && prompt != nullptr) {
@@ -1266,7 +1266,7 @@ ECM TransferInterfaceService::WaitTask_(
   } scoped_refresh{&prompt_io_manager_, false};
 
   struct ScopedCursor_ {
-    AMInterface::prompt::AMPromptIOManager *prompt = nullptr;
+    AMInterface::prompt::PromptIOManager *prompt = nullptr;
     bool hidden = false;
     ~ScopedCursor_() {
       if (hidden && prompt != nullptr) {
@@ -1834,7 +1834,7 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
 
     if (!watch_items.empty()) {
       struct ScopedRefresh_ {
-        AMInterface::prompt::AMPromptIOManager *prompt = nullptr;
+        AMInterface::prompt::PromptIOManager *prompt = nullptr;
         bool active = false;
         ~ScopedRefresh_() {
           if (active && prompt != nullptr) {
@@ -1844,7 +1844,7 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
       } scoped_refresh{&prompt_io_manager_, false};
 
       struct ScopedCursor_ {
-        AMInterface::prompt::AMPromptIOManager *prompt = nullptr;
+        AMInterface::prompt::PromptIOManager *prompt = nullptr;
         bool hidden = false;
         ~ScopedCursor_() {
           if (hidden && prompt != nullptr) {

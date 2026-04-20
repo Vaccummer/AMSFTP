@@ -88,7 +88,7 @@ std::string JoinValueWithTail_(const std::string &first_segment,
 
 VarInterfaceService::VarInterfaceService(VarAppService &var_service,
                                          ClientAppService &client_service,
-                                         AMPromptIOManager &prompt_io_manager)
+                                         PromptIOManager &prompt_io_manager)
     : var_service_(var_service), client_service_(client_service),
       prompt_io_manager_(prompt_io_manager) {}
 

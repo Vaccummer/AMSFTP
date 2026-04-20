@@ -1,5 +1,6 @@
 #include "interface/cli/InteractiveLoop.hpp"
 #include "application/client/ClientAppService.hpp"
+#include "application/prompt/PromptRenderDTO.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/time.hpp"
@@ -10,7 +11,7 @@
 #include "interface/completion/Engine.hpp"
 #include "interface/parser/CommandPreprocess.hpp"
 #include "interface/parser/CommandTree.hpp"
-#include "interface/prompt/CLICorePrompt.hpp"
+#include "interface/prompt/CLIPromtRender.hpp"
 #include "interface/token_analyser/TokenAnalyzerRuntimeAdapter.hpp"
 #include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include <algorithm>
@@ -35,7 +36,7 @@ constexpr int kEventIdCorePromptBackupIfNeeded = 7004;
 constexpr int kEventIdCorePromptCompletionCancelAsync = 7005;
 constexpr int kEventIdLoopExitConfigSaveAll = 7101;
 
-void FlushPromptOutputIfSafe_(AMInterface::prompt::AMPromptIOManager &prompt) {
+void FlushPromptOutputIfSafe_(AMInterface::prompt::PromptIOManager &prompt) {
   if (prompt.IsCacheOutputOnly()) {
     return;
   }
@@ -188,7 +189,7 @@ ECM ReloadSettingsIfUpdated_(
 /**
  * @brief Print an ECM error message if the code is not Success.
  */
-void PrintECM_(AMInterface::prompt::AMPromptIOManager &prompt, const ECM &rcm) {
+void PrintECM_(AMInterface::prompt::PromptIOManager &prompt, const ECM &rcm) {
   if (rcm.code == EC::Success) {
     return;
   }
@@ -201,61 +202,87 @@ void PrintECM_(AMInterface::prompt::AMPromptIOManager &prompt, const ECM &rcm) {
   prompt.FmtPrint("❌ {}: {}", name, message);
 }
 
-void RegisterPromptGetters_(AMInterface::prompt::CLIPromtRender &core_prompt,
-                            const CLIServices &managers) {
-  core_prompt.RegisterGetter("cwd", [&managers]() {
-    auto client = managers.application.client_service->GetCurrentClient();
-    return ResolvePromptCwd_(client);
-  });
-  core_prompt.RegisterGetter("username", [&managers]() {
-    auto client =
-        ResolveActiveClient_(managers.application.client_service.Get());
-    return ResolveUserHost_(client).first;
-  });
-  core_prompt.RegisterGetter("hostname", [&managers]() {
-    auto client =
-        ResolveActiveClient_(managers.application.client_service.Get());
-    return ResolveUserHost_(client).second;
-  });
-  core_prompt.RegisterGetter("os_type", [&managers]() {
-    OS_TYPE os_type = OS_TYPE::Unknown;
-    auto client =
-        ResolveActiveClient_(managers.application.client_service.Get());
-    if (client) {
-      try {
-        os_type = client->ConfigPort().GetOSType();
-      } catch (const std::exception &) {
-        os_type = OS_TYPE::Unknown;
-      }
+std::string ResolvePromptOsType_(const AMDomain::client::ClientHandle &client) {
+  OS_TYPE os_type = OS_TYPE::Unknown;
+  if (client) {
+    try {
+      os_type = client->ConfigPort().GetOSType();
+    } catch (const std::exception &) {
+      os_type = OS_TYPE::Unknown;
     }
-    switch (os_type) {
-    case OS_TYPE::Linux:
-      return std::string("linux");
-    case OS_TYPE::MacOS:
-      return std::string("macos");
-    case OS_TYPE::Windows:
-    default:
-      return std::string("windows");
-    }
-  });
-  core_prompt.RegisterGetter("task_pending", [&managers]() {
-    size_t pending_count = 0;
-    size_t running_count = 0;
-    managers.interfaces.transfer_service->GetTaskCounts(&pending_count,
-                                                        &running_count);
-    return std::to_string(pending_count);
-  });
-  core_prompt.RegisterGetter("task_running", [&managers]() {
-    size_t pending_count = 0;
-    size_t running_count = 0;
-    managers.interfaces.transfer_service->GetTaskCounts(&pending_count,
-                                                        &running_count);
-    return std::to_string(running_count);
-  });
-  core_prompt.RegisterGetter("task_paused", [&managers]() {
-    const auto paused = managers.application.transfer_service->GetPausedTasks();
-    return std::to_string(paused.size());
-  });
+  }
+
+  switch (os_type) {
+  case OS_TYPE::Linux:
+    return "linux";
+  case OS_TYPE::MacOS:
+    return "macos";
+  case OS_TYPE::Windows:
+  default:
+    return "windows";
+  }
+}
+
+std::string
+ResolvePromptSysIcon_(AMInterface::style::AMStyleService &style_service,
+                      const std::string &os_type) {
+  const auto icons = style_service.GetInitArg().style.cli_prompt.icons;
+  const std::string normalized = AMStr::lowercase(AMStr::Strip(os_type));
+  if (normalized == "linux") {
+    return icons.linux.empty() ? std::string("PC") : icons.linux;
+  }
+  if (normalized == "macos" || normalized == "mac") {
+    return icons.macos.empty() ? std::string("PC") : icons.macos;
+  }
+  return icons.windows.empty() ? std::string("PC") : icons.windows;
+}
+
+AMApplication::prompt::PromptRenderDTO
+BuildPromptRenderDTO_(const CLIServices &managers, const ECM &result,
+                      int64_t elapsed_time_ms) {
+  AMApplication::prompt::PromptRenderDTO dto = {};
+  auto client = ResolveActiveClient_(managers.application.client_service.Get());
+
+  dto.nickname =
+      AMStr::Strip(managers.application.client_service->CurrentNickname());
+  if (dto.nickname.empty()) {
+    dto.nickname = "local";
+  }
+
+  dto.client_connected = true;
+  if (client) {
+    const auto state = client->ConfigPort().GetState();
+    dto.client_connected = (state.data.status == ClientStatus::OK);
+  }
+
+  const auto [username, hostname] = ResolveUserHost_(client);
+  dto.username = username;
+  dto.hostname = hostname;
+  dto.cwd = ResolvePromptCwd_(client);
+  dto.os_type = ResolvePromptOsType_(client);
+  dto.sysicon = ResolvePromptSysIcon_(managers.interfaces.style_service.Get(),
+                                      dto.os_type);
+
+  size_t pending_count = 0;
+  size_t running_count = 0;
+  managers.interfaces.transfer_service->GetTaskCounts(&pending_count,
+                                                      &running_count);
+  const int64_t paused_count = static_cast<int64_t>(
+      managers.application.transfer_service->GetPausedTasks().size());
+  dto.task_pending = static_cast<int64_t>(pending_count);
+  dto.task_running = static_cast<int64_t>(running_count);
+  dto.task_paused = paused_count;
+  dto.task_num = std::max<int64_t>(0, dto.task_pending) +
+                 std::max<int64_t>(0, dto.task_running);
+
+  dto.time_now =
+      FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
+  dto.time_clock = dto.time_now;
+  dto.elapsed = AMStr::fmt("{}ms", std::max<int64_t>(0, elapsed_time_ms));
+  dto.success = (result.code == EC::Success);
+  dto.ec_name = dto.success ? std::string()
+                            : std::string(magic_enum::enum_name(result.code));
+  return dto;
 }
 
 class ScopedInteractiveEventCallbacks_ : public NonCopyableNonMovable {
@@ -371,11 +398,10 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 
   AMInterface::prompt::CLIPromtRender core_prompt(
       managers.interfaces.style_service.Get());
-  RegisterPromptGetters_(core_prompt, managers);
   std::string last_core_prompt_parse_error = "";
   std::string last_core_prompt_render_error = "";
 
-  AMInterface::prompt::CLIPromtRender::RenderArg prompt_arg = {};
+  AMApplication::prompt::PromptRenderDTO prompt_dto = {};
 
   while (true) {
     if (ctx.task_control_token->IsInterrupted()) {
@@ -395,21 +421,10 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     //   core_prompt.InvalidateCache();
     // }
 
-    prompt_arg.current_nickname =
-        AMStr::Strip(managers.application.client_service->CurrentNickname());
-    prompt_arg.current_client_connected = true;
-    if (auto client =
-            ResolveActiveClient_(managers.application.client_service.Get());
-        client) {
-      const auto state = client->ConfigPort().GetState();
-      prompt_arg.current_client_connected =
-          (state.data.status == ClientStatus::OK);
-    }
-    prompt_arg.elapsed_time_ms = 0;
-    prompt_arg.result = OK;
+    prompt_dto = BuildPromptRenderDTO_(managers, OK, 0);
 
     // managers.interfaces.prompt_io_manager->Print("");
-    const std::string prompt_text = core_prompt.Render(prompt_arg);
+    const std::string prompt_text = core_prompt.Render(prompt_dto);
     if (!core_prompt.State().parse_ok) {
       std::string err = "failed to parse core prompt template";
       if (!core_prompt.State().diagnostics.items.empty()) {
@@ -455,8 +470,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     FlushPromptOutputIfSafe_(managers.interfaces.prompt_io_manager.Get());
 
     if (!line_opt.has_value()) {
-      prompt_arg.result = OK;
-      prompt_arg.elapsed_time_ms = 0;
+      prompt_dto = BuildPromptRenderDTO_(managers, OK, 0);
       continue;
     }
 
@@ -469,9 +483,10 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     if (prep.rcm.code != EC::Success) {
       PrintECM_(managers.interfaces.prompt_io_manager.Get(), prep.rcm);
       store_exit_code(static_cast<int>(prep.rcm.code));
-      prompt_arg.result = prep.rcm;
-      prompt_arg.elapsed_time_ms = std::max<int64_t>(
-          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
+      prompt_dto = BuildPromptRenderDTO_(
+          managers, prep.rcm,
+          std::max<int64_t>(
+              0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
       continue;
     }
     std::vector<std::string> cli_args = std::move(prep.data);
@@ -484,9 +499,10 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       managers.interfaces.prompt_io_manager->Print(*invalid_command_error);
       ECM parse_rcm = {EC::InvalidArg, "", "", *invalid_command_error};
       store_exit_code(static_cast<int>(parse_rcm.code));
-      prompt_arg.result = parse_rcm;
-      prompt_arg.elapsed_time_ms = std::max<int64_t>(
-          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
+      prompt_dto = BuildPromptRenderDTO_(
+          managers, parse_rcm,
+          std::max<int64_t>(
+              0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
       continue;
     }
     // CLI11 consumes args via pop_back, so reverse to preserve order.
@@ -499,46 +515,51 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       managers.interfaces.prompt_io_manager->Print(app.help());
       ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
-      prompt_arg.result = parse_rcm;
-      prompt_arg.elapsed_time_ms = std::max<int64_t>(
-          0, std::chrono::duration_cast<std::chrono::milliseconds>(
-                 std::chrono::steady_clock::now() - dispatch_begin)
-                 .count());
+      prompt_dto = BuildPromptRenderDTO_(
+          managers, parse_rcm,
+          std::max<int64_t>(
+              0, std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - dispatch_begin)
+                     .count()));
       continue;
     } catch (const CLI::CallForAllHelp &e) {
       managers.interfaces.prompt_io_manager->Print(
           app.help("", CLI::AppFormatMode::All));
       ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
-      prompt_arg.result = parse_rcm;
-      prompt_arg.elapsed_time_ms =
-          AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow());
+      prompt_dto = BuildPromptRenderDTO_(
+          managers, parse_rcm,
+          AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
       continue;
     } catch (const CLI::CallForVersion &e) {
       managers.interfaces.prompt_io_manager->Print(app.version());
       ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
-      prompt_arg.result = parse_rcm;
-      prompt_arg.elapsed_time_ms = std::max<int64_t>(
-          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
+      prompt_dto = BuildPromptRenderDTO_(
+          managers, parse_rcm,
+          std::max<int64_t>(0,
+                            AMTime::IntervalMS(dispatch_begin,
+                                               AMTime::SteadyNow())));
       continue;
     } catch (const CLI::ParseError &e) {
       const std::string parse_msg = FormatCliParseErrorMessage(e);
       managers.interfaces.prompt_io_manager->Print(parse_msg);
       ECM parse_rcm = {EC::InvalidArg, "", "", parse_msg};
       store_exit_code(static_cast<int>(parse_rcm.code));
-      prompt_arg.result = parse_rcm;
-      prompt_arg.elapsed_time_ms = std::max<int64_t>(
-          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
+      prompt_dto = BuildPromptRenderDTO_(
+          managers, parse_rcm,
+          std::max<int64_t>(
+              0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
       continue;
     }
 
     ctx.async = false;
     ctx.enforce_interactive = true;
     DispatchCliCommands(cli_commands, managers, ctx);
-    prompt_arg.result = ctx.rcm;
-    prompt_arg.elapsed_time_ms = std::max<int64_t>(
-        0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
+    prompt_dto = BuildPromptRenderDTO_(
+        managers, ctx.rcm,
+        std::max<int64_t>(0,
+                          AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
 
     if (ctx.request_exit) {
       break;

@@ -157,12 +157,12 @@ std::string FormatStatBlock(const PathInfo &info) {
   return out.str();
 }
 
-void PrintStatBlock(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+void PrintStatBlock(AMInterface::prompt::PromptIOManager &prompt_io_manager,
                     const PathInfo &info) {
   prompt_io_manager.Print(FormatStatBlock(info));
 }
 
-void PrintLsNamesGrid(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+void PrintLsNamesGrid(AMInterface::prompt::PromptIOManager &prompt_io_manager,
                       AMInterface::style::AMStyleService &style_service,
                       const std::vector<PathInfo> &entries) {
   constexpr size_t kMaxWidth = 80;
@@ -199,7 +199,7 @@ void PrintLsNamesGrid(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
 }
 
 void PrintLsLongEntries(
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     AMInterface::style::AMStyleService &style_service,
     const std::vector<PathInfo> &entries) {
   size_t mode_width = 0;
@@ -266,7 +266,7 @@ void SortTreeNode_(TreeNode_ *node) {
 }
 
 void PrintTreeLines(
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     AMInterface::style::AMStyleService &style_service,
     const std::string &root_key, const std::string &root_line,
     const std::unordered_map<std::string, TreeNode_> &tree_nodes) {
@@ -312,7 +312,7 @@ void PrintTreeLines(
 }
 
 void PrintPermanentRemovePlan(
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     const AMApplication::filesystem::PermanentRemovePlan &plan) {
   for (const auto &[nickname, paths] : plan.grouped_display_paths) {
     prompt_io_manager.Print(AMStr::fmt("{}:", nickname));
@@ -323,7 +323,7 @@ void PrintPermanentRemovePlan(
 }
 
 void PrintGroupedClientPaths(
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
     const std::map<std::string, std::vector<PathTarget>> &grouped_paths) {
   for (const auto &[nickname, paths] : grouped_paths) {
     prompt_io_manager.Print(AMStr::fmt("{}:", nickname));
@@ -340,7 +340,7 @@ FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
     AMApplication::host::HostAppService &host_service,
     AMApplication::filesystem::FilesystemAppService &filesystem_service,
     AMInterface::style::AMStyleService &style_service,
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager)
+    AMInterface::prompt::PromptIOManager &prompt_io_manager)
     : client_service_(client_service), host_service_(host_service),
       filesystem_service_(filesystem_service), style_service_(style_service),
       prompt_io_manager_(prompt_io_manager), default_interrupt_flag_(nullptr) {}

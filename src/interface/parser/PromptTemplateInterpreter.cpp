@@ -2,7 +2,6 @@
 #include "foundation/tools/string.hpp"
 
 #include <cctype>
-#include <cerrno>
 #include <cstdlib>
 #include <string>
 
@@ -15,46 +14,26 @@ extern "C" {
 namespace AMInterface::prompt {
 namespace {
 
-void PushLuaValue_(lua_State *L, const std::optional<std::string> &value) {
+void PushLuaValue_(lua_State *L, const PromptVarValue &value) {
   if (!L) {
     return;
   }
-  if (!value.has_value()) {
-    lua_pushnil(L);
-    return;
-  }
-
-  const std::string raw = value.value();
-  const std::string stripped = AMStr::Strip(raw);
-  const std::string lowered = AMStr::lowercase(stripped);
-  if (lowered == "true") {
-    lua_pushboolean(L, 1);
-    return;
-  }
-  if (lowered == "false") {
-    lua_pushboolean(L, 0);
-    return;
-  }
-
-  if (!stripped.empty()) {
-    char *int_end = nullptr;
-    errno = 0;
-    const long long int_value = std::strtoll(stripped.c_str(), &int_end, 10);
-    if (errno == 0 && int_end != nullptr && *int_end == '\0') {
-      lua_pushinteger(L, static_cast<lua_Integer>(int_value));
-      return;
-    }
-
-    char *float_end = nullptr;
-    errno = 0;
-    const double float_value = std::strtod(stripped.c_str(), &float_end);
-    if (errno == 0 && float_end != nullptr && *float_end == '\0') {
-      lua_pushnumber(L, static_cast<lua_Number>(float_value));
-      return;
-    }
-  }
-
-  lua_pushlstring(L, raw.c_str(), raw.size());
+  std::visit(
+      [L](const auto &item) {
+        using VT = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<VT, std::monostate>) {
+          lua_pushnil(L);
+        } else if constexpr (std::is_same_v<VT, bool>) {
+          lua_pushboolean(L, item ? 1 : 0);
+        } else if constexpr (std::is_same_v<VT, int64_t>) {
+          lua_pushinteger(L, static_cast<lua_Integer>(item));
+        } else if constexpr (std::is_same_v<VT, double>) {
+          lua_pushnumber(L, static_cast<lua_Number>(item));
+        } else if constexpr (std::is_same_v<VT, std::string>) {
+          lua_pushlstring(L, item.c_str(), item.size());
+        }
+      },
+      value);
 }
 
 std::string ReadLuaError_(lua_State *L) {
@@ -81,8 +60,8 @@ size_t ExtractLuaLineNumber_(const std::string &msg) {
       ++q;
     }
     if (q > p && q < msg.size() && msg[q] == ':') {
-      return static_cast<size_t>(std::strtoull(msg.substr(p, q - p).c_str(),
-                                               nullptr, 10));
+      return static_cast<size_t>(
+          std::strtoull(msg.substr(p, q - p).c_str(), nullptr, 10));
     }
     start = marker + 2;
   }

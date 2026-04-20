@@ -214,7 +214,7 @@ void RestoreCliPromptStateAfterTerminalExit_() {
 class ScopedPromptOutputCache_ final : NonCopyableNonMovable {
 public:
   explicit ScopedPromptOutputCache_(
-      AMInterface::prompt::AMPromptIOManager *prompt_io_manager)
+      AMInterface::prompt::PromptIOManager *prompt_io_manager)
       : prompt_io_manager_(prompt_io_manager) {
     if (prompt_io_manager_ != nullptr) {
       prompt_io_manager_->SetCacheOutputOnly(true);
@@ -233,7 +233,7 @@ public:
   }
 
 private:
-  AMInterface::prompt::AMPromptIOManager *prompt_io_manager_ = nullptr;
+  AMInterface::prompt::PromptIOManager *prompt_io_manager_ = nullptr;
   bool active_ = false;
 };
 
@@ -1060,7 +1060,7 @@ TerminalInterfaceService::TerminalInterfaceService(
     AMApplication::terminal::TermAppService &terminal_service,
     AMApplication::filesystem::FilesystemAppService &filesystem_service,
     AMInterface::style::AMStyleService &style_service,
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager)
+    AMInterface::prompt::PromptIOManager &prompt_io_manager)
     : client_service_(client_service), terminal_service_(terminal_service),
       filesystem_service_(filesystem_service), style_service_(style_service),
       prompt_io_manager_(prompt_io_manager), default_interrupt_flag_(nullptr),

@@ -1,6 +1,6 @@
 #include "Isocline/isocline.h"
+#include "foundation/tools/prompt_ui.hpp"
 #include "foundation/tools/string.hpp"
-#include "foundation/tools/terminal.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
@@ -14,26 +14,6 @@
 namespace AMInterface::prompt {
 
 namespace {
-/**
- * @brief Bridge isocline highlight callbacks to the token analyzer.
- *
- * @param henv Highlight environment provided by isocline.
- * @param input Current input text.
- * @param arg Pointer to the token analyzer instance.
- */
-// void PromptHighlighter_(ic_highlight_env_t *henv, const char *input,
-//                         void *arg) {
-//   if (!henv || !input || !arg) {
-//     return;
-//   }
-//   AMInterface::parser::TokenTypeAnalyzer &analyzer = ...;
-//   std::string formatted;
-//   analyzer.HighlightFormatted(input, &formatted);
-//   if (formatted.empty()) {
-//     return;
-//   }
-//   ic_highlight_formatted(henv, input, formatted.c_str());
-// }
 
 /**
  * @brief No-op highlighter for prompts that should not show syntax colors.
@@ -119,31 +99,8 @@ private:
   bool armed_ = false;
 };
 
-std::shared_ptr<IsoclineProfile>
-CurrentProfile_(IsoclineProfileManager &profile_manager) {
-  return profile_manager.CurrentProfile();
-}
-
-void DedupProfileHistoryTail_(const std::shared_ptr<IsoclineProfile> &profile) {
-  if (!profile) {
-    return;
-  }
-  while (true) {
-    const std::vector<std::string> history = profile->CollectHistory();
-    if (history.size() < 2) {
-      return;
-    }
-    if (history[0] != history[1]) {
-      return;
-    }
-    if (!profile->RemoveLastHistoryEntry()) {
-      return;
-    }
-  }
-}
-
 bool QueryCheckerCachedResult_(const PromptValueQueryContext &ctx,
-                              const std::string &text) {
+                               const std::string &text) {
   if (!ctx.checker || !(*ctx.checker)) {
     return true;
   }
@@ -251,18 +208,73 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
   }
 }
 
+void AppendRenderLinesToFrame_(std::string *frame,
+                               const std::vector<std::string> &lines) {
+  if (frame == nullptr || lines.empty()) {
+    return;
+  }
+  for (const auto &line : lines) {
+    *frame += "\x1b[2K\r";
+    *frame += line;
+    *frame += "\n";
+  }
+}
+
+std::string BuildRepaintFrame_(int old_rows, int new_rows,
+                               const std::vector<std::string> &new_lines) {
+  if (old_rows <= 0 && new_rows <= 0) {
+    return {};
+  }
+
+  std::string frame = {};
+  AMPromptUI::AppendMoveUpRows(&frame, old_rows);
+  if (old_rows > 0) {
+    AMPromptUI::AppendClearRows(&frame, old_rows);
+    AMPromptUI::AppendMoveUpRows(&frame, old_rows);
+  }
+  AppendRenderLinesToFrame_(&frame, new_lines);
+  return frame;
+}
+
+std::string
+BuildInsertAndRepaintFrame_(int old_rows, const std::string &msg,
+                            const std::vector<std::string> &new_lines) {
+  if (old_rows <= 0) {
+    return msg;
+  }
+
+  std::string frame = {};
+  AMPromptUI::AppendMoveUpRows(&frame, old_rows);
+  AMPromptUI::AppendClearRows(&frame, old_rows);
+  AMPromptUI::AppendMoveUpRows(&frame, old_rows);
+  frame += msg;
+  AppendRenderLinesToFrame_(&frame, new_lines);
+  return frame;
+}
+
+std::string BuildClearFrame_(int old_rows) {
+  if (old_rows <= 0) {
+    return {};
+  }
+  std::string frame = {};
+  AMPromptUI::AppendMoveUpRows(&frame, old_rows);
+  AMPromptUI::AppendClearRows(&frame, old_rows);
+  AMPromptUI::AppendMoveUpRows(&frame, old_rows);
+  return frame;
+}
+
 } // namespace
 
 void PromptIOManager::PrintRaw(const std::string &text) { EmitOutput_(text); }
 
 void PromptIOManager::Print(const std::string &text) {
-  EmitOutput_(EnsureTrailingNewline_(text));
+  EmitOutput_(AMPromptUI::EnsureTrailingNewline(text));
 }
 
 void PromptIOManager::StaticPrint(const std::string &text,
                                   bool ensure_newline) {
   const std::string output =
-      ensure_newline ? EnsureTrailingNewline_(text) : text;
+      ensure_newline ? AMPromptUI::EnsureTrailingNewline(text) : text;
   if (output.find('\x1b') != std::string::npos) {
     ic_term_write(output.c_str());
   } else {
@@ -272,9 +284,7 @@ void PromptIOManager::StaticPrint(const std::string &text,
 }
 
 void PromptIOManager::PrintOperationAbort() {
-  const std::string abort_style =
-      isocline_profile_manager_.style_config_manager_.GetInitArg()
-          .style.common.abort;
+  const std::string abort_style = isocline_profile_manager_.AbortStyle();
   if (abort_style.empty()) {
     Print("⛔  " + kvars::operation_abort_text);
     return;
@@ -328,48 +338,6 @@ void PromptIOManager::SetCacheOutputOnly(bool enabled) {
 
 bool PromptIOManager::IsCacheOutputOnly() const {
   return io_state_.cache_output_lock_depth_.load(std::memory_order_relaxed) > 0;
-}
-
-void PromptIOManager::SetRefreshDiffMode(bool enabled) {
-  io_state_.refresh_diff_mode_.store(enabled, std::memory_order_relaxed);
-}
-
-bool PromptIOManager::IsRefreshDiffMode() const {
-  return io_state_.refresh_diff_mode_.load(std::memory_order_relaxed);
-}
-
-std::string PromptIOManager::EnsureTrailingNewline_(const std::string &text) {
-  if (!text.empty() && text.back() == '\n') {
-    return text;
-  }
-  return text + "\n";
-}
-
-bool PromptIOManager::IsAsciiText_(const std::string &text) {
-  return std::all_of(text.begin(), text.end(), [](char ch) {
-    return (static_cast<unsigned char>(ch) < 128);
-  });
-}
-
-namespace {
-bool HasBbcodeMarkup_(const std::string &text) {
-  const size_t open = text.find('[');
-  if (open == std::string::npos) {
-    return false;
-  }
-  return text.find(']', open + 1) != std::string::npos;
-}
-} // namespace
-
-size_t PromptIOManager::CommonPrefixAscii_(const std::string &lhs,
-                                           const std::string &rhs) {
-  const size_t limit = std::min(lhs.size(), rhs.size());
-  size_t i = 0;
-
-  while (i < limit && lhs[i] == rhs[i]) {
-    ++i;
-  }
-  return i;
 }
 
 void PromptIOManager::SetActivePromptHeader_(const std::string &header) {
@@ -439,7 +407,7 @@ void PromptIOManager::EmitOutput_(const std::string &text, bool allow_cache) {
       return;
     }
     std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-    if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+    if (auto profile = isocline_profile_manager_.CurrentProfile(); profile) {
       (void)profile->Use();
     }
     if (replay_prompt_header) {
@@ -455,7 +423,7 @@ void PromptIOManager::EmitOutput_(const std::string &text, bool allow_cache) {
   }
 
   std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+  if (auto profile = isocline_profile_manager_.CurrentProfile(); profile) {
     (void)profile->Use();
   }
   PrintInsertAndRepaintLocked_(text);
@@ -463,66 +431,6 @@ void PromptIOManager::EmitOutput_(const std::string &text, bool allow_cache) {
       io_state_.secure_phase_.load(std::memory_order_relaxed)) {
     (void)ic_request_refresh_async();
   }
-}
-
-void PromptIOManager::AppendMoveUpRows_(std::string *frame, int rows) {
-  if (frame == nullptr || rows <= 0) {
-    return;
-  }
-  *frame += "\r\x1b[" + std::to_string(rows) + "A";
-}
-
-void PromptIOManager::AppendClearRows_(std::string *frame, int rows) {
-  if (frame == nullptr || rows <= 0) {
-    return;
-  }
-  for (int i = 0; i < rows; ++i) {
-    *frame += "\x1b[2K\r";
-    *frame += "\n";
-  }
-}
-
-void PromptIOManager::AppendRowDiffUpdate_(std::string *frame,
-                                           const std::string &old_line,
-                                           const std::string &new_line) const {
-  if (frame == nullptr) {
-    return;
-  }
-  if (old_line == new_line) {
-    *frame += "\x1b[1B\r";
-    return;
-  }
-
-  // BBCode tags do not occupy terminal columns, so byte-based cursor
-  // diffs can leave stale text. Redraw the whole row when markup exists.
-  if (HasBbcodeMarkup_(old_line) || HasBbcodeMarkup_(new_line)) {
-    *frame += "\x1b[2K\r";
-    *frame += new_line;
-    *frame += "\x1b[1B\r";
-    return;
-  }
-
-  if (!IsAsciiText_(old_line) || !IsAsciiText_(new_line)) {
-    *frame += "\x1b[2K\r";
-    *frame += new_line;
-    *frame += "\x1b[1B\r";
-    return;
-  }
-
-  const size_t common_prefix = CommonPrefixAscii_(old_line, new_line);
-  if (common_prefix == 0) {
-    *frame += "\x1b[2K\r";
-    *frame += new_line;
-    *frame += "\x1b[1B\r";
-    return;
-  }
-
-  *frame += "\r\x1b[" + std::to_string(common_prefix) + "C";
-  *frame += "\x1b[K";
-  if (common_prefix < new_line.size()) {
-    *frame += new_line.substr(common_prefix);
-  }
-  *frame += "\x1b[1B\r";
 }
 
 void PromptIOManager::PrintSyncLocked_(const std::string &text) {
@@ -552,158 +460,23 @@ void PromptIOManager::PrintInsertAndRepaintLocked_(const std::string &msg) {
     return;
   }
 
-  const int cols = TerminalCols_();
+  const int cols = AMPromptUI::TerminalCols();
   const int new_rows =
-      ComputeRefreshRowsLocked_(refresh_state_.logical_lines, cols);
-  const std::string frame = BuildInsertAndRepaintFrameLocked_(
-      old_rows, msg, new_rows, refresh_state_.logical_lines);
+      AMPromptUI::ComputeWrappedRows(refresh_state_.logical_lines, cols);
+  const std::string frame =
+      BuildInsertAndRepaintFrame_(old_rows, msg, refresh_state_.logical_lines);
   if (!frame.empty()) {
     PrintSyncRefreshLocked_(frame);
   }
 
   refresh_state_.rows_painted = new_rows;
-  refresh_state_.last_cols = cols;
-  refresh_state_.last_emitted_frame_hash =
-      BuildRefreshHash_(refresh_state_.logical_lines, cols);
   io_state_.refresh_occupied_lines_.store(new_rows, std::memory_order_relaxed);
-}
-
-std::string PromptIOManager::StripStyleForMeasure_(const std::string &text) {
-  auto is_style_tag = [](const std::string &tag) {
-    if (tag.empty()) {
-      return false;
-    }
-    return tag.front() == '#' || tag.front() == '/' || tag.front() == '!';
-  };
-
-  std::string out = {};
-  out.reserve(text.size());
-  for (size_t i = 0; i < text.size(); ++i) {
-    const char ch = text[i];
-    if (ch == '\\' && i + 1 < text.size() &&
-        (text[i + 1] == '[' || text[i + 1] == ']')) {
-      out.push_back(text[i + 1]);
-      ++i;
-      continue;
-    }
-    if (ch == '[') {
-      const size_t close = text.find(']', i + 1);
-      if (close != std::string::npos) {
-        const std::string token = text.substr(i + 1, close - i - 1);
-        if (is_style_tag(token)) {
-          i = close;
-          continue;
-        }
-      }
-    }
-    out.push_back(ch);
-  }
-  return out;
-}
-
-std::string PromptIOManager::NormalizeMeasureLine_(const std::string &text) {
-  std::string out = AMStr::replace_all(text, "\t", "   ");
-  out = AMStr::replace_all(out, "\r", "");
-  return out;
-}
-
-int PromptIOManager::TerminalCols_() {
-  return std::max(1, AMTerminalTools::GetTerminalViewportInfo().cols);
-}
-
-size_t PromptIOManager::BuildRefreshHash_(const std::vector<std::string> &lines,
-                                          int cols) {
-  size_t seed = std::hash<int>{}(cols);
-  for (const auto &line : lines) {
-    const size_t v = std::hash<std::string>{}(line);
-    seed ^= v + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
-  }
-  return seed;
-}
-
-int PromptIOManager::ComputeRefreshRowsLocked_(
-    const std::vector<std::string> &lines, int cols) const {
-  if (lines.empty()) {
-    return 0;
-  }
-  const int width = std::max(1, cols);
-  int rows = 0;
-  for (const auto &line : lines) {
-    const std::string plain =
-        NormalizeMeasureLine_(StripStyleForMeasure_(line));
-    const size_t display_width = AMStr::DisplayWidthUtf8(plain);
-    const int line_rows =
-        std::max<int>(1, static_cast<int>((display_width +
-                                           static_cast<size_t>(width) - 1) /
-                                          static_cast<size_t>(width)));
-    rows += line_rows;
-  }
-  return rows;
-}
-
-void PromptIOManager::AppendRenderLinesToFrameLocked_(
-    std::string *frame, const std::vector<std::string> &lines) const {
-  if (frame == nullptr || lines.empty()) {
-    return;
-  }
-  for (const auto &line : lines) {
-    *frame += "\x1b[2K\r";
-    *frame += line;
-    *frame += "\n";
-  }
-}
-
-std::string PromptIOManager::BuildRepaintFrameLocked_(
-    int old_rows, int new_rows, const std::vector<std::string> &new_lines) const {
-  if (old_rows <= 0 && new_rows <= 0) {
-    return {};
-  }
-
-  std::string frame = {};
-  AppendMoveUpRows_(&frame, old_rows);
-  if (old_rows > 0) {
-    AppendClearRows_(&frame, old_rows);
-    AppendMoveUpRows_(&frame, old_rows);
-  }
-  AppendRenderLinesToFrameLocked_(&frame, new_lines);
-  return frame;
-}
-
-std::string PromptIOManager::BuildInsertAndRepaintFrameLocked_(
-    int old_rows, const std::string &msg, int new_rows,
-    const std::vector<std::string> &new_lines) const {
-  if (old_rows <= 0) {
-    return msg;
-  }
-
-  std::string frame = {};
-  AppendMoveUpRows_(&frame, old_rows);
-  AppendClearRows_(&frame, old_rows);
-  AppendMoveUpRows_(&frame, old_rows);
-  frame += msg;
-  AppendRenderLinesToFrameLocked_(&frame, new_lines);
-  (void)new_rows;
-  return frame;
-}
-
-std::string PromptIOManager::BuildClearFrameLocked_(int old_rows) const {
-  if (old_rows <= 0) {
-    return {};
-  }
-  std::string frame = {};
-  AppendMoveUpRows_(&frame, old_rows);
-  AppendClearRows_(&frame, old_rows);
-  AppendMoveUpRows_(&frame, old_rows);
-  return frame;
 }
 
 void PromptIOManager::ResetRefreshStateLocked_() {
   refresh_state_.active = false;
   refresh_state_.rows_painted = 0;
   refresh_state_.logical_lines.clear();
-  refresh_state_.last_emitted_frame_hash = 0;
-  refresh_state_.last_cols = 0;
-  refresh_state_.cursor_mode = RefreshCursorMode::TailAnchored;
 }
 
 void PromptIOManager::AssignRefreshRowsFromRenderInputLocked_(
@@ -743,38 +516,25 @@ void PromptIOManager::AssignRefreshRowsFromRenderInputLocked_(
 }
 
 void PromptIOManager::RepaintRefreshLocked_() {
-  const int cols = TerminalCols_();
+  const int cols = AMPromptUI::TerminalCols();
   const int old_rows = refresh_state_.rows_painted;
   const int new_rows =
-      ComputeRefreshRowsLocked_(refresh_state_.logical_lines, cols);
-  const size_t new_hash =
-      BuildRefreshHash_(refresh_state_.logical_lines, cols);
+      AMPromptUI::ComputeWrappedRows(refresh_state_.logical_lines, cols);
 
-  if (refresh_state_.active && refresh_state_.last_cols == cols &&
-      refresh_state_.last_emitted_frame_hash == new_hash &&
-      refresh_state_.rows_painted == new_rows) {
-    io_state_.refresh_occupied_lines_.store(new_rows,
-                                            std::memory_order_relaxed);
-    return;
-  }
-
-  const std::string frame = BuildRepaintFrameLocked_(
-      old_rows, new_rows, refresh_state_.logical_lines);
+  const std::string frame =
+      BuildRepaintFrame_(old_rows, new_rows, refresh_state_.logical_lines);
   if (!frame.empty()) {
     PrintSyncRefreshLocked_(frame);
   }
 
   refresh_state_.active = true;
   refresh_state_.rows_painted = new_rows;
-  refresh_state_.last_cols = cols;
-  refresh_state_.last_emitted_frame_hash = new_hash;
-  refresh_state_.cursor_mode = RefreshCursorMode::TailAnchored;
   io_state_.refresh_occupied_lines_.store(new_rows, std::memory_order_relaxed);
 }
 
 void PromptIOManager::ClearRefreshLocked_() {
   const int old_rows = refresh_state_.rows_painted;
-  const std::string frame = BuildClearFrameLocked_(old_rows);
+  const std::string frame = BuildClearFrame_(old_rows);
   if (!frame.empty()) {
     PrintSyncRefreshLocked_(frame);
   }
@@ -784,7 +544,7 @@ void PromptIOManager::ClearRefreshLocked_() {
 
 void PromptIOManager::RefreshBegin() {
   std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+  if (auto profile = isocline_profile_manager_.CurrentProfile(); profile) {
     (void)profile->Use();
   }
   ResetRefreshStateLocked_();
@@ -806,14 +566,13 @@ void PromptIOManager::RefreshRender(
 
 void PromptIOManager::RefreshEnd() {
   std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
-  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+  if (auto profile = isocline_profile_manager_.CurrentProfile(); profile) {
     (void)profile->Use();
   }
   ClearRefreshLocked_();
   io_state_.refresh_detached_mode_.store(false, std::memory_order_relaxed);
   io_state_.refresh_occupied_lines_.store(0, std::memory_order_relaxed);
 }
-
 
 void PromptIOManager::ErrorFormat(const std::string &error_name,
                                   const std::string &error_msg, bool is_exit,
@@ -868,6 +627,11 @@ void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
   ErrorFormat("", body.str(), is_exit, static_cast<int>(rcm.code));
 }
 
+void PromptIOManager::PrintTaskResult(
+    const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info) {
+  (void)task_info;
+}
+
 /** Prompt for a yes/no response. */
 bool PromptIOManager::PromptYesNo(const std::string &prompt, bool *canceled) {
   auto answer = LiteralPrompt(
@@ -900,43 +664,6 @@ void PromptIOManager::SetCursorVisible(bool visible) {
 void PromptIOManager::SyncCurrentHistory() {
   isocline_profile_manager_.SyncCurrentHistory();
 }
-
-/** Prompt for a line of input with optional defaults.
-bool PromptIOManager::PromptLine(const std::string &prompt, std::string *out,
-                                 const std::string &default_value,
-                                 bool allow_empty, bool *canceled,
-                                 bool show_default) {
-  if (canceled)
-    *canceled = false;
-  if (!out)
-    return false;
-
-  std::string display_prompt = prompt;
-  if (show_default && !default_value.empty()) {
-    display_prompt = AMStr::fmt("{}[!e][{}][/e] ", prompt, default_value);
-  }
-
-  std::string placeholder_value;
-  if (!show_default && !default_value.empty()) {
-    placeholder_value = default_value;
-  }
-
-  const bool ok = Prompt(display_prompt, placeholder_value, out);
-  if (!ok) {
-    if (canceled)
-      *canceled = true;
-    return false;
-  }
-
-  if (out->empty() && !default_value.empty()) {
-    *out = default_value;
-  }
-
-  if (!allow_empty && out->empty())
-    return false;
-  return true;
-}
-*/
 
 std::optional<std::string> PromptIOManager::Prompt(
     const std::string &prompt, const std::string &placeholder,
@@ -989,7 +716,8 @@ std::optional<std::string> PromptIOManager::Prompt(
   char *line = nullptr;
   ScopedAtomicFlag_ prompt_active_guard(&io_state_.prompt_active_);
   auto profile = isocline_profile_manager_.CurrentProfile();
-  if (profile && profile->Use()) {
+  const bool using_profile = profile && profile->Use();
+  if (using_profile) {
     std::optional<ic_completer_fun_t *> completer_opt = std::nullopt;
     std::optional<void *> completer_data_opt = std::nullopt;
     if (completer != nullptr || completer_arg != nullptr) {
@@ -1019,10 +747,11 @@ std::optional<std::string> PromptIOManager::Prompt(
   if (!line) {
     return std::nullopt;
   }
-  // isocline_profile_manager_.RemoveLastHistoryEntry();
   std::string out = line;
   ic_free(line);
-  DedupCurrentHistoryTail_(out);
+  if (using_profile) {
+    (void)profile->RemoveLastHistoryEntry();
+  }
   return out;
 }
 
@@ -1061,8 +790,9 @@ PromptIOManager::PromptCore(const std::string &prompt) {
   // ScopedPromptHookGuard_ hooklock;
   char *line = nullptr;
   ScopedAtomicFlag_ prompt_active_guard(&io_state_.prompt_active_);
-  auto profile = CurrentProfile_(isocline_profile_manager_);
-  if (profile && profile->Use()) {
+  auto profile = isocline_profile_manager_.CurrentProfile();
+  const bool using_profile = profile && profile->Use();
+  if (using_profile) {
     line = ic_readline_ex(prompt_line.c_str(), nullptr);
   } else {
     line = ic_readline_ex(prompt_line.c_str(), nullptr);
@@ -1071,51 +801,26 @@ PromptIOManager::PromptCore(const std::string &prompt) {
     ClearActivePromptHeader_();
     return std::nullopt;
   }
-  // isocline_profile_manager_.RemoveLastHistoryEntry();
   std::string out = line;
   ic_free(line);
-  DedupCurrentHistoryTail_(out);
+  if (using_profile) {
+    const std::string nickname = isocline_profile_manager_.CurrentNickname();
+    {
+      std::lock_guard<std::mutex> lock(io_state_.typein_result_mutex_);
+      if (io_state_.has_last_typein_result_ &&
+          io_state_.last_typein_result_ == out &&
+          io_state_.last_typein_nickname_ == nickname) {
+        (void)profile->RemoveLastHistoryEntry();
+      }
+      io_state_.last_typein_result_ = out;
+      io_state_.last_typein_nickname_ = nickname;
+      io_state_.has_last_typein_result_ = true;
+    }
+  }
   ClearActivePromptHeader_();
   return out;
 }
 
-
-bool PromptIOManager::IsContinuousDuplicateTypein_(
-    const std::string &value, const std::string &nickname) {
-  std::lock_guard<std::mutex> lock(io_state_.typein_result_mutex_);
-  if (!io_state_.has_last_typein_result_) {
-    return false;
-  }
-  return io_state_.last_typein_result_ == value &&
-         io_state_.last_typein_nickname_ == nickname;
-}
-
-void PromptIOManager::CacheTypeinResult_(const std::string &value,
-                                         const std::string &nickname) {
-  std::lock_guard<std::mutex> lock(io_state_.typein_result_mutex_);
-  io_state_.last_typein_result_ = value;
-  io_state_.last_typein_nickname_ = nickname;
-  io_state_.has_last_typein_result_ = true;
-}
-
-void PromptIOManager::DedupCurrentHistoryTail_(
-    const std::string &current_input) {
-  auto profile = CurrentProfile_(isocline_profile_manager_);
-  if (!profile || !profile->Use()) {
-    return;
-  }
-  const std::string nickname = isocline_profile_manager_.CurrentNickname();
-  const bool duplicate_cached = !current_input.empty() &&
-                                IsContinuousDuplicateTypein_(current_input,
-                                                             nickname);
-  if (duplicate_cached) {
-    (void)profile->RemoveLastHistoryEntry();
-  }
-  DedupProfileHistoryTail_(profile);
-  if (!current_input.empty()) {
-    CacheTypeinResult_(current_input, nickname);
-  }
-}
 std::optional<std::string>
 PromptIOManager::SecurePrompt(const std::string &prompt) {
   ScopedAtomicFlag_ secure_phase_guard(&io_state_.secure_phase_);
@@ -1130,5 +835,3 @@ PromptIOManager::SecurePrompt(const std::string &prompt) {
 }
 
 } // namespace AMInterface::prompt
-
-

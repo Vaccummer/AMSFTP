@@ -18,6 +18,7 @@ find_package(ZLIB REQUIRED)
 find_package(CURL CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(Lua REQUIRED)
 find_package(replxx CONFIG REQUIRED)
 find_package(libssh2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
@@ -66,6 +67,7 @@ target_link_libraries(amsftp PRIVATE
   CURL::libcurl
   fmt::fmt
   nlohmann_json::nlohmann_json
+  ${LUA_LIBRARIES}
   replxx::replxx
   libssh2::libssh2
   shell32
