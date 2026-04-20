@@ -3,6 +3,8 @@
 #include <concepts>
 #include <regex>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #ifdef _WIN32
 #define _WINSOCKAPI_
@@ -490,6 +492,117 @@ inline std::string basename(const std::string &path) {
   fs::path p(pathf);
   return p.filename().string();
 }
+
+[[nodiscard]] inline bool IsDescendantPath(const std::string &candidate,
+                                           const std::string &ancestor) {
+  if (candidate.empty() || ancestor.empty()) {
+    return false;
+  }
+  const std::vector<std::string> candidate_parts = split(candidate);
+  const std::vector<std::string> ancestor_parts = split(ancestor);
+  if (candidate_parts.empty() || ancestor_parts.empty()) {
+    return false;
+  }
+  if (candidate_parts.size() < ancestor_parts.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < ancestor_parts.size(); ++i) {
+    if (candidate_parts[i] != ancestor_parts[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] inline std::string RelativeFrom(const std::string &root,
+                                              const std::string &target) {
+  if (root == target) {
+    return "";
+  }
+  const std::vector<std::string> root_parts = split(root);
+  const std::vector<std::string> target_parts = split(target);
+  if (!root_parts.empty() && !target_parts.empty() &&
+      target_parts.size() >= root_parts.size()) {
+    bool is_prefix = true;
+    for (size_t i = 0; i < root_parts.size(); ++i) {
+      if (root_parts[i] != target_parts[i]) {
+        is_prefix = false;
+        break;
+      }
+    }
+    if (is_prefix) {
+      if (root_parts.size() >= target_parts.size()) {
+        return "";
+      }
+      std::string out = target_parts[root_parts.size()];
+      for (size_t i = root_parts.size() + 1; i < target_parts.size(); ++i) {
+        out = join(out, target_parts[i]);
+      }
+      return out;
+    }
+  }
+  return basename(target);
+}
+
+[[nodiscard]] inline std::vector<PathInfo>
+CompactMatchedPaths(const std::vector<PathInfo> &raw) {
+  std::unordered_map<std::string, PathInfo> dedup = {};
+  dedup.reserve(raw.size());
+  for (const auto &item : raw) {
+    const std::string key = item.path;
+    if (key.empty()) {
+      continue;
+    }
+    auto it = dedup.find(key);
+    if (it == dedup.end()) {
+      dedup.emplace(key, item);
+      continue;
+    }
+    if (it->second.type != PathType::DIR && item.type == PathType::DIR) {
+      it->second = item;
+    }
+  }
+
+  std::vector<PathInfo> candidates = {};
+  candidates.reserve(dedup.size());
+  for (auto &entry : dedup) {
+    candidates.push_back(std::move(entry.second));
+  }
+  std::stable_sort(candidates.begin(), candidates.end(),
+                   [](const PathInfo &lhs, const PathInfo &rhs) {
+                     const size_t lhs_depth = split(lhs.path).size();
+                     const size_t rhs_depth = split(rhs.path).size();
+                     if (lhs_depth != rhs_depth) {
+                       return lhs_depth < rhs_depth;
+                     }
+                     return lhs.path < rhs.path;
+                   });
+
+  std::vector<PathInfo> compacted = {};
+  compacted.reserve(candidates.size());
+  std::vector<std::string> dir_roots = {};
+  for (const auto &item : candidates) {
+    bool covered = false;
+    for (const auto &root : dir_roots) {
+      if (IsDescendantPath(item.path, root)) {
+        covered = true;
+        break;
+      }
+    }
+    if (covered) {
+      continue;
+    }
+    compacted.push_back(item);
+    if (item.type == PathType::DIR) {
+      dir_roots.push_back(item.path);
+    }
+  }
+  std::stable_sort(compacted.begin(), compacted.end(),
+                   [](const PathInfo &lhs, const PathInfo &rhs) {
+                     return lhs.path < rhs.path;
+                   });
+  return compacted;
+}
 } // namespace AMPath
 
 namespace AMPath {
@@ -745,6 +858,16 @@ inline ECM mkdirs(const std::string &path) {
   fs::create_directories(fs::path(path), ec);
   if (ec) {
     return {fec(ec), AMStr::fmt("Mkdir {} failed: {}", path, ec.message())};
+  }
+  return OK;
+}
+
+inline ECM mkdirs(const std::filesystem::path &path) {
+  std::error_code ec;
+  fs::create_directories(path, ec);
+  if (ec) {
+    return {fec(ec),
+            AMStr::fmt("Mkdir {} failed: {}", path.string(), ec.message())};
   }
   return OK;
 }

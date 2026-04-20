@@ -532,6 +532,14 @@ std::pair<bool, int> endswith(const std::string &str,
                         static_cast<int>(str.size() - suffix.size()));
 }
 
+bool StartsWith(std::string_view text, std::string_view prefix) {
+  return text.starts_with(prefix);
+}
+
+bool EndsWith(std::string_view text, std::string_view suffix) {
+  return text.ends_with(suffix);
+}
+
 std::string ModeTrans(size_t mode_int) {
   if (mode_int > 0777 || mode_int == 0777) {
     return "rwxrwxrwx";

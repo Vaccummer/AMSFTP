@@ -1,13 +1,10 @@
 #pragma once
 
 #include "domain/client/ClientPort.hpp"
-#include "domain/prompt/PromptDomainModel.hpp"
 #include "domain/var/VarModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <cstddef>
-#include <memory>
 #include <string>
-#include <vector>
 
 namespace AMInterface::parser {
 
@@ -35,14 +32,16 @@ public:
 
   virtual ~ITokenAnalyzerRuntime() = default;
 
-  [[nodiscard]] virtual AMDomain::client::ClientHandle CurrentClient() const = 0;
+  [[nodiscard]] virtual AMDomain::client::ClientHandle
+  CurrentClient() const = 0;
   [[nodiscard]] virtual AMDomain::client::ClientHandle LocalClient() const = 0;
   [[nodiscard]] virtual AMDomain::client::ClientHandle
   GetClient(const std::string &nickname) const = 0;
   [[nodiscard]] virtual std::string CurrentNickname() const = 0;
   [[nodiscard]] virtual bool HostExists(const std::string &nickname) const = 0;
   [[nodiscard]] virtual bool PoolExists(const std::string &nickname) const = 0;
-  [[nodiscard]] virtual bool TerminalExists(const std::string &nickname) const = 0;
+  [[nodiscard]] virtual bool
+  TerminalExists(const std::string &nickname) const = 0;
   [[nodiscard]] virtual TerminalNameState
   QueryTerminalNameState(const std::string &nickname) const = 0;
   [[nodiscard]] virtual ChannelNameState

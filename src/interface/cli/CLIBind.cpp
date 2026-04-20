@@ -278,6 +278,7 @@ void BindVarCommands(CommandNode *root, CliArgsPool &args) {
                         [&args](CommandNode &node) {
                           node.AddOption("varname", args.var.get.varname, 1, 1,
                                          "$varname", true);
+                          node.AddPositionalRule(0, Sem::None, false);
                         });
 
   var_node->AddFunction("def", "Define variable", args, &CliArgsPool::var,
@@ -288,6 +289,8 @@ void BindVarCommands(CommandNode *root, CliArgsPool &args) {
                                          "$varname", true);
                           node.AddOption("value", args.var.def.value, 1, 1,
                                          "varvalue", true);
+                          node.AddPositionalRule(0, Sem::None, false);
+                          node.AddPositionalRule(1, Sem::None, false);
                         });
 
   var_node->AddFunction("del", "Delete variable", args, &CliArgsPool::var,
@@ -296,6 +299,7 @@ void BindVarCommands(CommandNode *root, CliArgsPool &args) {
                                        "Delete from all sections");
                           node.AddOption("tokens", args.var.del.tokens, 1, 2,
                                          "[section] $varname", true);
+                          node.AddPositionalRule(0, Sem::None, true);
                         });
 
   var_node->AddFunction("ls", "List variables by section", args,
@@ -702,6 +706,7 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args) {
       &CliTaskArgs::thread, [&args](CommandNode &node) {
         node.AddOption("num", args.task.thread.num, 0, 1,
                        "Thread count (optional)");
+        node.AddPositionalRule(0, Sem::None, false);
       });
 
   task_node->AddFunction(

@@ -40,6 +40,10 @@ public:
   void RemoveLastHistoryEntry();
   void SyncCurrentHistory();
   ECM ChangeClient(const std::string &nickname);
+  void SetDefaultCompleter(ic_completer_fun_t *callback,
+                           void *data = nullptr);
+  void SetDefaultHighlighter(ic_highlight_fun_t *callback,
+                             void *data = nullptr);
   [[nodiscard]] std::shared_ptr<IsoclineProfile> CurrentProfile() const;
   [[nodiscard]] std::string CurrentNickname() const;
   [[nodiscard]] PromptProfileSettings CurrentProfileArgs() const;
@@ -51,16 +55,26 @@ private:
                 const PromptProfileSettings &profile_args,
                 const AMDomain::style::StyleConfigArg &style_arg,
                 const std::vector<std::string> &history_records) const;
+  void ApplyDefaultBindings_(const std::shared_ptr<IsoclineProfile> &profile) const;
   void WriteBackCurrentProfile_();
+
+  struct DefaultReadlineBindings {
+    ic_completer_fun_t *completer = nullptr;
+    void *completer_data = nullptr;
+    ic_highlight_fun_t *highlighter = nullptr;
+    void *highlighter_data = nullptr;
+  };
 
   PromptProfileManager &profile_manager_;
   PromptHistoryManager &history_manager_;
   StyleConfigManager &style_config_manager_;
   mutable std::mutex profiles_mtx_;
+  mutable std::mutex bindings_mtx_;
   std::map<std::string, std::shared_ptr<IsoclineProfile>> profile_cache_ = {};
   std::shared_ptr<IsoclineProfile> current_profile_ = nullptr;
   std::string current_nickname_ = kvars::default_profile_name;
   PromptProfileSettings current_profile_args_ = {};
+  DefaultReadlineBindings default_bindings_ = {};
 };
 
 } // namespace AMInterface::prompt

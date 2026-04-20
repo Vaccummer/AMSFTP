@@ -67,7 +67,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   const int timeout_ms = ToClientTimeoutMs(
       ctx.timeout_ms > 0 ? static_cast<size_t>(ctx.timeout_ms) : 0, 0);
 
-  CacheKey key{path.nickname, path.dir_abs};
+  CacheKey key(path.nickname, path.dir_abs);
   std::vector<PathInfo> listed;
   if (LookupTempCache_(key, &listed)) {
     AppendPathCandidates_(path, listed, &result.items);

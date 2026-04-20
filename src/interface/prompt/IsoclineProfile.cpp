@@ -512,6 +512,23 @@ std::vector<std::string> IsoclineProfile::CollectHistory() const {
   return records;
 }
 
+bool IsoclineProfile::SetCompleter(ic_completer_fun_t *callback,
+                                   void *data) const {
+  if (profile_ == nullptr) {
+    return false;
+  }
+  return ic_set_default_completer_p(profile_, callback, data);
+}
+
+bool IsoclineProfile::SetHighlighter(ic_highlight_fun_t *callback,
+                                     void *data) const {
+  if (profile_ == nullptr) {
+    return false;
+  }
+  ic_set_default_highlighter_p(profile_, callback, data);
+  return true;
+}
+
 IsoclineProfile::ScopedCompleterGuard IsoclineProfile::TemporarySetCompleter(
     const std::optional<ic_completer_fun_t *> &callback,
     const std::optional<void *> &data) {

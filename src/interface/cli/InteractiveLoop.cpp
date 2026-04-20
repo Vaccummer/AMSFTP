@@ -354,7 +354,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       [&managers]() { managers.application.filesystem_service->ClearCache(); });
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
-      []() { AMInterface::parser::TokenTypeAnalyzer::ClearTokenCache(); });
+      [&token_type_analyzer]() { token_type_analyzer.ClearTokenCache(); });
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
       [&completion_engine]() { completion_engine.ClearCache(); });

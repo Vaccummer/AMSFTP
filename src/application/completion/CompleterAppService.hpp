@@ -1,13 +1,13 @@
 #pragma once
 
-#include "application/config/ConfigAppService.hpp"
+#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/completion/CompletionModel.hpp"
 
 namespace AMApplication::completion {
 
 using CompleterArg = AMDomain::completion::CompleterArg;
 
-class CompleterConfigManager final : public AMApplication::config::IConfigSyncPort {
+class CompleterConfigManager final : public AMDomain::config::IConfigSyncPort {
 public:
   explicit CompleterConfigManager(CompleterArg arg = {});
   ~CompleterConfigManager() override = default;
@@ -16,12 +16,10 @@ public:
   [[nodiscard]] CompleterArg GetInitArg() const;
   void SetInitArg(CompleterArg arg);
 
-  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
-  [[nodiscard]] CompleterArg ExportConfigSnapshot() const;
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
 private:
   mutable AMAtomic<CompleterArg> init_arg_ = {};
 };
 
 } // namespace AMApplication::completion
-

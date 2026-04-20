@@ -1,8 +1,9 @@
 #pragma once
 
+#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/prompt/PromptDomainModel.hpp"
-#include "application/config/ConfigAppService.hpp"
 #include "foundation/core/DataClass.hpp"
+
 
 namespace AMApplication::prompt {
 using PromptHistoryArg = AMDomain::prompt::PromptHistoryArg;
@@ -14,7 +15,7 @@ struct PromptHistoryQueryResult {
   std::vector<std::string> history = {};
 };
 
-class PromptHistoryManager : public AMApplication::config::IConfigSyncPort {
+class PromptHistoryManager : public AMDomain::config::IConfigSyncPort {
 public:
   explicit PromptHistoryManager(PromptHistoryArg arg = {});
   ~PromptHistoryManager() override = default;
@@ -22,8 +23,7 @@ public:
   ECM Init();
 
   [[nodiscard]] PromptHistoryArg GetInitArg() const;
-  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
-  [[nodiscard]] PromptHistoryArg ExportConfigSnapshot() const;
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
   void SetInitArg(PromptHistoryArg arg);
 

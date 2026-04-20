@@ -13,6 +13,20 @@ IsoclineProfileManager::IsoclineProfileManager(
 
 IsoclineProfileManager::~IsoclineProfileManager() = default;
 
+void IsoclineProfileManager::ApplyDefaultBindings_(
+    const std::shared_ptr<IsoclineProfile> &profile) const {
+  if (!profile || !profile->IsValid()) {
+    return;
+  }
+  DefaultReadlineBindings bindings = {};
+  {
+    std::lock_guard<std::mutex> lock(bindings_mtx_);
+    bindings = default_bindings_;
+  }
+  (void)profile->SetCompleter(bindings.completer, bindings.completer_data);
+  (void)profile->SetHighlighter(bindings.highlighter, bindings.highlighter_data);
+}
+
 std::shared_ptr<IsoclineProfile> IsoclineProfileManager::BuildProfile_(
     const std::string &nickname, const PromptProfileSettings &profile_args,
     const AMDomain::style::StyleConfigArg &style_arg,
@@ -22,6 +36,7 @@ std::shared_ptr<IsoclineProfile> IsoclineProfileManager::BuildProfile_(
   if (!profile || !profile->IsValid()) {
     return nullptr;
   }
+  ApplyDefaultBindings_(profile);
   return profile;
 }
 
@@ -120,6 +135,52 @@ void IsoclineProfileManager::RemoveLastHistoryEntry() {
 
 void IsoclineProfileManager::SyncCurrentHistory() {
   WriteBackCurrentProfile_();
+}
+
+void IsoclineProfileManager::SetDefaultCompleter(ic_completer_fun_t *callback,
+                                                 void *data) {
+  {
+    std::lock_guard<std::mutex> lock(bindings_mtx_);
+    default_bindings_.completer = callback;
+    default_bindings_.completer_data = data;
+  }
+
+  std::vector<std::shared_ptr<IsoclineProfile>> profiles = {};
+  {
+    std::lock_guard<std::mutex> lock(profiles_mtx_);
+    profiles.reserve(profile_cache_.size());
+    for (const auto &[_, profile] : profile_cache_) {
+      if (profile) {
+        profiles.push_back(profile);
+      }
+    }
+  }
+  for (const auto &profile : profiles) {
+    (void)profile->SetCompleter(callback, data);
+  }
+}
+
+void IsoclineProfileManager::SetDefaultHighlighter(ic_highlight_fun_t *callback,
+                                                   void *data) {
+  {
+    std::lock_guard<std::mutex> lock(bindings_mtx_);
+    default_bindings_.highlighter = callback;
+    default_bindings_.highlighter_data = data;
+  }
+
+  std::vector<std::shared_ptr<IsoclineProfile>> profiles = {};
+  {
+    std::lock_guard<std::mutex> lock(profiles_mtx_);
+    profiles.reserve(profile_cache_.size());
+    for (const auto &[_, profile] : profile_cache_) {
+      if (profile) {
+        profiles.push_back(profile);
+      }
+    }
+  }
+  for (const auto &profile : profiles) {
+    (void)profile->SetHighlighter(callback, data);
+  }
 }
 
 ECM IsoclineProfileManager::ChangeClient(const std::string &nickname) {

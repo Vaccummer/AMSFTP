@@ -207,6 +207,11 @@ private:
 };
 } // namespace
 
+void AMCompleteEngine::IsoclineCompleteCallback(ic_completion_env_t *cenv,
+                                                const char *prefix) {
+  IsoclineCompleteCallback_(cenv, prefix);
+}
+
 /**
  * @brief Default cache-clear hook for engines without cache state.
  */

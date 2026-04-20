@@ -78,6 +78,20 @@ public:
   CommandNode *AddFunction(const std::string &name, const std::string &help);
 
   /**
+   * @brief Add one subcommand, configure it immediately, and return the child.
+   */
+  template <typename Configure>
+  CommandNode *AddFunction(const std::string &name, const std::string &help,
+                           Configure &&configure) {
+    CommandNode *child = AddFunction(name, help);
+    if (!child) {
+      return child;
+    }
+    std::forward<Configure>(configure)(*child);
+    return child;
+  }
+
+  /**
    * @brief Add one subcommand, bind callback selection, and return child node.
    */
   template <typename T>
@@ -88,9 +102,25 @@ public:
     if (!child || !child->app) {
       return child;
     }
-    child->app->callback([&args, member]() {
-      args.SetActive(&(args.*member));
-    });
+    child->app->callback(
+        [&args, member]() { args.SetActive(&(args.*member)); });
+    return child;
+  }
+
+  /**
+   * @brief Add one bound subcommand, configure it immediately, and return
+   * child.
+   */
+  template <typename T, typename Configure>
+  CommandNode *AddFunction(const std::string &name, const std::string &help,
+                           AMInterface::cli::CliArgsPool &args,
+                           T AMInterface::cli::CliArgsPool::*member,
+                           Configure &&configure) {
+    CommandNode *child = AddFunction(name, help, args, member);
+    if (!child) {
+      return child;
+    }
+    std::forward<Configure>(configure)(*child);
     return child;
   }
 
@@ -114,6 +144,23 @@ public:
   }
 
   /**
+   * @brief Add one grouped bound subcommand, configure it immediately, and
+   * return child.
+   */
+  template <typename Group, typename T, typename Configure>
+  CommandNode *AddFunction(const std::string &name, const std::string &help,
+                           AMInterface::cli::CliArgsPool &args,
+                           Group AMInterface::cli::CliArgsPool::*group_member,
+                           T Group::*member, Configure &&configure) {
+    CommandNode *child = AddFunction(name, help, args, group_member, member);
+    if (!child) {
+      return child;
+    }
+    std::forward<Configure>(configure)(*child);
+    return child;
+  }
+
+  /**
    * @brief Add one flag to both CLI11 app and completion metadata.
    */
   CommandNode *AddFlag(const std::string &short_name,
@@ -127,7 +174,7 @@ public:
   CommandNode *AddOption(const std::string &short_name,
                          const std::string &long_name, T &value, size_t min_num,
                          size_t max_num, AMCommandArgSemantic semantic,
-                         const std::string &help = "") {
+                         const std::string &help = "", bool required = false) {
     if (!app) {
       return nullptr;
     }
@@ -140,19 +187,7 @@ public:
     if (!spec.empty()) {
       auto *opt = app->add_option(spec, value, help);
       if (opt) {
-        const bool unlimited = max_num == std::numeric_limits<size_t>::max();
-        const int min_expected =
-            min_num > static_cast<size_t>(std::numeric_limits<int>::max())
-                ? std::numeric_limits<int>::max()
-                : static_cast<int>(min_num);
-        const int max_expected =
-            unlimited
-                ? -1
-                : (max_num >
-                           static_cast<size_t>(std::numeric_limits<int>::max())
-                       ? std::numeric_limits<int>::max()
-                       : static_cast<int>(max_num));
-        opt->expected(min_expected, max_expected);
+        ConfigureOption_(opt, min_num, max_num, required);
       }
     }
 
@@ -166,6 +201,23 @@ public:
     const size_t value_count = repeat_tail ? std::max<size_t>(1, min_num)
                                            : std::max<size_t>(1, max_num);
     AddOptionValueRule(long_opt, short_opt, semantic, value_count, repeat_tail);
+    return this;
+  }
+
+  /**
+   * @brief Add one positional option to CLI11 app.
+   */
+  template <typename T>
+  CommandNode *AddOption(const std::string &name, T &value, size_t min_num,
+                         size_t max_num, const std::string &help = "",
+                         bool required = false) {
+    if (!app || name.empty()) {
+      return nullptr;
+    }
+    auto *opt = app->add_option(name, value, help);
+    if (opt) {
+      ConfigureOption_(opt, min_num, max_num, required);
+    }
     return this;
   }
 
@@ -342,6 +394,12 @@ private:
                                       const std::string &long_name);
 
   /**
+   * @brief Apply shared CLI11 option cardinality and required settings.
+   */
+  static void ConfigureOption_(CLI::Option *opt, size_t min_num, size_t max_num,
+                               bool required);
+
+  /**
    * @brief Normalize short option to single character.
    */
   static char NormalizeShortName_(const std::string &short_name);
@@ -371,5 +429,18 @@ private:
    */
   CLI::App *root_app_ = nullptr;
 };
+
+/**
+ * @brief Match command tokens against one command tree and return one
+ * subcommand.
+ *
+ * Returns the deepest exact-match subcommand when the token path is valid. When
+ * the first unknown command token is hit, returns the best fuzzy-matched
+ * subcommand under the current tree level. Option-like tokens stop traversal.
+ */
+[[nodiscard]] const CommandNode *
+MatchSubcommand(const std::vector<std::string> &tokens,
+                const CommandNode &command_tree,
+                std::string *invalid_token = nullptr);
 
 } // namespace AMInterface::parser

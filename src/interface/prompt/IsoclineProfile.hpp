@@ -95,6 +95,8 @@ public:
   bool AddHistoryEntry(const std::string &line) const;
   bool RemoveLastHistoryEntry() const;
   [[nodiscard]] std::vector<std::string> CollectHistory() const;
+  bool SetCompleter(ic_completer_fun_t *callback, void *data = nullptr) const;
+  bool SetHighlighter(ic_highlight_fun_t *callback, void *data = nullptr) const;
 
   [[nodiscard]] ScopedCompleterGuard TemporarySetCompleter(
       const std::optional<ic_completer_fun_t *> &callback = std::nullopt,

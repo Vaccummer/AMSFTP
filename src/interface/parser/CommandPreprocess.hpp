@@ -40,7 +40,8 @@ public:
    * with '-' are tagged as protected literals, to avoid option parsing
    * conflicts in CLI11.
    */
-  std::vector<std::string> SplitCliTokens(const std::string &input) const;
+  [[nodiscard]] std::vector<std::string>
+  SplitCliTokens(const std::string &input) const;
 
   /**
    * @brief Preprocess one interactive input line before CLI11 parse.

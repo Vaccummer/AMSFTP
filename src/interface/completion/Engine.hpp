@@ -295,6 +295,12 @@ public:
   ~AMCompleteEngine() { StopAsyncWorkers_(); }
 
   /**
+   * @brief Static isocline callback entry used for persistent profile binding.
+   */
+  static void IsoclineCompleteCallback(ic_completion_env_t *cenv,
+                                       const char *prefix);
+
+  /**
    * @brief Install the completer into isocline.
    */
   void Install();

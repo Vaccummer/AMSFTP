@@ -174,6 +174,8 @@ std::string FormatUtf8Table(const std::vector<std::string> &keys,
 
 std::pair<bool, int> endswith(const std::string &str,
                               const std::string &suffix);
+bool StartsWith(std::string_view text, std::string_view prefix);
+bool EndsWith(std::string_view text, std::string_view suffix);
 std::string ModeTrans(size_t mode_int);
 size_t ModeTrans(std::string mode_str);
 std::string MergeModeStr(const std::string &base_mode_str,

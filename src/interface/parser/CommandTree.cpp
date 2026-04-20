@@ -1,8 +1,55 @@
 #include "interface/parser/CommandTree.hpp"
+
 #include "CLI/CLI.hpp"
+#include "foundation/tools/string.hpp"
+
+#include <rapidfuzz/fuzz.hpp>
+
 #include <utility>
 
 namespace AMInterface::parser {
+namespace {
+
+bool IsOptionLikeToken_(const std::string &token) {
+  return token.size() >= 2 && token.front() == '-';
+}
+
+std::string NormalizeMatchToken_(const std::string &token) {
+  return AMStr::lowercase(AMStr::Strip(token));
+}
+
+const CommandNode *FindBestMatchedChild_(const CommandNode *node,
+                                         const std::string &token) {
+  if (!node) {
+    return nullptr;
+  }
+
+  const std::string normalized_token = NormalizeMatchToken_(token);
+  if (normalized_token.empty()) {
+    return nullptr;
+  }
+
+  double best_score = -1.0;
+  const CommandNode *best_match = nullptr;
+  for (const auto &[name, child] : node->subcommands) {
+    if (name.empty() || !child) {
+      continue;
+    }
+    const std::string normalized_name = NormalizeMatchToken_(name);
+    if (normalized_name.empty()) {
+      continue;
+    }
+    const double score = rapidfuzz::fuzz::WRatio(normalized_token,
+                                                 normalized_name);
+    if (score > best_score) {
+      best_score = score;
+      best_match = child.get();
+    }
+  }
+  return best_match;
+}
+
+} // namespace
 
 /**
  * @brief Initialize node tree from CLI11 root app.
@@ -184,8 +231,8 @@ bool CommandNode::IsModule(const std::string &command) const {
 /**
  * @brief List top-level commands with help text.
  */
-std::vector<std::pair<std::string, std::string>> CommandNode::ListTopCommands()
-    const {
+std::vector<std::pair<std::string, std::string>>
+CommandNode::ListTopCommands() const {
   std::vector<std::pair<std::string, std::string>> out;
   out.reserve(subcommands.size());
   for (const auto &entry : subcommands) {
@@ -277,7 +324,7 @@ void CommandNode::AddPositionalRule(size_t index, AMCommandArgSemantic semantic,
       return;
     }
   }
-  positional_rules.push_back({index, semantic, repeat_tail});
+  positional_rules.emplace_back(index, semantic, repeat_tail);
 }
 
 /**
@@ -319,8 +366,8 @@ void CommandNode::AddOptionValueRule(const std::string &long_name,
       return;
     }
   }
-  option_value_rules.push_back(
-      {normalized_long, short_name, semantic, value_count, repeat_tail});
+  option_value_rules.emplace_back(normalized_long, short_name, semantic,
+                                  value_count, repeat_tail);
 }
 
 /**
@@ -363,7 +410,8 @@ CommandNode::ResolvePositionalSemantic(size_t index) const {
   return best_tail;
 }
 
-bool CommandNode::HasPositionalRule(const std::string &path, size_t index) const {
+bool CommandNode::HasPositionalRule(const std::string &path,
+                                    size_t index) const {
   const auto *node = Find(path);
   if (!node) {
     return false;
@@ -430,9 +478,8 @@ CommandNode::CommandPath CommandNode::SplitPath_(const std::string &path) {
   std::string current;
   current.reserve(path.size());
   for (char ch : path) {
-    const bool is_space =
-        ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' ||
-        ch == '\v';
+    const bool is_space = ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' ||
+                          ch == '\f' || ch == '\v';
     if (is_space) {
       if (!current.empty()) {
         parts.push_back(current);
@@ -466,6 +513,28 @@ std::string CommandNode::BuildOptionSpec_(const std::string &short_name,
     spec += long_opt;
   }
   return spec;
+}
+
+void CommandNode::ConfigureOption_(CLI::Option *opt, size_t min_num,
+                                   size_t max_num, bool required) {
+  if (!opt) {
+    return;
+  }
+  const bool unlimited = max_num == std::numeric_limits<size_t>::max();
+  const int min_expected =
+      min_num > static_cast<size_t>(std::numeric_limits<int>::max())
+          ? std::numeric_limits<int>::max()
+          : static_cast<int>(min_num);
+  const int max_expected =
+      unlimited ? -1
+                : (max_num >
+                           static_cast<size_t>(std::numeric_limits<int>::max())
+                       ? std::numeric_limits<int>::max()
+                       : static_cast<int>(max_num));
+  opt->expected(min_expected, max_expected);
+  if (required) {
+    opt->required();
+  }
 }
 
 /**
@@ -565,5 +634,41 @@ CommandNode *CommandNode::FindChild_(const std::string &child) {
   return it->second.get();
 }
 
-} // namespace AMInterface::parser
+const CommandNode *MatchSubcommand(const std::vector<std::string> &tokens,
+                                   const CommandNode &command_tree,
+                                   std::string *invalid_token) {
+  if (invalid_token) {
+    invalid_token->clear();
+  }
 
+  const CommandNode *current = &command_tree;
+  const CommandNode *last_match = nullptr;
+  for (const auto &raw_token : tokens) {
+    const std::string token = AMStr::Strip(raw_token);
+    if (token.empty()) {
+      continue;
+    }
+    if (token == "--" || IsOptionLikeToken_(token)) {
+      return last_match;
+    }
+    if (!current || current->subcommands.empty()) {
+      return last_match;
+    }
+
+    const auto child_it = current->subcommands.find(token);
+    if (child_it != current->subcommands.end() && child_it->second) {
+      current = child_it->second.get();
+      last_match = current;
+      continue;
+    }
+
+    if (invalid_token) {
+      *invalid_token = token;
+    }
+    return FindBestMatchedChild_(current, token);
+  }
+
+  return last_match;
+}
+
+} // namespace AMInterface::parser

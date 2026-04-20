@@ -1,7 +1,7 @@
 #pragma once
 
+#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/prompt/PromptDomainModel.hpp"
-#include "application/config/ConfigAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 
 namespace AMApplication::prompt {
@@ -15,7 +15,7 @@ struct PromptProfileQueryResult {
   PromptProfileSettings profile = {};
 };
 
-class PromptProfileManager : public AMApplication::config::IConfigSyncPort {
+class PromptProfileManager : public AMDomain::config::IConfigSyncPort {
 public:
   explicit PromptProfileManager(PromptProfileArg arg = {});
   ~PromptProfileManager() override = default;
@@ -23,8 +23,7 @@ public:
   ECM Init();
 
   [[nodiscard]] PromptProfileArg GetInitArg() const;
-  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
-  [[nodiscard]] PromptProfileArg ExportConfigSnapshot() const;
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
   void SetInitArg(PromptProfileArg arg);
 
