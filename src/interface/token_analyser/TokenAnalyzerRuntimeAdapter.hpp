@@ -1,16 +1,37 @@
 #pragma once
 
-#include "application/client/ClientAppService.hpp"
-#include "application/host/HostAppService.hpp"
-#include "application/prompt/PromptProfileManager.hpp"
-#include "application/terminal/TermAppService.hpp"
-#include "application/var/VarAppService.hpp"
-#include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/token_analyser/TokenAnalyzerRuntime.hpp"
-#include "interface/style/StyleManager.hpp"
 #include <chrono>
-#include <mutex>
+#include <string>
 #include <unordered_map>
+
+namespace AMApplication::client {
+class ClientAppService;
+}
+
+namespace AMApplication::host {
+class HostAppService;
+}
+
+namespace AMApplication::prompt {
+class PromptProfileManager;
+}
+
+namespace AMApplication::terminal {
+class TermAppService;
+}
+
+namespace AMApplication::var {
+class VarAppService;
+}
+
+namespace AMInterface::style {
+class AMStyleService;
+}
+
+namespace AMInterface::var {
+class VarInterfaceService;
+}
 
 namespace AMInterface::parser {
 
@@ -23,11 +44,7 @@ public:
       AMApplication::var::VarAppService &var_service,
       AMInterface::var::VarInterfaceService &var_interface_service,
       AMInterface::style::AMStyleService &style_service,
-      AMApplication::prompt::PromptProfileManager &prompt_profile_manager)
-      : client_service_(client_service), host_service_(host_service),
-        terminal_service_(terminal_service), var_service_(var_service),
-        var_interface_service_(var_interface_service), style_service_(style_service),
-        prompt_profile_manager_(prompt_profile_manager) {}
+      AMApplication::prompt::PromptProfileManager &prompt_profile_manager);
   ~TokenAnalyzerRuntimeAdapter() override = default;
 
   [[nodiscard]] AMDomain::client::ClientHandle CurrentClient() const override;
@@ -81,6 +98,10 @@ private:
   [[nodiscard]] TerminalSnapshot_
   ResolveTerminalSnapshot_(const std::string &terminal_nickname) const;
 
+  struct TerminalSnapshotCache_ {
+    std::unordered_map<std::string, TerminalSnapshot_> values = {};
+  };
+
   AMApplication::client::ClientAppService &client_service_;
   AMApplication::host::HostAppService &host_service_;
   AMApplication::terminal::TermAppService &terminal_service_;
@@ -88,9 +109,7 @@ private:
   AMInterface::var::VarInterfaceService &var_interface_service_;
   AMInterface::style::AMStyleService &style_service_;
   AMApplication::prompt::PromptProfileManager &prompt_profile_manager_;
-  mutable std::mutex terminal_snapshot_mutex_ = {};
-  mutable std::unordered_map<std::string, TerminalSnapshot_>
-      terminal_snapshots_ = {};
+  mutable AMAtomic<TerminalSnapshotCache_> terminal_snapshot_cache_ = {};
 };
 
 } // namespace AMInterface::parser
