@@ -36,8 +36,6 @@ public:
   ECM Dump(AMDomain::config::DocumentKind kind,
            const std::filesystem::path &dst_path, bool async) override;
 
-  ECM DumpAll(bool async) override;
-
   void Close() override;
 
   [[nodiscard]] bool
@@ -48,11 +46,7 @@ public:
 
   void SetDumpErrorCallback(DumpErrorCallback cb) override;
 
-  void SubmitWriteTask(std::function<ECM()> task) override;
-
   [[nodiscard]] std::filesystem::path ProjectRoot() const override;
-
-  ECM EnsureDirectory(const std::filesystem::path &dir) override;
 
   void PruneBackupFiles(const std::filesystem::path &bak_dir,
                         int64_t max_count) override;
@@ -72,6 +66,7 @@ private:
   [[nodiscard]] std::shared_ptr<const IConfigFileHandle> GetHandle_(
       AMDomain::config::DocumentKind kind) const;
 
+  void EnqueueWriteTask_(std::function<ECM()> task);
   ECM LoadDocument_(AMDomain::config::DocumentKind kind);
   void NotifyDumpError_(const ECM &err) const;
 

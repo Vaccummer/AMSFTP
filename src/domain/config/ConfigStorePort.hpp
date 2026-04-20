@@ -9,13 +9,13 @@
 #include <typeindex>
 
 namespace AMDomain::config {
+
 /**
  * @brief Application-layer port for config persistence operations.
  */
 class IConfigStorePort {
 public:
   using DumpErrorCallback = std::function<void(ECM)>;
-
   virtual ~IConfigStorePort() = default;
 
   /**
@@ -29,11 +29,6 @@ public:
    */
   virtual ECM Dump(AMDomain::config::DocumentKind kind,
                    const std::filesystem::path &dst_path, bool async) = 0;
-
-  /**
-   * @brief Dump all documents; optional async scheduling.
-   */
-  virtual ECM DumpAll(bool async) = 0;
 
   /**
    * @brief Close store resources and stop background workers.
@@ -58,19 +53,9 @@ public:
   virtual void SetDumpErrorCallback(DumpErrorCallback cb) = 0;
 
   /**
-   * @brief Submit one write task to store scheduler.
-   */
-  virtual void SubmitWriteTask(std::function<ECM()> task) = 0;
-
-  /**
    * @brief Return project root currently bound to store.
    */
   [[nodiscard]] virtual std::filesystem::path ProjectRoot() const = 0;
-
-  /**
-   * @brief Ensure one directory exists.
-   */
-  virtual ECM EnsureDirectory(const std::filesystem::path &dir) = 0;
 
   /**
    * @brief Remove old backup timestamp folders and keep max_count directories.
