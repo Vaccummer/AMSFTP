@@ -15,12 +15,12 @@ public:
       AMInterface::prompt::AMPromptIOManager &prompt_io_manager);
   ~ConfigInterfaceService() override = default;
 
-  ECM PrintPaths() const;
-  ECM SaveAll() const;
-  ECM BackupAll() const;
-  ECM Export(const std::string &path) const;
-  ECM EditProfile(const std::string &nickname) const;
-  ECM GetProfile(const std::vector<std::string> &nicknames) const;
+  [[nodiscard]] ECM PrintPaths() const;
+  [[nodiscard]] ECM SaveAll() const;
+  [[nodiscard]] ECM BackupAll() const;
+  [[nodiscard]] ECM Export(const std::string &path) const;
+  [[nodiscard]] ECM EditProfile(const std::string &nickname) const;
+  [[nodiscard]] ECM GetProfile(const std::vector<std::string> &nicknames) const;
 
 private:
   AMApplication::config::ConfigAppService &config_service_;
