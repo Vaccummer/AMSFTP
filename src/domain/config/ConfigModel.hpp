@@ -25,6 +25,16 @@ struct ConfigBackupSet {
   int64_t last_backup_time_s = 0;
 };
 
+inline bool operator==(const ConfigBackupSet &lhs, const ConfigBackupSet &rhs) {
+  return lhs.enabled == rhs.enabled && lhs.interval_s == rhs.interval_s &&
+         lhs.max_backup_count == rhs.max_backup_count &&
+         lhs.last_backup_time_s == rhs.last_backup_time_s;
+}
+
+inline bool operator!=(const ConfigBackupSet &lhs, const ConfigBackupSet &rhs) {
+  return !(lhs == rhs);
+}
+
 /**
  * @brief Store bootstrap data for one persisted config document.
  */

@@ -117,7 +117,7 @@ ECM AMTomlConfigStore::Dump(
     bool async) {
   if (async) {
     const std::filesystem::path dst_copy = dst_path;
-    SubmitWriteTask([this, kind, dst_copy]() -> ECM {
+    EnqueueWriteTask_([this, kind, dst_copy]() -> ECM {
       return Dump(kind, dst_copy, false);
     });
     return OK;
@@ -139,20 +139,6 @@ ECM AMTomlConfigStore::Dump(
     NotifyDumpError_(rcm);
   }
   return rcm;
-}
-
-ECM AMTomlConfigStore::DumpAll(bool async) {
-  if (async) {
-    SubmitWriteTask([this]() -> ECM { return DumpAll(false); });
-    return OK;
-  }
-  for (const auto kind : kRequiredKinds) {
-    ECM rcm = Dump(kind, {}, false);
-    if (!(rcm)) {
-      return rcm;
-    }
-  }
-  return OK;
 }
 
 void AMTomlConfigStore::Close() {
@@ -258,7 +244,7 @@ void AMTomlConfigStore::SetDumpErrorCallback(DumpErrorCallback cb) {
   dump_error_cb_ = std::move(cb);
 }
 
-void AMTomlConfigStore::SubmitWriteTask(std::function<ECM()> task) {
+void AMTomlConfigStore::EnqueueWriteTask_(std::function<ECM()> task) {
   if (!task) {
     return;
   }
@@ -279,16 +265,6 @@ void AMTomlConfigStore::SubmitWriteTask(std::function<ECM()> task) {
 
 std::filesystem::path AMTomlConfigStore::ProjectRoot() const {
   return root_dir_;
-}
-
-ECM AMTomlConfigStore::EnsureDirectory(
-    const std::filesystem::path &dir) {
-  std::error_code ec;
-  std::filesystem::create_directories(dir, ec);
-  if (ec) {
-    return Err(EC::ConfigDumpFailed, "", "", ec.message());
-  }
-  return OK;
 }
 
 void AMTomlConfigStore::PruneBackupFiles(

@@ -17,9 +17,9 @@ int main(int argc, char **argv) {
       AMBootstrap::PrintBootstrapWarn(root_result.rcm.msg());
       return static_cast<int>(root_result.rcm.code);
     }
-    const fs::path root_dir = root_result.data;
 
-    auto build_result = AMBootstrap::BuildBootstrapServices(app_name, root_dir);
+    auto build_result =
+        AMBootstrap::BuildBootstrapServices(app_name, root_result.data);
 
     if (!build_result.rcm || !build_result.data) {
       const EC ec =
@@ -31,10 +31,10 @@ int main(int argc, char **argv) {
       return static_cast<int>(ec);
     }
 
-    return AMBootstrap::RunCLI(*build_result.data, argc, argv);
+    return AMBootstrap::RunCLI(*(build_result.data), argc, argv);
 
   } catch (const std::exception &e) {
-    std::cerr << "Uncaught runtime error: " << e.what() << std::endl;
+    std::cerr << "💀 Escaped Runtime Exception: " << e.what() << std::endl;
     return static_cast<int>(EC::UnknownError);
   }
 }

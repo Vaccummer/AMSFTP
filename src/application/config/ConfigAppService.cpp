@@ -34,7 +34,7 @@ ECM ConfigAppService::Init() {
   const ConfigStoreInitArg init_arg = init_arg_.lock().load();
   auto store_data = AMDomain::config::CreateConfigStorePort(init_arg);
   if (!store_data.rcm || !store_data.data) {
-    return (store_data.rcm) ? Err{EC::ConfigNotInitialized, "", "",
+    return (store_data.rcm) ? Err{EC::ConfigNotInitialized, "config.init", "",
                                   "failed to create config store"}
                             : store_data.rcm;
   }
@@ -67,7 +67,8 @@ ConfigStoreInitArg ConfigAppService::GetInitArg() const {
 ECM ConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
                            bool force) {
   if (!store_) {
-    return {EC::ConfigNotInitialized, "", "", "config store is not bound"};
+    return {EC::ConfigNotInitialized, "config.load", "",
+            "config store is not bound"};
   }
   return store_->Load(kind, force);
 }
@@ -78,7 +79,8 @@ ECM ConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
 ECM ConfigAppService::Dump(AMDomain::config::DocumentKind kind,
                            const std::string &dst_path, bool async) {
   if (!store_) {
-    return {EC::ConfigNotInitialized, "", "", "config store is not bound"};
+    return {EC::ConfigNotInitialized, "config.dump", "",
+            "config store is not bound"};
   }
   return store_->Dump(kind, std::filesystem::path(dst_path), async);
 }
@@ -129,12 +131,13 @@ bool ConfigAppService::IsDirty(AMDomain::config::DocumentKind kind) const {
  */
 ECM ConfigAppService::BackupIfNeeded() {
   if (!store_) {
-    return {EC::ConfigNotInitialized, "", "", "config store is not bound"};
+    return {EC::ConfigNotInitialized, "config.backup", "",
+            "config store is not bound"};
   }
 
   const BackupContext context = BuildBackupContext_();
   if (context.normalized_changed && !Write(context.backup_set)) {
-    return {EC::ConfigDumpFailed, "", "",
+    return {EC::ConfigDumpFailed, "config.backup", "",
             "failed to update backup policy settings"};
   }
   if (!IsBackupDue_(context)) {
@@ -163,7 +166,8 @@ bool ConfigAppService::IsBackupNeeded() const {
 std::vector<ECM> ConfigAppService::Backup(
     const std::vector<AMDomain::config::DocumentKind> &kinds) {
   if (!store_) {
-    return {Err{EC::ConfigNotInitialized, "", "", "config store is not bound"}};
+    return {Err{EC::ConfigNotInitialized, "config.backup", "",
+                "config store is not bound"}};
   }
   return BackupWithContext_(kinds, BuildBackupContext_());
 }
@@ -171,7 +175,8 @@ std::vector<ECM> ConfigAppService::Backup(
 ECMData<SyncParticipantId>
 ConfigAppService::RegisterSyncPort(IConfigSyncPort *port) {
   if (port == nullptr) {
-    return {0, Err{EC::InvalidArg, "", "", "sync port is null"}};
+    return {0, Err{EC::InvalidArg, "config.register_sync", "",
+                    "sync port is null"}};
   }
   auto sync_participants = sync_participants_.lock();
   for (const auto &participant : sync_participants.get()) {
@@ -193,20 +198,23 @@ ECM ConfigAppService::UnregisterSyncPort(SyncParticipantId participant_id) {
                       return participant.id == participant_id;
                     });
   if (erased == 0) {
-    return Err{EC::InvalidArg, "", "", "sync port not found"};
+    return Err{EC::InvalidArg, "config.unregister_sync", "",
+               "sync port not found"};
   }
   return OK;
 }
 
 ECM ConfigAppService::FlushDirtyParticipants() {
   if (!store_) {
-    return Err{EC::ConfigNotInitialized, "", "", "config store is not bound"};
+    return Err{EC::ConfigNotInitialized, "config.flush_dirty", "",
+               "config store is not bound"};
   }
 
   std::vector<SyncParticipant> participants = {};
   {
     if (sync_flush_running_.exchange(true, std::memory_order_acq_rel)) {
-      return Err{EC::BadOperationOrder, "", "", "sync flush already running"};
+      return Err{EC::BadOperationOrder, "config.flush_dirty", "",
+                 "sync flush already running"};
     }
     auto sync_participants = sync_participants_.lock();
     participants = sync_participants.load();
@@ -228,7 +236,9 @@ ECM ConfigAppService::FlushDirtyParticipants() {
   for (const SyncParticipant &participant : participants) {
     if (participant.port == nullptr) {
       if ((first_error)) {
-        first_error = Err{EC::InvalidArg, "", "", "invalid sync participant"};
+        first_error =
+            Err{EC::InvalidArg, "config.flush_dirty", "",
+                "invalid sync participant"};
       }
       continue;
     }
@@ -323,7 +333,7 @@ ConfigAppService::BackupWithContext_(const std::vector<DocumentKind> &kinds,
   ConfigBackupSet backup_set = context.backup_set;
   const BackupTargets targets = BuildBackupTargets_(context.now_s);
   if (targets.backup_dir.empty()) {
-    out.emplace_back(EC::ConfigDumpFailed, "", "",
+    out.emplace_back(EC::ConfigDumpFailed, "config.backup", "",
                      "project root is empty, cannot backup");
     return out;
   }
@@ -345,7 +355,7 @@ ConfigAppService::BackupWithContext_(const std::vector<DocumentKind> &kinds,
     const std::filesystem::path dst_path = ResolveBackupPath_(targets, kind);
     if (dst_path.empty()) {
       has_dump_error = true;
-      out.emplace_back(EC::InvalidArg, "", "",
+      out.emplace_back(EC::InvalidArg, "config.backup", "",
                        "unsupported backup document kind");
       continue;
     }
@@ -358,7 +368,7 @@ ConfigAppService::BackupWithContext_(const std::vector<DocumentKind> &kinds,
   if (!has_dump_error) {
     backup_set.last_backup_time_s = context.now_s;
     if (!Write(backup_set)) {
-      out.emplace_back(EC::ConfigDumpFailed, "", "",
+      out.emplace_back(EC::ConfigDumpFailed, "config.backup", "",
                        "failed to update backup timestamp");
       return out;
     }
