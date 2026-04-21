@@ -342,10 +342,10 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   }
 
   auto &interactive_runtime = managers.runtime.interactive_loop_runtime.Get();
-  auto &token_type_analyzer = interactive_runtime.TokenAnalyzer();
+  auto &input_analyzer = interactive_runtime.Analyzer();
   auto &completion_engine = interactive_runtime.CompletionEngine();
   AMInterface::parser::AMInputPreprocess input_preprocess(
-      managers.interfaces.var_interface_service.Get(), token_type_analyzer);
+      managers.interfaces.var_interface_service.Get(), input_analyzer);
 
   ScopedInteractiveEventCallbacks_ interactive_callbacks(
       &managers.runtime.interactive_event_registry);
@@ -354,7 +354,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       [&managers]() { managers.application.filesystem_service->ClearCache(); });
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
-      [&token_type_analyzer]() { token_type_analyzer.ClearTokenCache(); });
+      [&input_analyzer]() { input_analyzer.ClearTokenCache(); });
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
       [&completion_engine]() { completion_engine.ClearCache(); });

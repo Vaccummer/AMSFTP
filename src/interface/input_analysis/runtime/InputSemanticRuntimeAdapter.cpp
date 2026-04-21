@@ -1,18 +1,35 @@
-#include "interface/completion/CompletionRuntimeAdapter.hpp"
+#include "interface/input_analysis/runtime/InputSemanticRuntimeAdapter.hpp"
+
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <optional>
-#include <unordered_map>
 #include <unordered_set>
 
-namespace AMInterface::completion {
+namespace AMInterface::input {
 namespace {
 constexpr auto kTerminalSnapshotTtl = std::chrono::milliseconds(300);
+
+template <typename TaskMap>
+void AppendTaskIDs_(const TaskMap &tasks, std::vector<IInputSemanticRuntime::TaskID> *out,
+                    std::unordered_set<IInputSemanticRuntime::TaskID> *seen) {
+  if (!out || !seen) {
+    return;
+  }
+  for (const auto &[id, task] : tasks) {
+    if (!task) {
+      continue;
+    }
+    if (seen->insert(id).second) {
+      out->push_back(id);
+    }
+  }
+}
 
 std::string NormalizePath_(const std::string &path) {
   return AMDomain::filesystem::service::NormalizePath(AMStr::Strip(path));
@@ -51,11 +68,11 @@ std::string NormalizeNicknameOrDefault_(const std::string &nickname,
 
 } // namespace
 
-AMDomain::client::ClientHandle CompletionRuntimeAdapter::CurrentClient() const {
+AMDomain::client::ClientHandle InputSemanticRuntimeAdapter::CurrentClient() const {
   return client_service_.GetCurrentClient();
 }
 
-std::string CompletionRuntimeAdapter::CurrentNickname() const {
+std::string InputSemanticRuntimeAdapter::CurrentNickname() const {
   std::string nickname = AMStr::Strip(client_service_.CurrentNickname());
   if (nickname.empty()) {
     nickname = "local";
@@ -63,12 +80,12 @@ std::string CompletionRuntimeAdapter::CurrentNickname() const {
   return nickname;
 }
 
-AMDomain::client::ClientHandle CompletionRuntimeAdapter::LocalClient() const {
+AMDomain::client::ClientHandle InputSemanticRuntimeAdapter::LocalClient() const {
   return client_service_.GetLocalClient();
 }
 
 AMDomain::client::ClientHandle
-CompletionRuntimeAdapter::GetClient(const std::string &nickname) const {
+InputSemanticRuntimeAdapter::GetClient(const std::string &nickname) const {
   auto client = client_service_.GetClient(nickname, true);
   if (!(client.rcm)) {
     return nullptr;
@@ -76,23 +93,23 @@ CompletionRuntimeAdapter::GetClient(const std::string &nickname) const {
   return client.data;
 }
 
-std::vector<std::string> CompletionRuntimeAdapter::ListClientNames() const {
+std::vector<std::string> InputSemanticRuntimeAdapter::ListClientNames() const {
   return client_service_.GetClientNames();
 }
 
-std::vector<std::string> CompletionRuntimeAdapter::ListHostNames() const {
+std::vector<std::string> InputSemanticRuntimeAdapter::ListHostNames() const {
   return host_service_.ListNames();
 }
 
-std::vector<std::string> CompletionRuntimeAdapter::ListPoolNames() const {
+std::vector<std::string> InputSemanticRuntimeAdapter::ListPoolNames() const {
   return client_service_.GetPublicClientNames();
 }
 
-std::vector<std::string> CompletionRuntimeAdapter::ListTerminalNames() const {
+std::vector<std::string> InputSemanticRuntimeAdapter::ListTerminalNames() const {
   return terminal_service_.ListTerminalNames();
 }
 
-std::vector<std::string> CompletionRuntimeAdapter::ListChannelNames(
+std::vector<std::string> InputSemanticRuntimeAdapter::ListChannelNames(
     const std::string &terminal_nickname) const {
   std::vector<std::string> out = {};
   const auto snapshot = ResolveTerminalSnapshot_(terminal_nickname);
@@ -107,18 +124,26 @@ std::vector<std::string> CompletionRuntimeAdapter::ListChannelNames(
   return out;
 }
 
-bool CompletionRuntimeAdapter::HostExists(const std::string &nickname) const {
+bool InputSemanticRuntimeAdapter::HostExists(const std::string &nickname) const {
   return host_service_.HostExists(nickname);
 }
 
-bool CompletionRuntimeAdapter::TerminalExists(
+bool InputSemanticRuntimeAdapter::PoolExists(const std::string &nickname) const {
+  const std::string key = AMStr::Strip(nickname);
+  if (key.empty()) {
+    return false;
+  }
+  return !client_service_.ListPublicClients({key}, false).empty();
+}
+
+bool InputSemanticRuntimeAdapter::TerminalExists(
     const std::string &nickname) const {
   auto terminal = terminal_service_.GetTerminalByNickname(nickname, false);
   return (terminal.rcm) && terminal.data;
 }
 
-ICompletionRuntime::TerminalNameState
-CompletionRuntimeAdapter::QueryTerminalNameState(
+IInputSemanticRuntime::TerminalNameState
+InputSemanticRuntimeAdapter::QueryTerminalNameState(
     const std::string &nickname) const {
   const std::string key =
       NormalizeNicknameOrDefault_(nickname, CurrentNickname());
@@ -136,8 +161,8 @@ CompletionRuntimeAdapter::QueryTerminalNameState(
   return TerminalNameState::Disconnected;
 }
 
-ICompletionRuntime::ChannelNameState
-CompletionRuntimeAdapter::QueryChannelNameState(
+IInputSemanticRuntime::ChannelNameState
+InputSemanticRuntimeAdapter::QueryChannelNameState(
     const std::string &terminal_nickname, const std::string &channel_name,
     bool allow_new) const {
   const std::string key =
@@ -175,8 +200,8 @@ CompletionRuntimeAdapter::QueryChannelNameState(
                        : ChannelNameState::InvalidNew;
 }
 
-CompletionRuntimeAdapter::TerminalSnapshot_
-CompletionRuntimeAdapter::ResolveTerminalSnapshot_(
+InputSemanticRuntimeAdapter::TerminalSnapshot_
+InputSemanticRuntimeAdapter::ResolveTerminalSnapshot_(
     const std::string &terminal_nickname) const {
   const std::string key =
       NormalizeNicknameOrDefault_(terminal_nickname, CurrentNickname());
@@ -216,7 +241,7 @@ CompletionRuntimeAdapter::ResolveTerminalSnapshot_(
   return snapshot;
 }
 
-std::vector<std::string> CompletionRuntimeAdapter::ListVarDomains() const {
+std::vector<std::string> InputSemanticRuntimeAdapter::ListVarDomains() const {
   std::vector<std::string> out = {};
   auto all_vars = var_service_.GetAllVar();
   if (!(all_vars.rcm)) {
@@ -230,7 +255,7 @@ std::vector<std::string> CompletionRuntimeAdapter::ListVarDomains() const {
   return out;
 }
 
-bool CompletionRuntimeAdapter::HasVarDomain(const std::string &zone) const {
+bool InputSemanticRuntimeAdapter::HasVarDomain(const std::string &zone) const {
   auto all_vars = var_service_.GetAllVar();
   if (!(all_vars.rcm)) {
     return false;
@@ -238,7 +263,7 @@ bool CompletionRuntimeAdapter::HasVarDomain(const std::string &zone) const {
   return all_vars.data.contains(zone);
 }
 
-std::string CompletionRuntimeAdapter::CurrentVarDomain() const {
+std::string InputSemanticRuntimeAdapter::CurrentVarDomain() const {
   std::string current = AMStr::Strip(client_service_.CurrentNickname());
   if (current.empty()) {
     current = "local";
@@ -247,7 +272,7 @@ std::string CompletionRuntimeAdapter::CurrentVarDomain() const {
 }
 
 std::vector<AMDomain::var::VarInfo>
-CompletionRuntimeAdapter::ListVarsByDomain(const std::string &domain) const {
+InputSemanticRuntimeAdapter::ListVarsByDomain(const std::string &domain) const {
   std::vector<AMDomain::var::VarInfo> out = {};
   auto zone = var_service_.EnumerateZone(domain);
   if (!(zone.rcm)) {
@@ -264,30 +289,35 @@ CompletionRuntimeAdapter::ListVarsByDomain(const std::string &domain) const {
   return out;
 }
 
-std::vector<TaskID> CompletionRuntimeAdapter::ListTaskIDs() const {
+ECMData<AMDomain::var::VarInfo>
+InputSemanticRuntimeAdapter::GetVar(const std::string &zone,
+                                    const std::string &varname) const {
+  return var_service_.GetVar(zone, varname);
+}
+
+std::vector<IInputSemanticRuntime::TaskID>
+InputSemanticRuntimeAdapter::ListTaskIDs() const {
   std::vector<TaskID> out = {};
   std::unordered_set<TaskID> seen = {};
-  const auto add_ids = [&out, &seen](const auto &tasks) {
-    for (const auto &[id, task] : tasks) {
-      if (!task) {
-        continue;
-      }
-      if (seen.insert(id).second) {
-        out.push_back(id);
-      }
-    }
-  };
-
-  add_ids(transfer_service_.GetPendingTasks());
-  add_ids(transfer_service_.GetConductingTasks());
-  add_ids(transfer_service_.GetPausedTasks());
-  add_ids(transfer_service_.GetFinishedTasks());
+  AppendTaskIDs_(transfer_service_.GetPendingTasks(), &out, &seen);
+  AppendTaskIDs_(transfer_service_.GetConductingTasks(), &out, &seen);
+  AppendTaskIDs_(transfer_service_.GetPausedTasks(), &out, &seen);
+  AppendTaskIDs_(transfer_service_.GetFinishedTasks(), &out, &seen);
   std::sort(out.begin(), out.end());
   return out;
 }
 
-ICompletionRuntime::PromptPathOptions
-CompletionRuntimeAdapter::ResolvePromptPathOptions(
+std::vector<IInputSemanticRuntime::TaskID>
+InputSemanticRuntimeAdapter::ListPausedTaskIDs() const {
+  std::vector<TaskID> out = {};
+  std::unordered_set<TaskID> seen = {};
+  AppendTaskIDs_(transfer_service_.GetPausedTasks(), &out, &seen);
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+IInputSemanticRuntime::PromptPathOptions
+InputSemanticRuntimeAdapter::ResolvePromptPathOptions(
     const std::string &nickname) const {
   auto query = prompt_profile_manager_.GetZoneProfile(nickname);
   PromptPathOptions out = {};
@@ -300,17 +330,19 @@ CompletionRuntimeAdapter::ResolvePromptPathOptions(
   out.complete.use_async = query.profile.complete.path.use_async;
   out.complete.timeout_ms = query.profile.complete.path.timeout_ms;
   out.complete.delay_ms = 0;
+  out.highlight.enable = query.profile.highlight.path.enable;
+  out.highlight.timeout_ms = query.profile.highlight.path.timeout_ms;
   return out;
 }
 
 std::string
-CompletionRuntimeAdapter::SubstitutePathLike(const std::string &raw) const {
+InputSemanticRuntimeAdapter::SubstitutePathLike(const std::string &raw) const {
   return var_interface_service_.SubstitutePathLike(raw);
 }
 
 std::string
-CompletionRuntimeAdapter::BuildPath(AMDomain::client::ClientHandle client,
-                                    const std::string &raw_path) const {
+InputSemanticRuntimeAdapter::BuildPath(AMDomain::client::ClientHandle client,
+                                       const std::string &raw_path) const {
   if (!client) {
     return NormalizePath_(raw_path);
   }
@@ -327,16 +359,16 @@ CompletionRuntimeAdapter::BuildPath(AMDomain::client::ClientHandle client,
   return AMPath::abspath(input, true, home_dir, cwd);
 }
 
-std::string CompletionRuntimeAdapter::Format(
-    const std::string &text, AMInterface::style::StyleIndex style_index) const {
-  return style_service_.Format(text, style_index);
+ECMData<PathInfo>
+InputSemanticRuntimeAdapter::StatPath(AMDomain::client::ClientHandle client,
+                                      const std::string &abs_path,
+                                      int timeout_ms) const {
+  if (!client) {
+    return {PathInfo{}, Err(EC::InvalidHandle, "", "", "client is null")};
+  }
+  auto control = ControlComponent(nullptr, timeout_ms);
+  auto stat_result = client->IOPort().stat({abs_path, false}, control);
+  return {stat_result.data.info, stat_result.rcm};
 }
 
-std::string
-CompletionRuntimeAdapter::FormatPath(const std::string &segment,
-                                     const PathInfo *path_info) const {
-  return style_service_.Format(
-      segment, AMInterface::style::StyleIndex::PathLike, path_info);
-}
-
-} // namespace AMInterface::completion
+} // namespace AMInterface::input

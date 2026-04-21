@@ -108,7 +108,7 @@ PromptProfileSettings IsoclineProfileManager::CurrentProfileArgs() const {
 }
 
 std::string IsoclineProfileManager::AbortStyle() const {
-  return style_config_manager_.GetInitArg().style.common.abort;
+  return style_config_manager_.GetInitArg().style.common.type_abort;
 }
 
 void IsoclineProfileManager::AddHistoryEntry(const std::string &line) {

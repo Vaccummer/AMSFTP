@@ -1269,14 +1269,18 @@ void DecodeCliPrompt_(const Json &json, CLIPromptStyle *out) {
   if (!named.is_object()) {
     named = codec_common::QueryObjectAt_(json, {"namedstyles"});
   }
-  (void)AMJson::QueryKey(named, {"un"}, &out->named_styles.un);
-  (void)AMJson::QueryKey(named, {"at"}, &out->named_styles.at);
-  (void)AMJson::QueryKey(named, {"hn"}, &out->named_styles.hn);
-  (void)AMJson::QueryKey(named, {"en"}, &out->named_styles.en);
-  (void)AMJson::QueryKey(named, {"nn"}, &out->named_styles.nn);
-  (void)AMJson::QueryKey(named, {"cwd"}, &out->named_styles.cwd);
-  (void)AMJson::QueryKey(named, {"ds"}, &out->named_styles.ds);
-  (void)AMJson::QueryKey(named, {"white"}, &out->named_styles.white);
+  if (named.is_object()) {
+    for (auto it = named.begin(); it != named.end(); ++it) {
+      if (!it.value().is_string()) {
+        continue;
+      }
+      const std::string key = AMStr::lowercase(AMStr::Strip(it.key()));
+      if (key.empty() || out->shortcut.contains(key)) {
+        continue;
+      }
+      out->shortcut[key] = it.value().get<std::string>();
+    }
+  }
 
   Json template_json = codec_common::QueryObjectAt_(json, {"template"});
   if (!template_json.is_object()) {
@@ -1318,15 +1322,6 @@ Json EncodeCliPrompt_(const CLIPromptStyle &in) {
   out["icons"]["linux"] = in.icons.linux;
   out["icons"]["macos"] = in.icons.macos;
 
-  out["named_styles"]["un"] = in.named_styles.un;
-  out["named_styles"]["at"] = in.named_styles.at;
-  out["named_styles"]["hn"] = in.named_styles.hn;
-  out["named_styles"]["en"] = in.named_styles.en;
-  out["named_styles"]["nn"] = in.named_styles.nn;
-  out["named_styles"]["cwd"] = in.named_styles.cwd;
-  out["named_styles"]["ds"] = in.named_styles.ds;
-  out["named_styles"]["white"] = in.named_styles.white;
-
   out["template"]["core_prompt"] = in.prompt_template.core_prompt;
   out["template"]["history_search_prompt"] =
       in.prompt_template.history_search_prompt;
@@ -1337,110 +1332,290 @@ void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
-  (void)AMJson::QueryKey(json, {"protocol"}, &out->protocol);
-  (void)AMJson::QueryKey(json, {"abort"}, &out->abort);
-  (void)AMJson::QueryKey(json, {"common"}, &out->common);
-  (void)AMJson::QueryKey(json, {"module"}, &out->module);
-  (void)AMJson::QueryKey(json, {"command"}, &out->command);
-  (void)AMJson::QueryKey(json, {"unexpected"}, &out->unexpected);
-  (void)AMJson::QueryKey(json, {"illegal_command"}, &out->illegal_command);
-  (void)AMJson::QueryKey(json, {"option"}, &out->option);
-  (void)AMJson::QueryKey(json, {"string"}, &out->string);
-  (void)AMJson::QueryKey(json, {"public_varname"}, &out->public_varname);
-  (void)AMJson::QueryKey(json, {"private_varname"}, &out->private_varname);
-  (void)AMJson::QueryKey(json, {"nonexistent_varname"},
-                         &out->nonexistent_varname);
+  (void)AMJson::QueryKey(json, {"default_style"}, &out->default_style);
+  (void)AMJson::QueryKey(json, {"type_string"}, &out->type_string);
+  (void)AMJson::QueryKey(json, {"type_number"}, &out->type_number);
+  (void)AMJson::QueryKey(json, {"type_protocol"}, &out->type_protocol);
+  (void)AMJson::QueryKey(json, {"type_username"}, &out->type_username);
+  (void)AMJson::QueryKey(json, {"type_abort"}, &out->type_abort);
+  (void)AMJson::QueryKey(json, {"type_hostname"}, &out->type_hostname);
+  (void)AMJson::QueryKey(json, {"type_shell_cmd"}, &out->type_shell_cmd);
+  (void)AMJson::QueryKey(json, {"sign_escaped"}, &out->sign_escaped);
+  (void)AMJson::QueryKey(json, {"sign_bang"}, &out->sign_bang);
+  (void)AMJson::QueryKey(json, {"cli_command"}, &out->cli_command);
+  (void)AMJson::QueryKey(json, {"cli_unexpected"}, &out->cli_unexpected);
+  (void)AMJson::QueryKey(json, {"cli_module"}, &out->cli_module);
+  (void)AMJson::QueryKey(json, {"cli_option"}, &out->cli_option);
+  (void)AMJson::QueryKey(json, {"varname_public"}, &out->varname_public);
+  (void)AMJson::QueryKey(json, {"varname_private"}, &out->varname_private);
+  (void)AMJson::QueryKey(json, {"varname_nonexistent"},
+                         &out->varname_nonexistent);
+  (void)AMJson::QueryKey(json, {"varname_dollar"}, &out->varname_dollar);
+  (void)AMJson::QueryKey(json, {"varname_left_brace"},
+                         &out->varname_left_brace);
+  (void)AMJson::QueryKey(json, {"varname_right_brace"},
+                         &out->varname_right_brace);
+  (void)AMJson::QueryKey(json, {"varname_colon"}, &out->varname_colon);
+  (void)AMJson::QueryKey(json, {"varname_equal"}, &out->varname_equal);
   (void)AMJson::QueryKey(json, {"varvalue"}, &out->varvalue);
-  (void)AMJson::QueryKey(json, {"nickname"}, &out->nickname);
-  (void)AMJson::QueryKey(json, {"disconnected_nickname"},
-                         &out->disconnected_nickname);
-  (void)AMJson::QueryKey(json, {"unestablished_nickname"},
-                         &out->unestablished_nickname);
-  (void)AMJson::QueryKey(json, {"nonexistent_nickname"},
-                         &out->nonexistent_nickname);
-  (void)AMJson::QueryKey(json, {"valid_new_nickname"},
-                         &out->valid_new_nickname);
-  (void)AMJson::QueryKey(json, {"invalid_new_nickname"},
-                         &out->invalid_new_nickname);
-  (void)AMJson::QueryKey(json, {"builtin_arg"}, &out->builtin_arg);
-  (void)AMJson::QueryKey(json, {"nonexistent_builtin_arg"},
-                         &out->nonexistent_builtin_arg);
-  (void)AMJson::QueryKey(json, {"username"}, &out->username);
-  (void)AMJson::QueryKey(json, {"atsign"}, &out->atsign);
-  (void)AMJson::QueryKey(json, {"dollarsign"}, &out->dollarsign);
-  (void)AMJson::QueryKey(json, {"equalsign"}, &out->equalsign);
-  (void)AMJson::QueryKey(json, {"escapedsign"}, &out->escapedsign);
-  (void)AMJson::QueryKey(json, {"bangsign"}, &out->bangsign);
-  (void)AMJson::QueryKey(json, {"shell_cmd"}, &out->shell_cmd);
-  (void)AMJson::QueryKey(json, {"number"}, &out->number);
-  (void)AMJson::QueryKey(json, {"timestamp"}, &out->timestamp);
-  (void)AMJson::QueryKey(json, {"path_like"}, &out->path_like);
-  (void)AMJson::QueryKey(json, {"termname"}, &out->termname);
-  (void)AMJson::QueryKey(json, {"disconnected_termname"},
-                         &out->disconnected_termname);
-  (void)AMJson::QueryKey(json, {"unestablished_termname"},
-                         &out->unestablished_termname);
-  (void)AMJson::QueryKey(json, {"nonexistent_termname"},
-                         &out->nonexistent_termname);
-  (void)AMJson::QueryKey(json, {"channelname"}, &out->channelname);
-  (void)AMJson::QueryKey(json, {"disconnected_channelname"},
-                         &out->disconnected_channelname);
-  (void)AMJson::QueryKey(json, {"nonexistent_channelname"},
-                         &out->nonexistent_channelname);
-  (void)AMJson::QueryKey(json, {"valid_new_channelname"},
-                         &out->valid_new_channelname);
-  (void)AMJson::QueryKey(json, {"invalid_new_channelname"},
-                         &out->invalid_new_channelname);
-  if (out->unexpected.empty()) {
-    out->unexpected = out->illegal_command;
+  (void)AMJson::QueryKey(json, {"nickname_ok"}, &out->nickname_ok);
+  (void)AMJson::QueryKey(json, {"nickname_at"}, &out->nickname_at);
+  (void)AMJson::QueryKey(json, {"nickname_disconnected"},
+                         &out->nickname_disconnected);
+  (void)AMJson::QueryKey(json, {"nickname_unestablished"},
+                         &out->nickname_unestablished);
+  (void)AMJson::QueryKey(json, {"nickname_nonexistent"},
+                         &out->nickname_nonexistent);
+  (void)AMJson::QueryKey(json, {"nickname_new_valid"},
+                         &out->nickname_new_valid);
+  (void)AMJson::QueryKey(json, {"nickname_new_invalid"},
+                         &out->nickname_new_invalid);
+  (void)AMJson::QueryKey(json, {"termname_ok"}, &out->termname_ok);
+  (void)AMJson::QueryKey(json, {"termname_at"}, &out->termname_at);
+  (void)AMJson::QueryKey(json, {"termname_disconnected"},
+                         &out->termname_disconnected);
+  (void)AMJson::QueryKey(json, {"termname_unestablished"},
+                         &out->termname_unestablished);
+  (void)AMJson::QueryKey(json, {"termname_nonexistent"},
+                         &out->termname_nonexistent);
+  (void)AMJson::QueryKey(json, {"channelname_ok"}, &out->channelname_ok);
+  (void)AMJson::QueryKey(json, {"channelname_disconnected"},
+                         &out->channelname_disconnected);
+  (void)AMJson::QueryKey(json, {"channelname_nonexistent"},
+                         &out->channelname_nonexistent);
+  (void)AMJson::QueryKey(json, {"channelname_new_valid"},
+                         &out->channelname_new_valid);
+  (void)AMJson::QueryKey(json, {"channelname_new_invalid"},
+                         &out->channelname_new_invalid);
+  (void)AMJson::QueryKey(json, {"attr_valid"}, &out->attr_valid);
+  (void)AMJson::QueryKey(json, {"attr_invalid"}, &out->attr_invalid);
+
+  std::string legacy = {};
+  if (AMJson::QueryKey(json, {"protocol"}, &legacy) &&
+      out->type_protocol.empty()) {
+    out->type_protocol = legacy;
   }
-  if (out->illegal_command.empty()) {
-    out->illegal_command = out->unexpected;
+  if (AMJson::QueryKey(json, {"abort"}, &legacy) && out->type_abort.empty()) {
+    out->type_abort = legacy;
+  }
+  if (AMJson::QueryKey(json, {"common"}, &legacy) &&
+      out->default_style.empty()) {
+    out->default_style = legacy;
+  }
+  if (AMJson::QueryKey(json, {"module"}, &legacy) && out->cli_module.empty()) {
+    out->cli_module = legacy;
+  }
+  if (AMJson::QueryKey(json, {"command"}, &legacy) &&
+      out->cli_command.empty()) {
+    out->cli_command = legacy;
+  }
+  if (AMJson::QueryKey(json, {"unexpected"}, &legacy) &&
+      out->cli_unexpected.empty()) {
+    out->cli_unexpected = legacy;
+  }
+  if (AMJson::QueryKey(json, {"illegal_command"}, &legacy) &&
+      out->cli_unexpected.empty()) {
+    out->cli_unexpected = legacy;
+  }
+  if (AMJson::QueryKey(json, {"option"}, &legacy) && out->cli_option.empty()) {
+    out->cli_option = legacy;
+  }
+  if (AMJson::QueryKey(json, {"string"}, &legacy) && out->type_string.empty()) {
+    out->type_string = legacy;
+  }
+  if (AMJson::QueryKey(json, {"public_varname"}, &legacy) &&
+      out->varname_public.empty()) {
+    out->varname_public = legacy;
+  }
+  if (AMJson::QueryKey(json, {"private_varname"}, &legacy) &&
+      out->varname_private.empty()) {
+    out->varname_private = legacy;
+  }
+  if (AMJson::QueryKey(json, {"nonexistent_varname"}, &legacy) &&
+      out->varname_nonexistent.empty()) {
+    out->varname_nonexistent = legacy;
+  }
+  if (AMJson::QueryKey(json, {"varname_dollar"}, &legacy) &&
+      out->varname_dollar.empty()) {
+    out->varname_dollar = legacy;
+  }
+  if (AMJson::QueryKey(json, {"varname_left_brace"}, &legacy) &&
+      out->varname_left_brace.empty()) {
+    out->varname_left_brace = legacy;
+  }
+  if (AMJson::QueryKey(json, {"varname_right_brace"}, &legacy) &&
+      out->varname_right_brace.empty()) {
+    out->varname_right_brace = legacy;
+  }
+  if (AMJson::QueryKey(json, {"varname_colon"}, &legacy) &&
+      out->varname_colon.empty()) {
+    out->varname_colon = legacy;
+  }
+  if (AMJson::QueryKey(json, {"varname_equal"}, &legacy) &&
+      out->varname_equal.empty()) {
+    out->varname_equal = legacy;
+  }
+  if (AMJson::QueryKey(json, {"nickname"}, &legacy) &&
+      out->nickname_ok.empty()) {
+    out->nickname_ok = legacy;
+  }
+  if (AMJson::QueryKey(json, {"nickname_at"}, &legacy) &&
+      out->nickname_at.empty()) {
+    out->nickname_at = legacy;
+  }
+  if (AMJson::QueryKey(json, {"disconnected_nickname"}, &legacy) &&
+      out->nickname_disconnected.empty()) {
+    out->nickname_disconnected = legacy;
+  }
+  if (AMJson::QueryKey(json, {"unestablished_nickname"}, &legacy) &&
+      out->nickname_unestablished.empty()) {
+    out->nickname_unestablished = legacy;
+  }
+  if (AMJson::QueryKey(json, {"nonexistent_nickname"}, &legacy) &&
+      out->nickname_nonexistent.empty()) {
+    out->nickname_nonexistent = legacy;
+  }
+  if (AMJson::QueryKey(json, {"valid_new_nickname"}, &legacy) &&
+      out->nickname_new_valid.empty()) {
+    out->nickname_new_valid = legacy;
+  }
+  if (AMJson::QueryKey(json, {"invalid_new_nickname"}, &legacy) &&
+      out->nickname_new_invalid.empty()) {
+    out->nickname_new_invalid = legacy;
+  }
+  if (AMJson::QueryKey(json, {"builtin_arg"}, &legacy) &&
+      out->attr_valid.empty()) {
+    out->attr_valid = legacy;
+  }
+  if (AMJson::QueryKey(json, {"nonexistent_builtin_arg"}, &legacy) &&
+      out->attr_invalid.empty()) {
+    out->attr_invalid = legacy;
+  }
+  if (AMJson::QueryKey(json, {"username"}, &legacy) &&
+      out->type_username.empty()) {
+    out->type_username = legacy;
+  }
+  if (AMJson::QueryKey(json, {"atsign"}, &legacy) &&
+      out->nickname_at.empty()) {
+    out->nickname_at = legacy;
+  }
+  if (AMJson::QueryKey(json, {"dollarsign"}, &legacy) &&
+      out->varname_dollar.empty()) {
+    out->varname_dollar = legacy;
+  }
+  if (AMJson::QueryKey(json, {"equalsign"}, &legacy) &&
+      out->varname_equal.empty()) {
+    out->varname_equal = legacy;
+  }
+  if (AMJson::QueryKey(json, {"escapedsign"}, &legacy) &&
+      out->sign_escaped.empty()) {
+    out->sign_escaped = legacy;
+  }
+  if (AMJson::QueryKey(json, {"bangsign"}, &legacy) &&
+      out->sign_bang.empty()) {
+    out->sign_bang = legacy;
+  }
+  if (AMJson::QueryKey(json, {"shell_cmd"}, &legacy) &&
+      out->type_shell_cmd.empty()) {
+    out->type_shell_cmd = legacy;
+  }
+  if (AMJson::QueryKey(json, {"number"}, &legacy) && out->type_number.empty()) {
+    out->type_number = legacy;
+  }
+  if (AMJson::QueryKey(json, {"timestamp"}, &legacy) &&
+      out->default_style.empty()) {
+    out->default_style = legacy;
+  }
+  if (AMJson::QueryKey(json, {"path_like"}, &legacy) &&
+      out->default_style.empty()) {
+    out->default_style = legacy;
+  }
+  if (AMJson::QueryKey(json, {"termname"}, &legacy) &&
+      out->termname_ok.empty()) {
+    out->termname_ok = legacy;
+  }
+  if (AMJson::QueryKey(json, {"termname_at"}, &legacy) &&
+      out->termname_at.empty()) {
+    out->termname_at = legacy;
+  }
+  if (AMJson::QueryKey(json, {"disconnected_termname"}, &legacy) &&
+      out->termname_disconnected.empty()) {
+    out->termname_disconnected = legacy;
+  }
+  if (AMJson::QueryKey(json, {"unestablished_termname"}, &legacy) &&
+      out->termname_unestablished.empty()) {
+    out->termname_unestablished = legacy;
+  }
+  if (AMJson::QueryKey(json, {"nonexistent_termname"}, &legacy) &&
+      out->termname_nonexistent.empty()) {
+    out->termname_nonexistent = legacy;
+  }
+  if (AMJson::QueryKey(json, {"channelname"}, &legacy) &&
+      out->channelname_ok.empty()) {
+    out->channelname_ok = legacy;
+  }
+  if (AMJson::QueryKey(json, {"disconnected_channelname"}, &legacy) &&
+      out->channelname_disconnected.empty()) {
+    out->channelname_disconnected = legacy;
+  }
+  if (AMJson::QueryKey(json, {"nonexistent_channelname"}, &legacy) &&
+      out->channelname_nonexistent.empty()) {
+    out->channelname_nonexistent = legacy;
+  }
+  if (AMJson::QueryKey(json, {"valid_new_channelname"}, &legacy) &&
+      out->channelname_new_valid.empty()) {
+    out->channelname_new_valid = legacy;
+  }
+  if (AMJson::QueryKey(json, {"invalid_new_channelname"}, &legacy) &&
+      out->channelname_new_invalid.empty()) {
+    out->channelname_new_invalid = legacy;
   }
 }
 
 [[maybe_unused]] Json EncodeInputHighlight_(const InputHighlightStyle &in) {
   Json out = Json::object();
-  out["protocol"] = in.protocol;
-  out["abort"] = in.abort;
-  out["common"] = in.common;
-  out["module"] = in.module;
-  out["command"] = in.command;
-  out["unexpected"] = in.unexpected;
-  out["illegal_command"] = in.illegal_command;
-  out["option"] = in.option;
-  out["string"] = in.string;
-  out["public_varname"] = in.public_varname;
-  out["private_varname"] = in.private_varname;
-  out["nonexistent_varname"] = in.nonexistent_varname;
+  out["default_style"] = in.default_style;
+  out["type_string"] = in.type_string;
+  out["type_number"] = in.type_number;
+  out["type_protocol"] = in.type_protocol;
+  out["type_username"] = in.type_username;
+  out["type_abort"] = in.type_abort;
+  out["type_hostname"] = in.type_hostname;
+  out["type_shell_cmd"] = in.type_shell_cmd;
+  out["sign_escaped"] = in.sign_escaped;
+  out["sign_bang"] = in.sign_bang;
+  out["cli_command"] = in.cli_command;
+  out["cli_unexpected"] = in.cli_unexpected;
+  out["cli_module"] = in.cli_module;
+  out["cli_option"] = in.cli_option;
+  out["varname_public"] = in.varname_public;
+  out["varname_private"] = in.varname_private;
+  out["varname_nonexistent"] = in.varname_nonexistent;
+  out["varname_dollar"] = in.varname_dollar;
+  out["varname_left_brace"] = in.varname_left_brace;
+  out["varname_right_brace"] = in.varname_right_brace;
+  out["varname_colon"] = in.varname_colon;
+  out["varname_equal"] = in.varname_equal;
   out["varvalue"] = in.varvalue;
-  out["nickname"] = in.nickname;
-  out["disconnected_nickname"] = in.disconnected_nickname;
-  out["unestablished_nickname"] = in.unestablished_nickname;
-  out["nonexistent_nickname"] = in.nonexistent_nickname;
-  out["valid_new_nickname"] = in.valid_new_nickname;
-  out["invalid_new_nickname"] = in.invalid_new_nickname;
-  out["builtin_arg"] = in.builtin_arg;
-  out["nonexistent_builtin_arg"] = in.nonexistent_builtin_arg;
-  out["username"] = in.username;
-  out["atsign"] = in.atsign;
-  out["dollarsign"] = in.dollarsign;
-  out["equalsign"] = in.equalsign;
-  out["escapedsign"] = in.escapedsign;
-  out["bangsign"] = in.bangsign;
-  out["shell_cmd"] = in.shell_cmd;
-  out["number"] = in.number;
-  out["timestamp"] = in.timestamp;
-  out["path_like"] = in.path_like;
-  out["termname"] = in.termname;
-  out["disconnected_termname"] = in.disconnected_termname;
-  out["unestablished_termname"] = in.unestablished_termname;
-  out["nonexistent_termname"] = in.nonexistent_termname;
-  out["channelname"] = in.channelname;
-  out["disconnected_channelname"] = in.disconnected_channelname;
-  out["nonexistent_channelname"] = in.nonexistent_channelname;
-  out["valid_new_channelname"] = in.valid_new_channelname;
-  out["invalid_new_channelname"] = in.invalid_new_channelname;
+  out["nickname_ok"] = in.nickname_ok;
+  out["nickname_at"] = in.nickname_at;
+  out["nickname_disconnected"] = in.nickname_disconnected;
+  out["nickname_unestablished"] = in.nickname_unestablished;
+  out["nickname_nonexistent"] = in.nickname_nonexistent;
+  out["nickname_new_valid"] = in.nickname_new_valid;
+  out["nickname_new_invalid"] = in.nickname_new_invalid;
+  out["termname_ok"] = in.termname_ok;
+  out["termname_at"] = in.termname_at;
+  out["termname_disconnected"] = in.termname_disconnected;
+  out["termname_unestablished"] = in.termname_unestablished;
+  out["termname_nonexistent"] = in.termname_nonexistent;
+  out["channelname_ok"] = in.channelname_ok;
+  out["channelname_disconnected"] = in.channelname_disconnected;
+  out["channelname_nonexistent"] = in.channelname_nonexistent;
+  out["channelname_new_valid"] = in.channelname_new_valid;
+  out["channelname_new_invalid"] = in.channelname_new_invalid;
+  out["attr_valid"] = in.attr_valid;
+  out["attr_invalid"] = in.attr_invalid;
   return out;
 }
 
@@ -1451,127 +1626,135 @@ void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
 
   DecodeInputHighlight_(json, out);
 
-  (void)AMJson::QueryKey(json, {"type", "string"}, &out->string);
-  (void)AMJson::QueryKey(json, {"type", "number"}, &out->number);
-  (void)AMJson::QueryKey(json, {"type", "protocol"}, &out->protocol);
-  (void)AMJson::QueryKey(json, {"type", "username"}, &out->username);
-  (void)AMJson::QueryKey(json, {"type", "abort"}, &out->abort);
-  (void)AMJson::QueryKey(json, {"type", "hostname"}, &out->nickname);
-  (void)AMJson::QueryKey(json, {"type", "shell_cmd"}, &out->shell_cmd);
+  (void)AMJson::QueryKey(json, {"default"}, &out->default_style);
+  (void)AMJson::QueryKey(json, {"type", "string"}, &out->type_string);
+  (void)AMJson::QueryKey(json, {"type", "number"}, &out->type_number);
+  (void)AMJson::QueryKey(json, {"type", "protocol"}, &out->type_protocol);
+  (void)AMJson::QueryKey(json, {"type", "username"}, &out->type_username);
+  (void)AMJson::QueryKey(json, {"type", "abort"}, &out->type_abort);
+  (void)AMJson::QueryKey(json, {"type", "hostname"}, &out->type_hostname);
+  (void)AMJson::QueryKey(json, {"type", "shell_cmd"}, &out->type_shell_cmd);
 
-  (void)AMJson::QueryKey(json, {"sign", "at"}, &out->atsign);
-  (void)AMJson::QueryKey(json, {"sign", "dollar"}, &out->dollarsign);
-  (void)AMJson::QueryKey(json, {"sign", "equal"}, &out->equalsign);
-  (void)AMJson::QueryKey(json, {"sign", "escaped"}, &out->escapedsign);
-  (void)AMJson::QueryKey(json, {"sign", "bang"}, &out->bangsign);
+  (void)AMJson::QueryKey(json, {"sign", "escaped"}, &out->sign_escaped);
+  (void)AMJson::QueryKey(json, {"sign", "bang"}, &out->sign_bang);
 
-  (void)AMJson::QueryKey(json, {"cli", "command"}, &out->command);
-  (void)AMJson::QueryKey(json, {"cli", "unexpected"}, &out->unexpected);
-  (void)AMJson::QueryKey(json, {"cli", "illegal_command"},
-                         &out->illegal_command);
-  (void)AMJson::QueryKey(json, {"cli", "module"}, &out->module);
-  (void)AMJson::QueryKey(json, {"cli", "option"}, &out->option);
+  (void)AMJson::QueryKey(json, {"cli", "command"}, &out->cli_command);
+  (void)AMJson::QueryKey(json, {"cli", "unexpected"}, &out->cli_unexpected);
+  if (out->cli_unexpected.empty()) {
+    (void)AMJson::QueryKey(json, {"cli", "illegal_command"},
+                           &out->cli_unexpected);
+  }
+  (void)AMJson::QueryKey(json, {"cli", "module"}, &out->cli_module);
+  (void)AMJson::QueryKey(json, {"cli", "option"}, &out->cli_option);
 
-  (void)AMJson::QueryKey(json, {"varname", "public"}, &out->public_varname);
-  (void)AMJson::QueryKey(json, {"varname", "private"}, &out->private_varname);
+  (void)AMJson::QueryKey(json, {"varname", "public"}, &out->varname_public);
+  (void)AMJson::QueryKey(json, {"varname", "private"}, &out->varname_private);
   (void)AMJson::QueryKey(json, {"varname", "nonexistent"},
-                         &out->nonexistent_varname);
+                         &out->varname_nonexistent);
+  (void)AMJson::QueryKey(json, {"varname", "dollar"},
+                         &out->varname_dollar);
+  (void)AMJson::QueryKey(json, {"varname", "left_brace"},
+                         &out->varname_left_brace);
+  (void)AMJson::QueryKey(json, {"varname", "right_brace"},
+                         &out->varname_right_brace);
+  (void)AMJson::QueryKey(json, {"varname", "colon"},
+                         &out->varname_colon);
+  (void)AMJson::QueryKey(json, {"varname", "equal"},
+                         &out->varname_equal);
   (void)AMJson::QueryKey(json, {"varvalue"}, &out->varvalue);
 
-  (void)AMJson::QueryKey(json, {"nickname", "ok"}, &out->nickname);
+  (void)AMJson::QueryKey(json, {"nickname", "ok"}, &out->nickname_ok);
+  (void)AMJson::QueryKey(json, {"nickname", "at"}, &out->nickname_at);
   (void)AMJson::QueryKey(json, {"nickname", "disconnected"},
-                         &out->disconnected_nickname);
+                         &out->nickname_disconnected);
   (void)AMJson::QueryKey(json, {"nickname", "unestablished"},
-                         &out->unestablished_nickname);
+                         &out->nickname_unestablished);
   (void)AMJson::QueryKey(json, {"nickname", "nonexistent"},
-                         &out->nonexistent_nickname);
+                         &out->nickname_nonexistent);
   (void)AMJson::QueryKey(json, {"nickname", "new", "valid"},
-                         &out->valid_new_nickname);
+                         &out->nickname_new_valid);
   (void)AMJson::QueryKey(json, {"nickname", "new", "invalid"},
-                         &out->invalid_new_nickname);
+                         &out->nickname_new_invalid);
 
-  (void)AMJson::QueryKey(json, {"termname", "ok"}, &out->termname);
+  (void)AMJson::QueryKey(json, {"termname", "ok"}, &out->termname_ok);
+  (void)AMJson::QueryKey(json, {"termname", "at"}, &out->termname_at);
   (void)AMJson::QueryKey(json, {"termname", "disconnected"},
-                         &out->disconnected_termname);
+                         &out->termname_disconnected);
   (void)AMJson::QueryKey(json, {"termname", "unestablished"},
-                         &out->unestablished_termname);
+                         &out->termname_unestablished);
   (void)AMJson::QueryKey(json, {"termname", "nonexistent"},
-                         &out->nonexistent_termname);
+                         &out->termname_nonexistent);
 
-  (void)AMJson::QueryKey(json, {"channelname", "ok"}, &out->channelname);
+  (void)AMJson::QueryKey(json, {"channelname", "ok"}, &out->channelname_ok);
   (void)AMJson::QueryKey(json, {"channelname", "disconnected"},
-                         &out->disconnected_channelname);
+                         &out->channelname_disconnected);
   (void)AMJson::QueryKey(json, {"channelname", "nonexistent"},
-                         &out->nonexistent_channelname);
+                         &out->channelname_nonexistent);
   (void)AMJson::QueryKey(json, {"channelname", "new", "valid"},
-                         &out->valid_new_channelname);
+                         &out->channelname_new_valid);
   (void)AMJson::QueryKey(json, {"channelname", "new", "invalid"},
-                         &out->invalid_new_channelname);
+                         &out->channelname_new_invalid);
 
-  (void)AMJson::QueryKey(json, {"attr", "valid"}, &out->builtin_arg);
+  (void)AMJson::QueryKey(json, {"attr", "valid"}, &out->attr_valid);
   (void)AMJson::QueryKey(json, {"attr", "invalid"},
-                         &out->nonexistent_builtin_arg);
+                         &out->attr_invalid);
 
-  if (out->shell_cmd.empty()) {
-    out->shell_cmd = out->command;
-  }
-  if (out->unexpected.empty()) {
-    out->unexpected = out->illegal_command;
-  }
-  if (out->illegal_command.empty()) {
-    out->illegal_command = out->unexpected;
-  }
-  if (out->common.empty()) {
-    out->common = out->command;
+  if (out->type_shell_cmd.empty()) {
+    out->type_shell_cmd = out->cli_command;
   }
 }
 
 Json EncodeCommon_(const InputHighlightStyle &in) {
   Json out = Json::object();
-  out["type"]["string"] = in.string;
-  out["type"]["number"] = in.number;
-  out["type"]["protocol"] = in.protocol;
-  out["type"]["username"] = in.username;
-  out["type"]["abort"] = in.abort;
-  out["type"]["hostname"] = in.nickname;
-  out["type"]["shell_cmd"] = in.shell_cmd;
+  out["default"] = in.default_style;
+  out["type"]["string"] = in.type_string;
+  out["type"]["number"] = in.type_number;
+  out["type"]["protocol"] = in.type_protocol;
+  out["type"]["username"] = in.type_username;
+  out["type"]["abort"] = in.type_abort;
+  out["type"]["hostname"] = in.type_hostname;
+  out["type"]["shell_cmd"] = in.type_shell_cmd;
 
-  out["sign"]["at"] = in.atsign;
-  out["sign"]["dollar"] = in.dollarsign;
-  out["sign"]["equal"] = in.equalsign;
-  out["sign"]["escaped"] = in.escapedsign;
-  out["sign"]["bang"] = in.bangsign;
+  out["sign"]["escaped"] = in.sign_escaped;
+  out["sign"]["bang"] = in.sign_bang;
 
-  out["cli"]["command"] = in.command;
-  out["cli"]["unexpected"] = in.unexpected;
-  out["cli"]["module"] = in.module;
-  out["cli"]["option"] = in.option;
+  out["cli"]["command"] = in.cli_command;
+  out["cli"]["unexpected"] = in.cli_unexpected;
+  out["cli"]["module"] = in.cli_module;
+  out["cli"]["option"] = in.cli_option;
 
-  out["varname"]["public"] = in.public_varname;
-  out["varname"]["private"] = in.private_varname;
-  out["varname"]["nonexistent"] = in.nonexistent_varname;
+  out["varname"]["public"] = in.varname_public;
+  out["varname"]["private"] = in.varname_private;
+  out["varname"]["nonexistent"] = in.varname_nonexistent;
+  out["varname"]["dollar"] = in.varname_dollar;
+  out["varname"]["left_brace"] = in.varname_left_brace;
+  out["varname"]["right_brace"] = in.varname_right_brace;
+  out["varname"]["colon"] = in.varname_colon;
+  out["varname"]["equal"] = in.varname_equal;
   out["varvalue"] = in.varvalue;
 
-  out["nickname"]["ok"] = in.nickname;
-  out["nickname"]["disconnected"] = in.disconnected_nickname;
-  out["nickname"]["unestablished"] = in.unestablished_nickname;
-  out["nickname"]["nonexistent"] = in.nonexistent_nickname;
-  out["nickname"]["new"]["valid"] = in.valid_new_nickname;
-  out["nickname"]["new"]["invalid"] = in.invalid_new_nickname;
+  out["nickname"]["ok"] = in.nickname_ok;
+  out["nickname"]["at"] = in.nickname_at;
+  out["nickname"]["disconnected"] = in.nickname_disconnected;
+  out["nickname"]["unestablished"] = in.nickname_unestablished;
+  out["nickname"]["nonexistent"] = in.nickname_nonexistent;
+  out["nickname"]["new"]["valid"] = in.nickname_new_valid;
+  out["nickname"]["new"]["invalid"] = in.nickname_new_invalid;
 
-  out["termname"]["ok"] = in.termname;
-  out["termname"]["disconnected"] = in.disconnected_termname;
-  out["termname"]["unestablished"] = in.unestablished_termname;
-  out["termname"]["nonexistent"] = in.nonexistent_termname;
+  out["termname"]["ok"] = in.termname_ok;
+  out["termname"]["at"] = in.termname_at;
+  out["termname"]["disconnected"] = in.termname_disconnected;
+  out["termname"]["unestablished"] = in.termname_unestablished;
+  out["termname"]["nonexistent"] = in.termname_nonexistent;
 
-  out["channelname"]["ok"] = in.channelname;
-  out["channelname"]["disconnected"] = in.disconnected_channelname;
-  out["channelname"]["nonexistent"] = in.nonexistent_channelname;
-  out["channelname"]["new"]["valid"] = in.valid_new_channelname;
-  out["channelname"]["new"]["invalid"] = in.invalid_new_channelname;
+  out["channelname"]["ok"] = in.channelname_ok;
+  out["channelname"]["disconnected"] = in.channelname_disconnected;
+  out["channelname"]["nonexistent"] = in.channelname_nonexistent;
+  out["channelname"]["new"]["valid"] = in.channelname_new_valid;
+  out["channelname"]["new"]["invalid"] = in.channelname_new_invalid;
 
-  out["attr"]["valid"] = in.builtin_arg;
-  out["attr"]["invalid"] = in.nonexistent_builtin_arg;
+  out["attr"]["valid"] = in.attr_valid;
+  out["attr"]["invalid"] = in.attr_invalid;
   return out;
 }
 
@@ -1614,30 +1797,78 @@ void DecodePathHighlight_(const Json &json, PathHighlightStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
-  (void)AMJson::QueryKey(json, {"cwd"}, &out->cwd);
-  (void)AMJson::QueryKey(json, {"path_str"}, &out->path_str);
-  (void)AMJson::QueryKey(json, {"root"}, &out->root);
-  (void)AMJson::QueryKey(json, {"node_dir_name"}, &out->node_dir_name);
-  (void)AMJson::QueryKey(json, {"filename"}, &out->filename);
-  (void)AMJson::QueryKey(json, {"dir"}, &out->dir);
-  (void)AMJson::QueryKey(json, {"regular"}, &out->regular);
-  (void)AMJson::QueryKey(json, {"symlink"}, &out->symlink);
-  (void)AMJson::QueryKey(json, {"otherspecial"}, &out->otherspecial);
-  (void)AMJson::QueryKey(json, {"nonexistent"}, &out->nonexistent);
+  (void)AMJson::QueryKey(json, {"default"}, &out->default_style);
+  (void)AMJson::QueryKey(json, {"tree", "root"}, &out->tree_root);
+  (void)AMJson::QueryKey(json, {"tree", "node"}, &out->tree_node);
+  (void)AMJson::QueryKey(json, {"tree", "leaf"}, &out->tree_leaf);
+  (void)AMJson::QueryKey(json, {"type", "dir"}, &out->type_dir);
+  (void)AMJson::QueryKey(json, {"type", "regular"}, &out->type_regular);
+  (void)AMJson::QueryKey(json, {"type", "symlink"}, &out->type_symlink);
+  (void)AMJson::QueryKey(json, {"type", "otherspecial"},
+                         &out->type_otherspecial);
+  (void)AMJson::QueryKey(json, {"type", "nonexistent"},
+                         &out->type_nonexistent);
+
+  std::string legacy = {};
+  if (AMJson::QueryKey(json, {"cwd"}, &legacy) && out->type_dir.empty()) {
+    out->type_dir = legacy;
+  }
+  if (AMJson::QueryKey(json, {"path_str"}, &legacy) &&
+      out->default_style.empty()) {
+    out->default_style = legacy;
+  }
+  if (AMJson::QueryKey(json, {"root"}, &legacy) && out->tree_root.empty()) {
+    out->tree_root = legacy;
+  }
+  if (AMJson::QueryKey(json, {"node_dir_name"}, &legacy) &&
+      out->tree_node.empty()) {
+    out->tree_node = legacy;
+  }
+  if (AMJson::QueryKey(json, {"filename"}, &legacy) &&
+      out->tree_leaf.empty()) {
+    out->tree_leaf = legacy;
+  }
+  if (AMJson::QueryKey(json, {"dir"}, &legacy) && out->type_dir.empty()) {
+    out->type_dir = legacy;
+  }
+  if (AMJson::QueryKey(json, {"regular"}, &legacy) &&
+      out->type_regular.empty()) {
+    out->type_regular = legacy;
+  }
+  if (AMJson::QueryKey(json, {"symlink"}, &legacy) &&
+      out->type_symlink.empty()) {
+    out->type_symlink = legacy;
+  }
+  if (AMJson::QueryKey(json, {"otherspecial"}, &legacy) &&
+      out->type_otherspecial.empty()) {
+    out->type_otherspecial = legacy;
+  }
+  if (AMJson::QueryKey(json, {"nonexistent"}, &legacy) &&
+      out->type_nonexistent.empty()) {
+    out->type_nonexistent = legacy;
+  }
+  if (out->default_style.empty()) {
+    out->default_style = out->type_regular;
+  }
+  if (out->tree_node.empty()) {
+    out->tree_node = out->type_dir;
+  }
+  if (out->tree_leaf.empty()) {
+    out->tree_leaf = out->type_regular;
+  }
 }
 
 Json EncodePathHighlight_(const PathHighlightStyle &in) {
   Json out = Json::object();
-  out["cwd"] = in.cwd;
-  out["path_str"] = in.path_str;
-  out["root"] = in.root;
-  out["node_dir_name"] = in.node_dir_name;
-  out["filename"] = in.filename;
-  out["dir"] = in.dir;
-  out["regular"] = in.regular;
-  out["symlink"] = in.symlink;
-  out["otherspecial"] = in.otherspecial;
-  out["nonexistent"] = in.nonexistent;
+  out["default"] = in.default_style;
+  out["tree"]["root"] = in.tree_root;
+  out["tree"]["node"] = in.tree_node;
+  out["tree"]["leaf"] = in.tree_leaf;
+  out["type"]["dir"] = in.type_dir;
+  out["type"]["regular"] = in.type_regular;
+  out["type"]["symlink"] = in.type_symlink;
+  out["type"]["otherspecial"] = in.type_otherspecial;
+  out["type"]["nonexistent"] = in.type_nonexistent;
   return out;
 }
 

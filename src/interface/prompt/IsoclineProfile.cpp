@@ -59,39 +59,39 @@ void ApplyProfileInitData_(
       style_arg.style.value_query_highlight.invalid_value);
   (void)profile->DefineStyle(kInlineHintStyleKey,
                              style_arg.style.internal_style.inline_hint);
-  if (!AMStr::Strip(style_arg.style.common.nickname).empty()) {
+  if (!AMStr::Strip(style_arg.style.common.nickname_ok).empty()) {
     (void)profile->DefineStyle("nickname",
-                               style_arg.style.common.nickname);
+                               style_arg.style.common.nickname_ok);
   }
-  if (!AMStr::Strip(style_arg.style.common.disconnected_nickname)
+  if (!AMStr::Strip(style_arg.style.common.nickname_disconnected)
            .empty()) {
     (void)profile->DefineStyle(
         "disconnected_nickname",
-        style_arg.style.common.disconnected_nickname);
+        style_arg.style.common.nickname_disconnected);
   }
-  if (!AMStr::Strip(style_arg.style.common.unestablished_nickname)
+  if (!AMStr::Strip(style_arg.style.common.nickname_unestablished)
            .empty()) {
     (void)profile->DefineStyle(
         "unestablished_nickname",
-        style_arg.style.common.unestablished_nickname);
+        style_arg.style.common.nickname_unestablished);
   }
-  if (!AMStr::Strip(style_arg.style.common.nonexistent_nickname)
+  if (!AMStr::Strip(style_arg.style.common.nickname_nonexistent)
            .empty()) {
     (void)profile->DefineStyle(
         "nonexistent_nickname",
-        style_arg.style.common.nonexistent_nickname);
+        style_arg.style.common.nickname_nonexistent);
   }
-  if (!AMStr::Strip(style_arg.style.common.valid_new_nickname)
+  if (!AMStr::Strip(style_arg.style.common.nickname_new_valid)
            .empty()) {
     (void)profile->DefineStyle(
         "valid_new_nickname",
-        style_arg.style.common.valid_new_nickname);
+        style_arg.style.common.nickname_new_valid);
   }
-  if (!AMStr::Strip(style_arg.style.common.invalid_new_nickname)
+  if (!AMStr::Strip(style_arg.style.common.nickname_new_invalid)
            .empty()) {
     (void)profile->DefineStyle(
         "invalid_new_nickname",
-        style_arg.style.common.invalid_new_nickname);
+        style_arg.style.common.nickname_new_invalid);
   }
 
   // Register prompt shortcut styles (dynamic map keys).
@@ -100,33 +100,6 @@ void ApplyProfileInitData_(
       continue;
     }
     (void)profile->DefineStyle(key, value);
-  }
-
-  // Register named styles as stable aliases.
-  const auto &named = style_arg.style.cli_prompt.named_styles;
-  if (!AMStr::Strip(named.un).empty()) {
-    (void)profile->DefineStyle("un", named.un);
-  }
-  if (!AMStr::Strip(named.at).empty()) {
-    (void)profile->DefineStyle("at", named.at);
-  }
-  if (!AMStr::Strip(named.hn).empty()) {
-    (void)profile->DefineStyle("hn", named.hn);
-  }
-  if (!AMStr::Strip(named.en).empty()) {
-    (void)profile->DefineStyle("en", named.en);
-  }
-  if (!AMStr::Strip(named.nn).empty()) {
-    (void)profile->DefineStyle("nn", named.nn);
-  }
-  if (!AMStr::Strip(named.cwd).empty()) {
-    (void)profile->DefineStyle("cwd", named.cwd);
-  }
-  if (!AMStr::Strip(named.ds).empty()) {
-    (void)profile->DefineStyle("ds", named.ds);
-  }
-  if (!AMStr::Strip(named.white).empty()) {
-    (void)profile->DefineStyle("white", named.white);
   }
 
   const int max_history =

@@ -40,6 +40,7 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args) {
       [&args](CommandNode &node) {
         node.AddOption("password", args.config.decrypt.password, 1, 1,
                        "Encrypted password: enc:<HEX> or <HEX>", true);
+        node.AddPositionalRule(0, AMCommandArgSemantic::None, false);
       });
 }
 
@@ -278,7 +279,7 @@ void BindVarCommands(CommandNode *root, CliArgsPool &args) {
                         [&args](CommandNode &node) {
                           node.AddOption("varname", args.var.get.varname, 1, 1,
                                          "$varname", true);
-                          node.AddPositionalRule(0, Sem::None, false);
+                          node.AddPositionalRule(0, Sem::VariableName, false);
                         });
 
   var_node->AddFunction("def", "Define variable", args, &CliArgsPool::var,

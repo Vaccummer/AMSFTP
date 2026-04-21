@@ -34,10 +34,9 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
   const std::string prefix = ctx.token_prefix;
 
-  std::string command_path;
-  const CommandNode *node = nullptr;
-  size_t command_tokens = 0;
-  ParseCommandPath_(ctx, &command_path, &node, &command_tokens);
+  const std::string &command_path = ctx.command_path;
+  const CommandNode *node = ctx.command_node;
+  const size_t command_tokens = ctx.command_tokens;
 
   if (HasTarget(ctx, AMCompletionTarget::TopCommand)) {
     struct ItemInfo {
@@ -203,70 +202,6 @@ std::string AMCommandSearchEngine::FormatCommandDisplay_(
   const std::string tag = style_key == "module" ? module_tag : command_tag;
   const std::string escaped = EscapeBbcodeText(name);
   return tag.empty() ? escaped : tag + escaped + "[/]";
-}
-
-/**
- * @brief Parse command path from tokens before cursor.
- */
-void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
-                                              std::string *out_path,
-                                              const CommandNode **out_node,
-                                              size_t *out_consumed) const {
-  const CommandNode *command_tree = ctx.command_tree;
-  if (!command_tree) {
-    if (out_path) {
-      out_path->clear();
-    }
-    if (out_node) {
-      *out_node = nullptr;
-    }
-    if (out_consumed) {
-      *out_consumed = 0;
-    }
-    return;
-  }
-
-  std::string path;
-  const CommandNode *node = nullptr;
-  size_t consumed = 0;
-
-  for (size_t i = 0; i < ctx.tokens.size() && i < ctx.token_index; ++i) {
-    const auto &token = ctx.tokens[i];
-    if (token.quoted) {
-      break;
-    }
-
-    const std::string text = ExtractTokenText(ctx, i);
-    if (text.empty()) {
-      break;
-    }
-    if (path.empty()) {
-      if (command_tree->IsModule(text) || command_tree->IsTopCommand(text)) {
-        path = text;
-        node = command_tree->FindNode(path);
-        consumed = i + 1;
-        continue;
-      }
-      break;
-    }
-    if (node && node->subcommands.contains(text)) {
-      path += " " + text;
-      node = command_tree->FindNode(path);
-      consumed = i + 1;
-      continue;
-    }
-    break;
-  }
-
-  if (out_path) {
-    *out_path = path;
-  }
-  if (out_node) {
-    *out_node = node;
-  }
-  if (out_consumed) {
-    *out_consumed = consumed;
-  }
 }
 
 } // namespace AMInterface::searcher

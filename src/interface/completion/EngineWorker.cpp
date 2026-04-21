@@ -1,10 +1,8 @@
-#include "Isocline/isocline.h"
-#include "domain/var/VarDomainService.hpp"
-#include "interface/completion/CompletionRuntime.hpp"
 #include "interface/completion/Engine.hpp"
-#include "interface/parser/CommandTree.hpp"
-#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
-#include "interface/token_analyser/shared/InputTextRules.hpp"
+
+#include "domain/var/VarDomainService.hpp"
+#include "interface/input_analysis/rules/InputTextRules.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <iterator>
@@ -12,50 +10,31 @@
 #include <unordered_map>
 #include <unordered_set>
 
-using AMInterface::parser::AMCommandArgSemantic;
-using AMInterface::parser::CommandNode;
-using AMInterface::parser::TokenTypeAnalyzer;
-
 namespace AMInterface::completer {
 namespace {
 
-/**
- * @brief Unescape backtick-escaped sequences.
- */
+using AMInterface::input::AnalyzedToken;
+using AMInterface::input::InputAnalysis;
+using AMInterface::input::InputAnalyzer;
+using AMInterface::input::IInputSemanticRuntime;
+using AMInterface::input::rules::IsPathLikeText;
+using AMInterface::input::rules::UnescapeBackticks;
+using AMInterface::parser::AMCommandArgSemantic;
+using AMInterface::parser::CommandNode;
+
 std::string UnescapeBackticks_(const std::string &text) {
-  return AMInterface::parser::shared::UnescapeBackticks(text, false);
+  return UnescapeBackticks(text, false);
 }
 
-/**
- * @brief Return true if string begins with an unescaped '$'.
- */
-bool StartsWithUnescapedDollar_(const std::string &raw_prefix,
-                                const std::string &raw_token) {
-  const std::string &text = raw_prefix.empty() ? raw_token : raw_prefix;
-  if (text.size() >= 2 && text[0] == '`' && text[1] == '$') {
-    return false;
-  }
-  return !text.empty() && text[0] == '$';
-}
-
-/**
- * @brief Return true if string begins with "--".
- */
 bool StartsWithLongOption_(const std::string &text) {
   return text.size() >= 2 && text[0] == '-' && text[1] == '-';
 }
 
-/**
- * @brief Return true if string begins with "-" but not "--".
- */
 bool StartsWithShortOption_(const std::string &text) {
   return text.size() >= 1 && text[0] == '-' &&
          !(text.size() >= 2 && text[1] == '-');
 }
 
-/**
- * @brief Return true when text contains at least one whitespace character.
- */
 bool HasWhitespace_(const std::string &text) {
   for (const char c : text) {
     if (std::isspace(static_cast<unsigned char>(c))) {
@@ -65,11 +44,6 @@ bool HasWhitespace_(const std::string &text) {
   return false;
 }
 
-/**
- * @brief Escape one string for insertion inside double quotes.
- *
- * Use backtick escapes to match the CLI tokenizer behavior.
- */
 std::string EscapeForDoubleQuote_(const std::string &text) {
   std::string out;
   out.reserve(text.size());
@@ -82,23 +56,14 @@ std::string EscapeForDoubleQuote_(const std::string &text) {
   return out;
 }
 
-/**
- * @brief Return true when cursor token already starts with a quote delimiter.
- */
 bool InPureQuotedToken_(const AMCompletionContext &ctx) {
-  if (!ctx.has_token || ctx.token.start >= ctx.input.size()) {
+  if (!ctx.has_token || ctx.token.raw.start >= ctx.input.size()) {
     return false;
   }
-  const char c = ctx.input[ctx.token.start];
+  const char c = ctx.input[ctx.token.raw.start];
   return c == '"' || c == '\'';
 }
 
-/**
- * @brief Quote path insert text when it contains spaces.
- *
- * For `nickname@path` forms, only the path part is wrapped:
- * `nickname@"path with spaces"`.
- */
 std::string QuotePathInsertTextIfNeeded_(const std::string &insert_text) {
   if (insert_text.empty() || !HasWhitespace_(insert_text)) {
     return insert_text;
@@ -130,9 +95,6 @@ std::string QuotePathInsertTextIfNeeded_(const std::string &insert_text) {
   return wrap_path("", insert_text);
 }
 
-/**
- * @brief Resolve final insert text for one completion candidate.
- */
 std::string BuildCandidateInsertText_(const AMCompletionContext &ctx,
                                       const AMCompletionCandidate &candidate) {
   const bool is_path_candidate =
@@ -144,25 +106,22 @@ std::string BuildCandidateInsertText_(const AMCompletionContext &ctx,
   return QuotePathInsertTextIfNeeded_(candidate.insert_text);
 }
 
-/**
- * @brief Return true when completion context contains target.
- */
 bool ContextHasTarget_(const AMCompletionContext &ctx,
                        AMCompletionTarget target) {
   return std::find(ctx.targets.begin(), ctx.targets.end(), target) !=
          ctx.targets.end();
 }
 
-/**
- * @brief Return true when a raw token starts with escaped dollar syntax.
- */
 bool StartsWithEscapedDollar_(const std::string &raw_token) {
   return raw_token.size() >= 2 && raw_token[0] == '`' && raw_token[1] == '$';
 }
 
-/**
- * @brief Parse one shorthand variable token and normalize it as canonical form.
- */
+bool StartsWithUnescapedDollar_(const std::string &raw_prefix,
+                                const std::string &raw_token) {
+  const std::string &text = raw_prefix.empty() ? raw_token : raw_prefix;
+  return !StartsWithEscapedDollar_(text) && !text.empty() && text.front() == '$';
+}
+
 bool ParseShortcutVarToken_(const std::string &raw_token,
                             const std::string &token_text,
                             std::string *normalized_token) {
@@ -183,12 +142,6 @@ bool ParseShortcutVarToken_(const std::string &raw_token,
   return true;
 }
 
-/**
- * @brief Parse leading variable token prefix and return parsed ref/boundary.
- *
- * Accepts both complete and incomplete braced prefixes, for example:
- * `$name`, `$zone:name`, `${name`, `${zone:name`.
- */
 bool ParseLeadingVarRef_(const std::string &text, size_t *out_end,
                          AMDomain::var::VarRef *out_ref) {
   if (text.empty() || text.front() != '$') {
@@ -210,71 +163,33 @@ bool ParseLeadingVarRef_(const std::string &text, size_t *out_end,
   return true;
 }
 
-/**
- * @brief Resolve a raw token text by index from completion context.
- */
 std::string ExtractTokenRaw_(const AMCompletionContext &ctx, size_t index) {
   if (index >= ctx.tokens.size()) {
     return "";
   }
-  const auto &token = ctx.tokens[index];
+  const auto &token = ctx.tokens[index].raw;
   if (token.content_end <= token.content_start ||
       token.content_end > ctx.input.size()) {
     return "";
   }
-  return ctx.input.substr(token.content_start,
-                          token.content_end - token.content_start);
+  return ctx.input.substr(token.content_start, token.content_end - token.content_start);
 }
 
-/**
- * @brief Shortcut mode for `$var` / `$var=...` parsing.
- */
-enum class VarShortcutMode { None, Query, Define };
-
-/**
- * @brief Return true if text looks like path input.
- */
-bool IsPathLikeText_(const std::string &text) {
-  return AMInterface::parser::shared::IsPathLikeText(text, false);
-}
-
-/**
- * @brief Parsed command/argument state from tokens before cursor.
- */
-struct CommandState {
-  std::string module;
-  std::string cmd;
-  std::string command_path;
-  size_t command_tokens = 0;
-  size_t arg_index = 0;
-  std::optional<CommandNode::OptionValueRule> pending_value_rule;
-  size_t pending_value_index = 0;
-  bool has_module = false;
-  bool has_cmd = false;
-  bool unknown_before_command = false;
-  std::vector<std::string> options;
-  std::vector<std::string> args;
-};
-
-/**
- * @brief Resolve a token text by index from completion context.
- */
 std::string ExtractTokenText_(const AMCompletionContext &ctx, size_t index) {
   if (index >= ctx.tokens.size()) {
     return "";
   }
-  const auto &token = ctx.tokens[index];
+  const auto &token = ctx.tokens[index].raw;
   if (token.content_end <= token.content_start ||
       token.content_end > ctx.input.size()) {
     return "";
   }
-  return UnescapeBackticks_(ctx.input.substr(
-      token.content_start, token.content_end - token.content_start));
+  return UnescapeBackticks_(
+      ctx.input.substr(token.content_start, token.content_end - token.content_start));
 }
 
-/**
- * @brief Detect whether the input is a variable shorthand query/define form.
- */
+enum class VarShortcutMode { None, Query, Define };
+
 VarShortcutMode DetectVarShortcutMode_(const AMCompletionContext &ctx) {
   if (ctx.tokens.empty()) {
     return VarShortcutMode::None;
@@ -309,203 +224,6 @@ VarShortcutMode DetectVarShortcutMode_(const AMCompletionContext &ctx) {
   return VarShortcutMode::None;
 }
 
-/**
- * @brief Resolve command path and positional arg index from token context.
- */
-CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
-  CommandState state;
-  const CommandNode *command_tree = ctx.command_tree;
-  if (!command_tree) {
-    return state;
-  }
-  std::vector<std::string> before;
-  before.reserve(ctx.token_index);
-
-  for (size_t i = 0; i < ctx.tokens.size() && i < ctx.token_index; ++i) {
-    std::string text = ExtractTokenText_(ctx, i);
-    if (!text.empty()) {
-      before.push_back(std::move(text));
-    }
-  }
-
-  if (before.empty()) {
-    return state;
-  }
-
-  const CommandNode *node = nullptr;
-  for (size_t i = 0; i < before.size(); ++i) {
-    const std::string &text = before[i];
-    if (text.empty()) {
-      continue;
-    }
-    if (state.command_path.empty()) {
-      if (command_tree->IsModule(text)) {
-        state.module = text;
-        state.has_module = true;
-        state.command_path = text;
-        state.command_tokens = i + 1;
-        node = command_tree->FindNode(state.command_path);
-        continue;
-      }
-      if (command_tree->IsTopCommand(text)) {
-        state.cmd = text;
-        state.has_cmd = true;
-        state.command_path = text;
-        state.command_tokens = i + 1;
-        node = command_tree->FindNode(state.command_path);
-        continue;
-      }
-      state.unknown_before_command = true;
-      return state;
-    }
-
-    if (node && node->subcommands.contains(text)) {
-      state.command_path += " " + text;
-      state.cmd = state.command_path;
-      state.has_cmd = true;
-      state.command_tokens = i + 1;
-      node = command_tree->FindNode(state.command_path);
-      continue;
-    }
-
-    if (state.has_module && !state.has_cmd) {
-      state.unknown_before_command = true;
-      return state;
-    }
-    break;
-  }
-
-  if (!state.has_cmd) {
-    return state;
-  }
-
-  auto consume_option_value = [&]() {
-    if (!state.pending_value_rule.has_value()) {
-      return false;
-    }
-    ++state.pending_value_index;
-    if (!state.pending_value_rule->repeat_tail &&
-        state.pending_value_index >= state.pending_value_rule->value_count) {
-      state.pending_value_rule.reset();
-      state.pending_value_index = 0;
-    }
-    return true;
-  };
-
-  auto set_pending_option_value = [&](const CommandNode::OptionValueRule &rule,
-                                      size_t consumed) {
-    if (!rule.repeat_tail && consumed >= rule.value_count) {
-      state.pending_value_rule.reset();
-      state.pending_value_index = 0;
-      return;
-    }
-    state.pending_value_rule = rule;
-    state.pending_value_index = consumed;
-  };
-
-  for (size_t i = state.command_tokens; i < before.size(); ++i) {
-    const std::string &token = before[i];
-    if (consume_option_value()) {
-      state.args.push_back(token);
-      continue;
-    }
-
-    if (token == "--") {
-      state.args.push_back(token);
-      ++state.arg_index;
-      continue;
-    }
-
-    if (StartsWithLongOption_(token)) {
-      const size_t eq_pos = token.find('=');
-      const std::string option_name =
-          eq_pos == std::string::npos ? token : token.substr(0, eq_pos);
-      const bool option_exists =
-          node && node->long_options.contains(option_name);
-      if (!option_exists) {
-        state.args.push_back(token);
-        ++state.arg_index;
-        continue;
-      }
-      const auto value_rule = command_tree->ResolveOptionValueRule(
-          state.command_path, option_name, '\0', 0);
-      if (eq_pos != std::string::npos) {
-        if (!value_rule.has_value()) {
-          state.args.push_back(token);
-          ++state.arg_index;
-          continue;
-        }
-        state.options.push_back(option_name);
-        continue;
-      }
-
-      state.options.push_back(option_name);
-      if (value_rule.has_value()) {
-        set_pending_option_value(*value_rule, 0);
-        continue;
-      }
-      continue;
-    }
-
-    if (StartsWithShortOption_(token)) {
-      const std::string body = token.substr(1);
-      if (body.empty()) {
-        state.args.push_back(token);
-        ++state.arg_index;
-        continue;
-      }
-
-      bool all_known = true;
-      bool any_value_rule = false;
-      for (char c : body) {
-        if (!node || !node->short_options.contains(c)) {
-          all_known = false;
-          break;
-        }
-        const auto rule =
-            command_tree->ResolveOptionValueRule(state.command_path, "", c, 0);
-        if (rule.has_value()) {
-          any_value_rule = true;
-        }
-      }
-
-      if (!all_known) {
-        state.args.push_back(token);
-        ++state.arg_index;
-        continue;
-      }
-
-      if (body.size() == 1) {
-        const auto rule = command_tree->ResolveOptionValueRule(
-            state.command_path, "", body[0], 0);
-        state.options.push_back(std::string("-") + body[0]);
-        if (rule.has_value()) {
-          set_pending_option_value(*rule, 0);
-        }
-        continue;
-      }
-
-      if (!any_value_rule) {
-        for (char c : body) {
-          state.options.push_back(std::string("-") + c);
-        }
-        continue;
-      }
-
-      state.args.push_back(token);
-      ++state.arg_index;
-      continue;
-    }
-
-    state.args.push_back(token);
-    ++state.arg_index;
-  }
-  return state;
-}
-
-/**
- * @brief Map command argument semantic to completion target.
- */
 std::optional<AMCompletionTarget>
 MapSemanticToTarget_(AMCommandArgSemantic semantic) {
   switch (semantic) {
@@ -535,6 +253,8 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
     return AMCompletionTarget::PoolName;
   case AMCommandArgSemantic::TaskId:
     return AMCompletionTarget::TaskId;
+  case AMCommandArgSemantic::PausedTaskId:
+    return AMCompletionTarget::PausedTaskId;
   case AMCommandArgSemantic::VariableName:
     return AMCompletionTarget::VariableName;
   case AMCommandArgSemantic::VarZone:
@@ -547,21 +267,18 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
 
 } // namespace
 
-/**
- * @brief Find the token that owns the cursor.
- */
 bool AMCompleteEngine::FindTokenAtCursor_(
-    const std::vector<TokenTypeAnalyzer::AMToken> &tokens, size_t cursor,
-    TokenTypeAnalyzer::AMToken *out, size_t *out_index) const {
+    const std::vector<AnalyzedToken> &tokens, size_t cursor, AnalyzedToken *out,
+    size_t *out_index) const {
   for (size_t i = 0; i < tokens.size(); ++i) {
-    const auto &tok = tokens[i];
+    const auto &tok = tokens[i].raw;
     const size_t begin = tok.quoted ? tok.content_start : tok.start;
     const size_t end = tok.quoted ? tok.content_end : tok.end;
     const bool in_token_body = cursor > begin && cursor < end;
     const bool at_token_end = cursor == end;
     if (in_token_body || at_token_end) {
       if (out) {
-        *out = tok;
+        *out = tokens[i];
       }
       if (out_index) {
         *out_index = i;
@@ -572,40 +289,42 @@ bool AMCompleteEngine::FindTokenAtCursor_(
   return false;
 }
 
-/**
- * @brief Build the completion context for the current input.
- */
 AMCompletionContext
 AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
-  AMCompletionContext ctx;
-  const CommandNode *command_tree = command_tree_;
+  AMCompletionContext ctx = {};
   ctx.input = request.input;
   ctx.cursor = request.cursor;
   ctx.request_id = request.request_id;
   ctx.mode = request.mode;
-  ctx.command_tree = command_tree;
+  ctx.command_tree = command_tree_;
   ctx.completion_args = &args_;
+  ctx.style_service = style_service_;
 
-  std::string trimmed = AMStr::Strip(request.input);
+  const std::string trimmed = AMStr::Strip(request.input);
   if (!trimmed.empty() && trimmed.front() == '!') {
     ctx.targets = {AMCompletionTarget::Disabled};
     return ctx;
   }
-  if (!token_type_analyzer_) {
+  if (!input_analyzer_) {
     ctx.targets = {AMCompletionTarget::Disabled};
     return ctx;
   }
 
-  const std::vector<TokenTypeAnalyzer::AMToken> all_tokens =
-      token_type_analyzer_->SplitToken(request.input);
-  TokenTypeAnalyzer::AMToken token;
+  ctx.analysis = input_analyzer_->Analyze(request.input);
+  InputAnalysis prefix_analysis = {};
+  if (request.cursor <= request.input.size()) {
+    prefix_analysis = input_analyzer_->Analyze(request.input.substr(0, request.cursor));
+  }
+
+  const auto &all_tokens = ctx.analysis.tokens;
+  AnalyzedToken token = {};
   size_t token_index = all_tokens.size();
   const bool has_token =
       FindTokenAtCursor_(all_tokens, request.cursor, &token, &token_index);
   if (!has_token) {
     token_index = all_tokens.size();
     for (size_t i = 0; i < all_tokens.size(); ++i) {
-      const auto &tok = all_tokens[i];
+      const auto &tok = all_tokens[i].raw;
       const size_t begin = tok.quoted ? tok.content_start : tok.start;
       if (request.cursor <= begin) {
         token_index = i;
@@ -613,53 +332,59 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       }
     }
   }
-  const size_t keep_count = has_token
-                                ? std::min(all_tokens.size(), token_index + 1)
-                                : std::min(all_tokens.size(), token_index);
+
+  const size_t keep_count =
+      has_token ? std::min(all_tokens.size(), token_index + 1)
+                : std::min(all_tokens.size(), token_index);
   ctx.tokens.assign(all_tokens.begin(), all_tokens.begin() + keep_count);
 
   ctx.has_token = has_token;
   ctx.cursor_in_token = has_token;
   if (!has_token) {
-    token.start = request.cursor;
-    token.end = request.cursor;
-    token.content_start = request.cursor;
-    token.content_end = request.cursor;
-    token.quoted = false;
-    token.type = AMTokenType::Unset;
+    token.raw.start = request.cursor;
+    token.raw.end = request.cursor;
+    token.raw.content_start = request.cursor;
+    token.raw.content_end = request.cursor;
+    token.raw.quoted = false;
   }
   ctx.token = token;
   ctx.token_index = token_index;
-  ctx.token_quoted = token.quoted;
+  ctx.token_quoted = token.raw.quoted;
 
-  if (token.content_end >= token.content_start &&
-      token.content_end <= request.input.size() &&
-      token.content_start <= request.input.size()) {
+  if (token.raw.content_end >= token.raw.content_start &&
+      token.raw.content_end <= request.input.size() &&
+      token.raw.content_start <= request.input.size()) {
     ctx.token_raw = request.input.substr(
-        token.content_start, token.content_end - token.content_start);
+        token.raw.content_start, token.raw.content_end - token.raw.content_start);
   }
-  if (request.cursor >= token.content_start &&
-      request.cursor <= token.content_end &&
-      token.content_start <= request.input.size()) {
+  if (request.cursor >= token.raw.content_start &&
+      request.cursor <= token.raw.content_end &&
+      token.raw.content_start <= request.input.size()) {
     ctx.token_prefix_raw = request.input.substr(
-        token.content_start, request.cursor - token.content_start);
+        token.raw.content_start, request.cursor - token.raw.content_start);
     ctx.token_postfix_raw = request.input.substr(
-        request.cursor, token.content_end - request.cursor);
+        request.cursor, token.raw.content_end - request.cursor);
   }
   ctx.token_text = UnescapeBackticks_(ctx.token_raw);
   ctx.token_prefix = UnescapeBackticks_(ctx.token_prefix_raw);
   ctx.token_postfix = UnescapeBackticks_(ctx.token_postfix_raw);
 
+  ctx.module = prefix_analysis.command.module;
+  ctx.command_path = prefix_analysis.command.command_path;
+  ctx.command_node = prefix_analysis.command.node;
+  ctx.command_tokens = prefix_analysis.command.command_tokens;
+  ctx.cmd = prefix_analysis.command.command_path;
+  ctx.options = prefix_analysis.command.options;
+  ctx.args = prefix_analysis.command.args;
+
   const VarShortcutMode shortcut_mode = DetectVarShortcutMode_(ctx);
-  const bool starts_with_unescaped_dollar =
-      StartsWithUnescapedDollar_(ctx.token_prefix_raw, ctx.token_raw);
-  if (starts_with_unescaped_dollar) {
+  if (StartsWithUnescapedDollar_(ctx.token_prefix_raw, ctx.token_raw)) {
     if (shortcut_mode == VarShortcutMode::Define) {
       const size_t eq = ctx.token_prefix.find('=');
       if (eq != std::string::npos && eq + 1 <= ctx.token_prefix.size()) {
         const std::string rhs_prefix = ctx.token_prefix.substr(eq + 1);
         const bool rhs_has_at = rhs_prefix.find('@') != std::string::npos;
-        if (rhs_has_at || IsPathLikeText_(rhs_prefix)) {
+        if (rhs_has_at || IsPathLikeText(rhs_prefix, false)) {
           ctx.targets = {AMCompletionTarget::Path};
         } else {
           ctx.targets = {AMCompletionTarget::Disabled};
@@ -671,20 +396,14 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
         ctx.token_prefix.find(':') != std::string::npos;
     const bool postfix_has_colon =
         ctx.token_postfix.find(':') != std::string::npos;
-
-    // Rule:
-    // - if prefix has ':' OR postfix has no ':' -> complete varname
-    // - else -> complete zone name
     if (!prefix_has_colon && postfix_has_colon) {
       ctx.targets = {AMCompletionTarget::VarZone};
       return ctx;
     }
-
     if (ctx.token_prefix == "$" || ctx.token_prefix == "${") {
       ctx.targets = {AMCompletionTarget::VariableName};
       return ctx;
     }
-
     size_t var_end = 0;
     if (ParseLeadingVarRef_(ctx.token_prefix, &var_end, nullptr) &&
         var_end == ctx.token_prefix.size()) {
@@ -699,7 +418,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   }
   if (shortcut_mode == VarShortcutMode::Define) {
     const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
-    if (has_at || IsPathLikeText_(ctx.token_prefix)) {
+    if (has_at || IsPathLikeText(ctx.token_prefix, false)) {
       ctx.targets = {AMCompletionTarget::Path};
     } else {
       ctx.targets = {AMCompletionTarget::Disabled};
@@ -707,67 +426,42 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     return ctx;
   }
 
-  CommandState state = ResolveCommandState_(ctx);
-  const std::string current_prefix = ctx.has_token ? ctx.token_prefix : "";
-  if (command_tree && !current_prefix.empty() &&
-      ctx.token_index == state.command_tokens) {
-    if (!state.has_module && !state.has_cmd) {
-      if (command_tree->IsModule(current_prefix)) {
-        state.module = current_prefix;
-        state.has_module = true;
-        state.command_path = current_prefix;
-        state.command_tokens = ctx.token_index + 1;
-      } else if (command_tree->IsTopCommand(current_prefix)) {
-        state.cmd = current_prefix;
-        state.has_cmd = true;
-        state.command_path = current_prefix;
-        state.command_tokens = ctx.token_index + 1;
-      }
-    } else if (state.has_module && !state.has_cmd) {
-      const auto *node = command_tree->FindNode(state.command_path);
-      if (node && node->subcommands.contains(current_prefix)) {
-        state.command_path += " " + current_prefix;
-        state.cmd = state.command_path;
-        state.has_cmd = true;
-        state.command_tokens = ctx.token_index + 1;
-      }
-    }
-  }
-  ctx.module = state.module;
-  ctx.cmd = state.cmd;
-  ctx.options = state.options;
-  ctx.args = state.args;
-
-  if (state.unknown_before_command) {
+  const bool completing_unknown_root_token =
+      prefix_analysis.command.unknown_before_command && ctx.has_token &&
+      ctx.token_index == 0 && prefix_analysis.command.command_tokens == 0;
+  if (prefix_analysis.command.unknown_before_command &&
+      !completing_unknown_root_token) {
     ctx.targets = {AMCompletionTarget::Disabled};
     return ctx;
   }
-  if (!state.has_module && !state.has_cmd) {
+  if (!prefix_analysis.command.has_module && !prefix_analysis.command.has_command) {
     const bool prefix_starts_with_path_sign =
         !ctx.token_prefix.empty() &&
         (ctx.token_prefix.front() == '@' || ctx.token_prefix.front() == '~' ||
          ctx.token_prefix.front() == '/' || ctx.token_prefix.front() == '\\' ||
          ctx.token_prefix.front() == '.');
     const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
-    const bool prefix_has_path_sign = prefix_starts_with_path_sign || has_at ||
-                                      IsPathLikeText_(ctx.token_prefix);
+    const bool prefix_has_path_sign =
+        prefix_starts_with_path_sign || has_at || IsPathLikeText(ctx.token_prefix, false);
     if (prefix_has_path_sign) {
       ctx.targets = {AMCompletionTarget::Path};
-      return ctx;
+    } else {
+      ctx.targets = {AMCompletionTarget::TopCommand};
     }
-    ctx.targets = {AMCompletionTarget::TopCommand};
     return ctx;
   }
-  if (state.has_module && !state.has_cmd) {
-    ctx.targets = {AMCompletionTarget::Subcommand};
+  if (prefix_analysis.command.has_module && !prefix_analysis.command.has_command) {
+    ctx.targets = {AMCompletionTarget::Subcommand,
+                   AMCompletionTarget::LongOption,
+                   AMCompletionTarget::ShortOption};
     return ctx;
   }
-  if (!command_tree) {
+  if (!command_tree_) {
     ctx.targets = {AMCompletionTarget::Disabled};
     return ctx;
   }
 
-  const auto *cmd_node = command_tree->FindNode(state.command_path);
+  const auto *cmd_node = prefix_analysis.command.node;
   const bool cursor_is_bare_dashdash =
       ctx.has_token && ctx.token_prefix == "--";
   const bool cursor_is_long_option_prefix =
@@ -778,10 +472,10 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
 
   bool cursor_valid_long_option = false;
   bool cursor_long_has_inline_value = false;
-  std::string cursor_long_name;
-  std::optional<CommandNode::OptionValueRule> cursor_long_value_rule;
+  std::string cursor_long_name = {};
+  std::optional<CommandNode::OptionValueRule> cursor_long_value_rule =
+      std::nullopt;
   bool cursor_valid_short_option = false;
-  bool cursor_short_bundle = false;
   char cursor_short_name = '\0';
 
   if (cursor_is_long_option_prefix) {
@@ -793,8 +487,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     cursor_valid_long_option =
         cmd_node && cmd_node->long_options.contains(cursor_long_name);
     if (cursor_valid_long_option) {
-      cursor_long_value_rule = command_tree->ResolveOptionValueRule(
-          state.command_path, cursor_long_name, '\0', 0);
+      cursor_long_value_rule = command_tree_->ResolveOptionValueRule(
+          prefix_analysis.command.command_path, cursor_long_name, '\0', 0);
       if (cursor_long_has_inline_value && !cursor_long_value_rule.has_value()) {
         cursor_valid_long_option = false;
       }
@@ -817,49 +511,30 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
           all_known = false;
           break;
         }
-        const auto rule =
-            command_tree->ResolveOptionValueRule(state.command_path, "", c, 0);
+        const auto rule = command_tree_->ResolveOptionValueRule(
+            prefix_analysis.command.command_path, "", c, 0);
         if (rule.has_value()) {
           any_value_rule = true;
         }
       }
       if (all_known && !any_value_rule) {
         cursor_valid_short_option = true;
-        cursor_short_bundle = true;
       }
     }
   }
 
-  const bool cursor_as_option =
-      (cursor_is_long_option_prefix && cursor_valid_long_option) ||
-      (cursor_is_short_option_prefix && cursor_valid_short_option);
-  if (ctx.has_token && !ctx.token_prefix.empty() &&
-      ctx.token_index >= state.command_tokens) {
-    if (cursor_as_option) {
-      if (cursor_is_long_option_prefix) {
-        ctx.options.push_back(cursor_long_name);
-      } else if (!cursor_short_bundle) {
-        ctx.options.push_back(std::string("-") + cursor_short_name);
-      } else {
-        for (char c : ctx.token_prefix.substr(1)) {
-          ctx.options.push_back(std::string("-") + c);
-        }
-      }
-    } else {
-      ctx.args.push_back(ctx.token_prefix);
-    }
+  std::optional<AMCommandArgSemantic> semantic = std::nullopt;
+  if (!prefix_analysis.tokens.empty() && ctx.has_token &&
+      ctx.token_index < prefix_analysis.tokens.size()) {
+    semantic = prefix_analysis.tokens.back().semantic_hint;
   }
-
-  std::optional<AMCommandArgSemantic> semantic;
-  if (state.pending_value_rule.has_value()) {
-    semantic = state.pending_value_rule->semantic;
+  if (!semantic.has_value() && prefix_analysis.command.pending_value_rule.has_value()) {
+    semantic = prefix_analysis.command.pending_value_rule->semantic;
   }
   if (!semantic.has_value() && cursor_is_long_option_prefix &&
       cursor_valid_long_option) {
-    if (cursor_long_has_inline_value) {
-      if (cursor_long_value_rule.has_value()) {
-        semantic = cursor_long_value_rule->semantic;
-      }
+    if (cursor_long_has_inline_value && cursor_long_value_rule.has_value()) {
+      semantic = cursor_long_value_rule->semantic;
     } else {
       ctx.targets = {AMCompletionTarget::LongOption};
       return ctx;
@@ -870,9 +545,9 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     ctx.targets = {AMCompletionTarget::ShortOption};
     return ctx;
   }
-  if (!semantic.has_value() && !state.command_path.empty()) {
-    semantic = command_tree->ResolvePositionalSemantic(state.command_path,
-                                                       state.arg_index);
+  if (!semantic.has_value() && !prefix_analysis.command.command_path.empty()) {
+    semantic = command_tree_->ResolvePositionalSemantic(
+        prefix_analysis.command.command_path, prefix_analysis.command.next_arg_index);
   }
 
   const auto semantic_target =
@@ -900,10 +575,10 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
        *semantic_target == AMCompletionTarget::ChannelTargetExisting ||
        *semantic_target == AMCompletionTarget::ChannelTargetNew ||
        *semantic_target == AMCompletionTarget::SshChannelTarget);
-  const bool semantic_path = semantic_target.has_value() &&
-                             *semantic_target == AMCompletionTarget::Path;
-  const bool prefix_has_path_sign = prefix_starts_with_path_sign || has_at ||
-                                    IsPathLikeText_(ctx.token_prefix);
+  const bool semantic_path =
+      semantic_target.has_value() && *semantic_target == AMCompletionTarget::Path;
+  const bool prefix_has_path_sign =
+      prefix_starts_with_path_sign || has_at || IsPathLikeText(ctx.token_prefix, false);
   if (semantic_path) {
     if (ctx.token_prefix.empty()) {
       push_target(AMCompletionTarget::ClientName);
@@ -915,7 +590,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       push_target(AMCompletionTarget::Path);
     }
   } else if (!semantic_terminal_channel &&
-             (has_at || IsPathLikeText_(ctx.token_prefix))) {
+             (has_at || IsPathLikeText(ctx.token_prefix, false))) {
     push_target(AMCompletionTarget::Path);
   }
 
@@ -1094,9 +769,6 @@ void AMCompleteEngine::FinalizeCandidates_(const AMCompletionContext &ctx,
   }
 }
 
-/**
- * @brief Dispatch completion requests to registered search engines.
- */
 void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
                                            AMCompletionCandidates &out) {
   if (ctx.targets.empty()) {
@@ -1194,9 +866,6 @@ void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
   }
 }
 
-/**
- * @brief Emit candidates to isocline with delete ranges.
- */
 void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
                                        const AMCompletionContext &ctx,
                                        const AMCompletionCandidates &items) {
@@ -1208,10 +877,10 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
 
   long delete_before = 0;
   long delete_after = 0;
-  if (ctx.has_token && ctx.cursor >= ctx.token.content_start &&
-      ctx.cursor <= ctx.token.content_end) {
-    delete_before = static_cast<long>(ctx.cursor - ctx.token.content_start);
-    delete_after = static_cast<long>(ctx.token.content_end - ctx.cursor);
+  if (ctx.has_token && ctx.cursor >= ctx.token.raw.content_start &&
+      ctx.cursor <= ctx.token.raw.content_end) {
+    delete_before = static_cast<long>(ctx.cursor - ctx.token.raw.content_start);
+    delete_after = static_cast<long>(ctx.token.raw.content_end - ctx.cursor);
   }
 
   for (const auto &candidate : items.items) {
