@@ -22,8 +22,8 @@ enum class LoggerType {
 struct LogManagerArg {
   int client_trace_level = 4;
   int program_trace_level = 4;
-  std::string client_log_path = "config/log/Client.log";
-  std::string program_log_path = "config/log/Program.log";
+  std::string client_log_path = "log/Client.log";
+  std::string program_log_path = "log/Program.log";
 };
 
 } // namespace AMDomain::log

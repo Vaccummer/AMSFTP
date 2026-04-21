@@ -22,7 +22,6 @@ enum class OS_TYPE {
  * @brief Canonical trace severity model shared by client/log domains.
  */
 enum class TraceLevel {
-  Runtime = -1,
   Critical = 0,
   Error = 1,
   Warning = 2,

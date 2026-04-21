@@ -41,7 +41,6 @@ inline bool operator!=(const ConfigBackupSet &lhs, const ConfigBackupSet &rhs) {
 struct ConfigDocumentSpec {
   DocumentKind kind = DocumentKind::Config;
   std::filesystem::path data_path = {};
-  const char *schema_json = "{}";
 };
 
 using ConfigStoreLayout = std::unordered_map<DocumentKind, ConfigDocumentSpec>;
