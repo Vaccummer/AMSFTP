@@ -4,10 +4,161 @@
 #include "foundation/tools/terminal.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <vector>
 
 namespace AMPromptUI {
+
+namespace detail {
+
+inline bool IsTagWhitespace(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+inline bool IsAsciiAlphaNum(char ch) {
+  const unsigned char uch = static_cast<unsigned char>(ch);
+  return std::isalnum(uch) != 0;
+}
+
+inline bool IsTagIdentChar(char ch) {
+  return IsAsciiAlphaNum(ch) || ch == '_' || ch == '-';
+}
+
+inline bool IsTagHexChar(char ch) { return IsAsciiAlphaNum(ch); }
+
+inline size_t SkipTagWhitespace(std::string_view text, size_t pos, size_t end) {
+  while (pos < end && IsTagWhitespace(text[pos])) {
+    ++pos;
+  }
+  return pos;
+}
+
+inline bool ParseTagAttrName(std::string_view text, size_t *pos, size_t end) {
+  if (!pos || *pos >= end) {
+    return false;
+  }
+  size_t cur = *pos;
+  if (text[cur] == '#') {
+    ++cur;
+    const size_t start = cur;
+    while (cur < end && IsTagHexChar(text[cur])) {
+      ++cur;
+    }
+    if (cur == start) {
+      return false;
+    }
+    *pos = cur;
+    return true;
+  }
+
+  const size_t start = cur;
+  while (cur < end && IsTagIdentChar(text[cur])) {
+    ++cur;
+  }
+  if (cur == start) {
+    return false;
+  }
+  *pos = cur;
+  return true;
+}
+
+inline bool ParseTagValue(std::string_view text, size_t *pos, size_t end) {
+  if (!pos || *pos >= end) {
+    return false;
+  }
+  size_t cur = *pos;
+  if (text[cur] == '"') {
+    ++cur;
+    while (cur < end && text[cur] != '"') {
+      ++cur;
+    }
+    if (cur >= end || text[cur] != '"') {
+      return false;
+    }
+    *pos = cur + 1;
+    return true;
+  }
+
+  if (text[cur] == '#') {
+    ++cur;
+    const size_t start = cur;
+    while (cur < end && IsTagHexChar(text[cur])) {
+      ++cur;
+    }
+    if (cur == start) {
+      return false;
+    }
+    *pos = cur;
+    return true;
+  }
+
+  const size_t start = cur;
+  while (cur < end && IsTagIdentChar(text[cur])) {
+    ++cur;
+  }
+  if (cur == start) {
+    return false;
+  }
+  *pos = cur;
+  return true;
+}
+
+inline bool IsLegalBBCodeTagToken(std::string_view text) {
+  size_t pos = 0;
+  const size_t end = text.size();
+  pos = SkipTagWhitespace(text, pos, end);
+  if (pos >= end) {
+    return false;
+  }
+
+  if (text[pos] == '!') {
+    ++pos;
+    pos = SkipTagWhitespace(text, pos, end);
+  } else if (text[pos] == '/') {
+    ++pos;
+    pos = SkipTagWhitespace(text, pos, end);
+    return pos >= end || IsLegalBBCodeTagToken(text.substr(pos));
+  }
+
+  if (pos >= end) {
+    return false;
+  }
+
+  bool has_any = false;
+  while (pos < end) {
+    const size_t token_start = pos;
+    if (!ParseTagAttrName(text, &pos, end)) {
+      return false;
+    }
+    const size_t token_end = pos;
+    has_any = true;
+
+    pos = SkipTagWhitespace(text, pos, end);
+    if (pos < end && (token_end - token_start) == 2 &&
+        text.compare(token_start, 2, "on") == 0 &&
+        (pos >= end || text[pos] != '=')) {
+      if (!ParseTagAttrName(text, &pos, end)) {
+        return false;
+      }
+      pos = SkipTagWhitespace(text, pos, end);
+    }
+
+    if (pos < end && text[pos] == '=') {
+      ++pos;
+      pos = SkipTagWhitespace(text, pos, end);
+      if (!ParseTagValue(text, &pos, end)) {
+        return false;
+      }
+      pos = SkipTagWhitespace(text, pos, end);
+    }
+
+    pos = SkipTagWhitespace(text, pos, end);
+  }
+  return has_any;
+}
+
+} // namespace detail
 
 inline std::string EnsureTrailingNewline(const std::string &text) {
   if (!text.empty() && text.back() == '\n') {
@@ -34,13 +185,6 @@ inline void AppendClearRows(std::string *frame, int rows) {
 }
 
 inline std::string StripStyleForMeasure(const std::string &text) {
-  auto is_style_tag = [](const std::string &tag) {
-    if (tag.empty()) {
-      return false;
-    }
-    return tag.front() == '#' || tag.front() == '/' || tag.front() == '!';
-  };
-
   std::string out = {};
   out.reserve(text.size());
   for (size_t i = 0; i < text.size(); ++i) {
@@ -54,8 +198,8 @@ inline std::string StripStyleForMeasure(const std::string &text) {
     if (ch == '[') {
       const size_t close = text.find(']', i + 1);
       if (close != std::string::npos) {
-        const std::string token = text.substr(i + 1, close - i - 1);
-        if (is_style_tag(token)) {
+        const std::string_view token(text.data() + i + 1, close - i - 1);
+        if (detail::IsLegalBBCodeTagToken(token)) {
           i = close;
           continue;
         }
