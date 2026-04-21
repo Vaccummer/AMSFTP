@@ -1,5 +1,6 @@
 #pragma once
 #include "foundation/core/DataClass.hpp"
+#include "interface/input_analysis/InputAnalyzer.hpp"
 #include <string>
 #include <vector>
 
@@ -8,8 +9,6 @@ class VarInterfaceService;
 }
 
 namespace AMInterface::parser {
-
-class TokenTypeAnalyzer;
 
 struct ResolvedCharMeta {
   bool escaped = false;
@@ -25,9 +24,9 @@ class AMInputPreprocess : public NonCopyableNonMovable {
 public:
   AMInputPreprocess(
       AMInterface::var::VarInterfaceService &var_interface_service,
-      TokenTypeAnalyzer &token_type_analyzer)
+      AMInterface::input::InputAnalyzer &input_analyzer)
       : var_interface_service_(var_interface_service),
-        token_type_analyzer_(token_type_analyzer) {}
+        input_analyzer_(input_analyzer) {}
   ~AMInputPreprocess() override = default;
 
   /**
@@ -50,7 +49,8 @@ public:
    * 1) `!cmd` shell shorthand -> `{"cmd", "<cmd>"}`
    * 2) var-define shorthand (`$x=...`, `${:x}=...`, `${zone:x}=...`) ->
    *    `{"var", "def", "<lhs>", "<value>"}`
-   * 3) fallback tokenization via SplitCliTokens.
+   * 3) fallback tokenization + `$` shortcut rewrite (`$x`, `$`, `${zone:}`)
+   *    into canonical `var` commands.
    */
   [[nodiscard]] ECMData<std::vector<std::string>>
   Preprocess(const std::string &input) const;
@@ -72,7 +72,7 @@ public:
 
 private:
   AMInterface::var::VarInterfaceService &var_interface_service_;
-  TokenTypeAnalyzer &token_type_analyzer_;
+  AMInterface::input::InputAnalyzer &input_analyzer_;
 };
 
 } // namespace AMInterface::parser

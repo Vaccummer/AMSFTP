@@ -92,6 +92,13 @@ VarInterfaceService::VarInterfaceService(VarAppService &var_service,
     : var_service_(var_service), client_service_(client_service),
       prompt_io_manager_(prompt_io_manager) {}
 
+ECM VarInterfaceService::ReportError_(ECM rcm) const {
+  if (rcm.code != EC::Success) {
+    prompt_io_manager_.ErrorFormat(rcm);
+  }
+  return rcm;
+}
+
 ECMData<ParsedVarToken>
 VarInterfaceService::ParseVarTokenExpression(const std::string &expr) const {
   const std::string trimmed = AMStr::Strip(expr);
@@ -123,6 +130,8 @@ VarInterfaceService::ResolveLookupToken(const std::string &token_expr) const {
   if (!(parsed.rcm)) {
     return {{}, parsed.rcm};
   }
+  const std::string canonical_token =
+      AMDomain::var::BuildVarToken(parsed.data);
 
   if (parsed.data.explicit_domain) {
     const auto all_vars = var_service_.GetAllVar();
@@ -132,17 +141,32 @@ VarInterfaceService::ResolveLookupToken(const std::string &token_expr) const {
     const auto zone_it = all_vars.data.find(parsed.data.domain);
     if (zone_it == all_vars.data.end()) {
       return {{},
-              Err(EC::InvalidArg, "", "", "target variable zone not found")};
+              Err(EC::InvalidArg, "", "",
+                  AMStr::fmt("variable not found: {}", canonical_token))};
     }
     const auto var_it = zone_it->second.find(parsed.data.varname);
     if (var_it == zone_it->second.end()) {
       return {{},
-              Err(EC::InvalidArg, "", "", "variable not found in target zone")};
+              Err(EC::InvalidArg, "", "",
+                  AMStr::fmt("variable not found: {}", canonical_token))};
     }
     return {var_it->second, OK};
   }
 
-  return var_service_.GetVar(ResolveCurrentDomain_(), parsed.data.varname);
+  auto current_var =
+      var_service_.GetVar(ResolveCurrentDomain_(), parsed.data.varname);
+  if ((current_var.rcm)) {
+    return current_var;
+  }
+
+  auto public_var =
+      var_service_.GetVar(AMDomain::var::kPublic, parsed.data.varname);
+  if ((public_var.rcm)) {
+    return public_var;
+  }
+
+  return {{}, Err(EC::InvalidArg, "", "",
+                  AMStr::fmt("variable not found: {}", canonical_token))};
 }
 
 ECMData<VarInfo>
@@ -171,7 +195,7 @@ VarInterfaceService::ResolveDefineTarget(bool global,
 ECM VarInterfaceService::QueryAndPrintVar(const std::string &token_expr) const {
   auto info = ResolveLookupToken(token_expr);
   if (!(info.rcm)) {
-    return info.rcm;
+    return ReportError_(info.rcm);
   }
   prompt_io_manager_.FmtPrint("[{}] ${} = {}", info.data.domain,
                               info.data.varname, info.data.varvalue);
@@ -182,17 +206,17 @@ ECM VarInterfaceService::DefineVar(bool global, const std::string &token_expr,
                                    const std::string &value) const {
   auto target = ResolveDefineTarget(global, token_expr);
   if (!(target.rcm)) {
-    return target.rcm;
+    return ReportError_(target.rcm);
   }
   target.data.varvalue = value;
-  return var_service_.AddVar(target.data);
+  return ReportError_(var_service_.AddVar(target.data));
 }
 
 ECM VarInterfaceService::DeleteVar(
     bool all, const std::vector<std::string> &tokens) const {
   if (tokens.empty() || tokens.size() > 2) {
-    return Err(EC::InvalidArg, "", "",
-               "var del requires one var token or [zone token]");
+    return ReportError_(Err(EC::InvalidArg, "", "",
+                            "var del requires one var token or [zone token]"));
   }
 
   std::string zone_override = {};
@@ -204,13 +228,13 @@ ECM VarInterfaceService::DeleteVar(
 
   auto parsed = ParseVarTokenExpression(token_expr);
   if (!(parsed.rcm)) {
-    return parsed.rcm;
+    return ReportError_(parsed.rcm);
   }
 
   if (all) {
     auto all_vars = var_service_.GetAllVar();
     if (!(all_vars.rcm)) {
-      return all_vars.rcm;
+      return ReportError_(all_vars.rcm);
     }
     ECM last = OK;
     bool removed_any = false;
@@ -226,9 +250,9 @@ ECM VarInterfaceService::DeleteVar(
       removed_any = true;
     }
     if (!removed_any) {
-      return Err(EC::InvalidArg, "", "", "variable not found");
+      return ReportError_(Err(EC::InvalidArg, "", "", "variable not found"));
     }
-    return last;
+    return ReportError_(last);
   }
 
   std::string resolved_zone = {};
@@ -242,7 +266,7 @@ ECM VarInterfaceService::DeleteVar(
       resolved_zone = "local";
     }
   }
-  return var_service_.DelVar(resolved_zone, parsed.data.varname);
+  return ReportError_(var_service_.DelVar(resolved_zone, parsed.data.varname));
 }
 
 ECM VarInterfaceService::ListVars(
@@ -260,7 +284,7 @@ ECM VarInterfaceService::ListVars(
   if (sections.empty()) {
     auto all_vars = var_service_.GetAllVar();
     if (!(all_vars.rcm)) {
-      return all_vars.rcm;
+      return ReportError_(all_vars.rcm);
     }
     for (const auto &[zone_name, zone_vars] : all_vars.data) {
       print_zone(zone_name, zone_vars);
@@ -272,6 +296,7 @@ ECM VarInterfaceService::ListVars(
   for (const std::string &zone : sections) {
     auto zone_vars = var_service_.EnumerateZone(zone);
     if (!(zone_vars.rcm)) {
+      (void)ReportError_(zone_vars.rcm);
       last = zone_vars.rcm;
       continue;
     }

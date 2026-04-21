@@ -15,7 +15,6 @@ void NormalizeTable(TableStyle *style);
 void NormalizeProgressBar(ProgressBarStyle *style);
 void NormalizePromptTemplate(PromptTemplateStyle *style);
 void NormalizeCLIPromptShortcut(CLIPromptShortcutStyle *style);
-void NormalizeCLIPromptNamedStyles(CLIPromptNamedStyles *style);
 void NormalizeCLIPrompt(CLIPromptStyle *style);
 void NormalizeInputHighlight(InputHighlightStyle *style);
 void NormalizeValueQueryHighlight(ValueQueryHighlightStyle *style);

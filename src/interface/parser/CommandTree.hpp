@@ -31,6 +31,7 @@ enum class AMCommandArgSemantic {
   ClientName,
   PoolName,
   TaskId,
+  PausedTaskId,
   VariableName,
   VarZone,
 };

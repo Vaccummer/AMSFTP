@@ -1,8 +1,8 @@
 #include "domain/host/HostDomainService.hpp"
 #include "domain/var/VarDomainService.hpp"
-#include "interface/completion/CompletionRuntime.hpp"
 #include "interface/searcher/Searcher.hpp"
 #include "interface/searcher/SearcherCommon.hpp"
+#include "interface/style/StyleManager.hpp"
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,7 +47,7 @@ struct HostLikeNameInfo {
  * configured hosts.
  */
 std::vector<HostLikeNameInfo> CollectHostLikeNames_(
-    const AMInterface::completion::ICompletionRuntime *runtime) {
+    const AMInterface::input::IInputSemanticRuntime *runtime) {
   std::vector<HostLikeNameInfo> names;
   if (!runtime) {
     return names;
@@ -79,7 +79,7 @@ std::vector<HostLikeNameInfo> CollectHostLikeNames_(
 }
 
 std::vector<HostLikeNameInfo> CollectTerminalLikeNames_(
-    const AMInterface::completion::ICompletionRuntime *runtime) {
+    const AMInterface::input::IInputSemanticRuntime *runtime) {
   std::vector<HostLikeNameInfo> names;
   if (!runtime) {
     return names;
@@ -173,6 +173,15 @@ std::string ExtractSshChannelSuffix_(const AMCompletionContext &ctx) {
   return ctx.token_postfix.substr(at_pos);
 }
 
+std::string FormatWithStyle_(const AMCompletionContext &ctx,
+                             const std::string &text,
+                             AMInterface::style::StyleIndex style_index) {
+  if (!ctx.style_service) {
+    return text;
+  }
+  return ctx.style_service->Format(text, style_index);
+}
+
 /**
  * @brief Parse variable completion prefix from token prefix text.
  */
@@ -249,17 +258,17 @@ ZoneStyleKey_(const std::string &zone, bool domain_exists, bool host_exists) {
 }
 
 AMInterface::style::StyleIndex TerminalStyleKey_(
-    AMInterface::completion::ICompletionRuntime::TerminalNameState state) {
+    AMInterface::input::IInputSemanticRuntime::TerminalNameState state) {
   switch (state) {
-  case AMInterface::completion::ICompletionRuntime::TerminalNameState::OK:
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::OK:
     return AMInterface::style::StyleIndex::TerminalName;
-  case AMInterface::completion::ICompletionRuntime::TerminalNameState::
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Disconnected:
     return AMInterface::style::StyleIndex::DisconnectedTerminalName;
-  case AMInterface::completion::ICompletionRuntime::TerminalNameState::
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Unestablished:
     return AMInterface::style::StyleIndex::UnestablishedTerminalName;
-  case AMInterface::completion::ICompletionRuntime::TerminalNameState::
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Nonexistent:
   default:
     return AMInterface::style::StyleIndex::NonexistentTerminalName;
@@ -267,19 +276,19 @@ AMInterface::style::StyleIndex TerminalStyleKey_(
 }
 
 AMInterface::style::StyleIndex ChannelStyleKey_(
-    AMInterface::completion::ICompletionRuntime::ChannelNameState state) {
+    AMInterface::input::IInputSemanticRuntime::ChannelNameState state) {
   switch (state) {
-  case AMInterface::completion::ICompletionRuntime::ChannelNameState::OK:
+  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::OK:
     return AMInterface::style::StyleIndex::ChannelName;
-  case AMInterface::completion::ICompletionRuntime::ChannelNameState::
+  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::
       Disconnected:
     return AMInterface::style::StyleIndex::DisconnectedChannelName;
-  case AMInterface::completion::ICompletionRuntime::ChannelNameState::
+  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::
       Nonexistent:
     return AMInterface::style::StyleIndex::NonexistentChannelName;
-  case AMInterface::completion::ICompletionRuntime::ChannelNameState::ValidNew:
+  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::ValidNew:
     return AMInterface::style::StyleIndex::ValidNewChannelName;
-  case AMInterface::completion::ICompletionRuntime::ChannelNameState::
+  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::
       InvalidNew:
   default:
     return AMInterface::style::StyleIndex::InvalidNewChannelName;
@@ -329,8 +338,9 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate_ref.varname = item.varname;
       AMCompletionCandidate candidate;
       candidate.insert_text = AMDomain::var::BuildVarToken(candidate_ref);
-      candidate.display = runtime->Format(
-          candidate.insert_text, AMInterface::style::StyleIndex::PublicVarname);
+      candidate.display = FormatWithStyle_(
+          ctx, candidate.insert_text,
+          AMInterface::style::StyleIndex::PublicVarname);
       candidate.help =
           AMStr::fmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
       candidate.kind = AMCompletionKind::VariableName;
@@ -404,7 +414,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       }
       const AMInterface::style::StyleIndex style_index =
           ZoneStyleKey_(item.zone, item.domain_exists, item.host_exists);
-      candidate.display = runtime->Format(item.zone, style_index);
+      candidate.display = FormatWithStyle_(ctx, item.zone, style_index);
       candidate.kind = AMCompletionKind::VarZone;
       candidate.help.clear();
       candidate.score = match.score_bias;
@@ -443,7 +453,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
           name_item.created
               ? AMInterface::style::StyleIndex::Nickname
               : AMInterface::style::StyleIndex::UnestablishedNickname;
-      candidate.display = runtime->Format(name_item.name, style_index);
+      candidate.display = FormatWithStyle_(ctx, name_item.name, style_index);
       candidate.kind = AMCompletionKind::ClientName;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
@@ -462,8 +472,8 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       const std::string &name = names[match.index];
       AMCompletionCandidate candidate;
       candidate.insert_text = name;
-      candidate.display =
-          runtime->Format(name, AMInterface::style::StyleIndex::Nickname);
+      candidate.display = FormatWithStyle_(
+          ctx, name, AMInterface::style::StyleIndex::Nickname);
       candidate.kind = AMCompletionKind::ClientName;
       candidate.score = match.score_bias;
       result.items.push_back(std::move(candidate));
@@ -498,7 +508,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
           name_item.created
               ? AMInterface::style::StyleIndex::Nickname
               : AMInterface::style::StyleIndex::UnestablishedNickname;
-      candidate.display = runtime->Format(name_item.name, style_index);
+      candidate.display = FormatWithStyle_(ctx, name_item.name, style_index);
       candidate.kind = AMCompletionKind::HostNickname;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
@@ -522,8 +532,8 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       AMCompletionCandidate candidate;
       candidate.insert_text = name_item.name;
       const auto state = runtime->QueryTerminalNameState(name_item.name);
-      candidate.display =
-          runtime->Format(name_item.name, TerminalStyleKey_(state));
+      candidate.display = FormatWithStyle_(ctx, name_item.name,
+                                           TerminalStyleKey_(state));
       candidate.kind = AMCompletionKind::TerminalName;
       const int host_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + host_bias;
@@ -563,7 +573,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
         candidate.insert_text = name_item.name + suffix;
         const auto state = runtime->QueryTerminalNameState(name_item.name);
         candidate.display =
-            runtime->Format(name_item.name, TerminalStyleKey_(state));
+            FormatWithStyle_(ctx, name_item.name, TerminalStyleKey_(state));
         candidate.kind = AMCompletionKind::TerminalName;
         const int host_bias = name_item.created ? 0 : 100;
         candidate.score = match.score_bias + host_bias;
@@ -596,14 +606,14 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       auto state = runtime->QueryChannelNameState(target.terminal_name,
                                                   channel_name, false);
       if (semantics == TargetSemantics_::ExistingOnly &&
-          state == AMInterface::completion::ICompletionRuntime::
+          state == AMInterface::input::IInputSemanticRuntime::
                        ChannelNameState::Nonexistent) {
         continue;
       }
       AMCompletionCandidate candidate;
       candidate.insert_text = target.insert_header + channel_name;
       candidate.display =
-          runtime->Format(channel_name, ChannelStyleKey_(state));
+          FormatWithStyle_(ctx, channel_name, ChannelStyleKey_(state));
       candidate.kind = AMCompletionKind::ChannelName;
       candidate.score = match.score_bias;
       result.items.push_back(std::move(candidate));
@@ -632,8 +642,13 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  if (HasTarget(ctx, AMCompletionTarget::TaskId)) {
-    auto ids = runtime->ListTaskIDs();
+  std::vector<TaskID> ids = {};
+  if (HasTarget(ctx, AMCompletionTarget::PausedTaskId)) {
+    ids = runtime->ListPausedTaskIDs();
+  } else if (HasTarget(ctx, AMCompletionTarget::TaskId)) {
+    ids = runtime->ListTaskIDs();
+  }
+  if (!ids.empty()) {
     std::vector<std::string> keys = {};
     keys.reserve(ids.size());
     for (const auto &id : ids) {

@@ -11,85 +11,93 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
                          StyleIndex style_index) {
   switch (style_index) {
   case StyleIndex::Protocol:
-    return &cfg.common.protocol;
+    return &cfg.common.type_protocol;
   case StyleIndex::Abort:
-    return &cfg.common.abort;
+    return &cfg.common.type_abort;
   case StyleIndex::Common:
-    return &cfg.common.common;
+    return &cfg.common.default_style;
   case StyleIndex::Module:
-    return &cfg.common.module;
+    return &cfg.common.cli_module;
   case StyleIndex::Command:
-    return &cfg.common.command;
+    return &cfg.common.cli_command;
   case StyleIndex::IllegalCommand:
-    return &cfg.common.unexpected;
+    return &cfg.common.cli_unexpected;
   case StyleIndex::Option:
-    return &cfg.common.option;
+    return &cfg.common.cli_option;
   case StyleIndex::String:
-    return &cfg.common.string;
+    return &cfg.common.type_string;
   case StyleIndex::PublicVarname:
-    return &cfg.common.public_varname;
+    return &cfg.common.varname_public;
   case StyleIndex::PrivateVarname:
-    return &cfg.common.private_varname;
+    return &cfg.common.varname_private;
   case StyleIndex::NonexistentVarname:
-    return &cfg.common.nonexistent_varname;
+    return &cfg.common.varname_nonexistent;
   case StyleIndex::VarValue:
     return &cfg.common.varvalue;
   case StyleIndex::Nickname:
-    return &cfg.common.nickname;
+    return &cfg.common.nickname_ok;
   case StyleIndex::DisconnectedNickname:
-    return &cfg.common.disconnected_nickname;
+    return &cfg.common.nickname_disconnected;
   case StyleIndex::UnestablishedNickname:
-    return &cfg.common.unestablished_nickname;
+    return &cfg.common.nickname_unestablished;
   case StyleIndex::NonexistentNickname:
-    return &cfg.common.nonexistent_nickname;
+    return &cfg.common.nickname_nonexistent;
   case StyleIndex::ValidNewNickname:
-    return &cfg.common.valid_new_nickname;
+    return &cfg.common.nickname_new_valid;
   case StyleIndex::InvalidNewNickname:
-    return &cfg.common.invalid_new_nickname;
+    return &cfg.common.nickname_new_invalid;
   case StyleIndex::TerminalName:
-    return &cfg.common.termname;
+    return &cfg.common.termname_ok;
   case StyleIndex::DisconnectedTerminalName:
-    return &cfg.common.disconnected_termname;
+    return &cfg.common.termname_disconnected;
   case StyleIndex::UnestablishedTerminalName:
-    return &cfg.common.unestablished_termname;
+    return &cfg.common.termname_unestablished;
   case StyleIndex::NonexistentTerminalName:
-    return &cfg.common.nonexistent_termname;
+    return &cfg.common.termname_nonexistent;
   case StyleIndex::ChannelName:
-    return &cfg.common.channelname;
+    return &cfg.common.channelname_ok;
   case StyleIndex::DisconnectedChannelName:
-    return &cfg.common.disconnected_channelname;
+    return &cfg.common.channelname_disconnected;
   case StyleIndex::NonexistentChannelName:
-    return &cfg.common.nonexistent_channelname;
+    return &cfg.common.channelname_nonexistent;
   case StyleIndex::ValidNewChannelName:
-    return &cfg.common.valid_new_channelname;
+    return &cfg.common.channelname_new_valid;
   case StyleIndex::InvalidNewChannelName:
-    return &cfg.common.invalid_new_channelname;
+    return &cfg.common.channelname_new_invalid;
   case StyleIndex::BuiltinArg:
-    return &cfg.common.builtin_arg;
+    return &cfg.common.attr_valid;
   case StyleIndex::NonexistentBuiltinArg:
-    return &cfg.common.nonexistent_builtin_arg;
+    return &cfg.common.attr_invalid;
   case StyleIndex::Username:
-    return &cfg.common.username;
+    return &cfg.common.type_username;
   case StyleIndex::AtSign:
-    return &cfg.common.atsign;
+    return &cfg.common.nickname_at;
+  case StyleIndex::TermnameAtSign:
+    return &cfg.common.termname_at;
   case StyleIndex::DollarSign:
-    return &cfg.common.dollarsign;
+    return &cfg.common.varname_dollar;
   case StyleIndex::EqualSign:
-    return &cfg.common.equalsign;
+    return &cfg.common.varname_equal;
+  case StyleIndex::LeftBraceSign:
+    return &cfg.common.varname_left_brace;
+  case StyleIndex::RightBraceSign:
+    return &cfg.common.varname_right_brace;
+  case StyleIndex::ColonSign:
+    return &cfg.common.varname_colon;
   case StyleIndex::EscapedSign:
-    return &cfg.common.escapedsign;
+    return &cfg.common.sign_escaped;
   case StyleIndex::BangSign:
-    return &cfg.common.bangsign;
+    return &cfg.common.sign_bang;
   case StyleIndex::ShellCmd:
-    return &cfg.common.shell_cmd;
+    return &cfg.common.type_shell_cmd;
   case StyleIndex::Cwd:
-    return &cfg.path.cwd;
+    return &cfg.path.type_dir;
   case StyleIndex::Number:
-    return &cfg.common.number;
+    return &cfg.common.type_number;
   case StyleIndex::Timestamp:
-    return &cfg.common.timestamp;
+    return &cfg.common.default_style;
   case StyleIndex::PathLike:
-    return &cfg.common.path_like;
+    return &cfg.common.default_style;
   case StyleIndex::Error:
     return &cfg.system_info.error;
   case StyleIndex::None:
@@ -140,15 +148,15 @@ std::string ResolvePathStyleTag(const AMDomain::style::StyleConfig &cfg,
     return "";
   }
 
-  const std::string *path_tag = &cfg.path.regular;
+  const std::string *path_tag = &cfg.path.type_regular;
   if (path_info->path.empty()) {
-    path_tag = &cfg.path.nonexistent;
+    path_tag = &cfg.path.type_nonexistent;
   } else if (path_info->type == PathType::DIR) {
-    path_tag = &cfg.path.dir;
+    path_tag = &cfg.path.type_dir;
   } else if (path_info->type == PathType::SYMLINK) {
-    path_tag = &cfg.path.symlink;
+    path_tag = &cfg.path.type_symlink;
   } else if (path_info->type != PathType::FILE) {
-    path_tag = &cfg.path.otherspecial;
+    path_tag = &cfg.path.type_otherspecial;
   }
   return NormalizeStyleTag(*path_tag);
 }

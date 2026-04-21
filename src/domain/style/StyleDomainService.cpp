@@ -261,27 +261,11 @@ void NormalizeCLIPromptShortcut(CLIPromptShortcutStyle *style) {
   *style = std::move(normalized);
 }
 
-void NormalizeCLIPromptNamedStyles(CLIPromptNamedStyles *style) {
-  if (!style) {
-    return;
-  }
-  const CLIPromptNamedStyles defaults = {};
-  NormalizeStyleToken(&style->un, defaults.un);
-  NormalizeStyleToken(&style->at, defaults.at);
-  NormalizeStyleToken(&style->hn, defaults.hn);
-  NormalizeStyleToken(&style->en, defaults.en);
-  NormalizeStyleToken(&style->nn, defaults.nn);
-  NormalizeStyleToken(&style->cwd, defaults.cwd);
-  NormalizeStyleToken(&style->ds, defaults.ds);
-  NormalizeStyleToken(&style->white, defaults.white);
-}
-
 void NormalizeCLIPrompt(CLIPromptStyle *style) {
   if (!style) {
     return;
   }
   NormalizeCLIPromptShortcut(&style->shortcut);
-  NormalizeCLIPromptNamedStyles(&style->named_styles);
   NormalizePromptTemplate(&style->prompt_template);
 }
 
@@ -290,51 +274,65 @@ void NormalizeInputHighlight(InputHighlightStyle *style) {
     return;
   }
   const InputHighlightStyle defaults = {};
-  NormalizeStyleToken(&style->protocol, defaults.protocol);
-  NormalizeStyleToken(&style->abort, defaults.abort);
-  NormalizeStyleToken(&style->common, defaults.common);
-  NormalizeStyleToken(&style->module, defaults.module);
-  NormalizeStyleToken(&style->command, defaults.command);
-  NormalizeStyleToken(&style->unexpected, defaults.unexpected);
-  NormalizeStyleToken(&style->illegal_command, defaults.illegal_command);
-  NormalizeStyleToken(&style->option, defaults.option);
-  NormalizeStyleToken(&style->string, defaults.string);
-  NormalizeStyleToken(&style->public_varname, defaults.public_varname);
-  NormalizeStyleToken(&style->private_varname, defaults.private_varname);
-  NormalizeStyleToken(&style->nonexistent_varname, defaults.nonexistent_varname);
+  NormalizeStyleToken(&style->default_style, defaults.default_style);
+  NormalizeStyleToken(&style->type_string, defaults.type_string);
+  NormalizeStyleToken(&style->type_number, defaults.type_number);
+  NormalizeStyleToken(&style->type_protocol, defaults.type_protocol);
+  NormalizeStyleToken(&style->type_username, defaults.type_username);
+  NormalizeStyleToken(&style->type_abort, defaults.type_abort);
+  NormalizeStyleToken(&style->type_hostname, defaults.type_hostname);
+  NormalizeStyleToken(&style->type_shell_cmd, defaults.type_shell_cmd);
+  NormalizeStyleToken(&style->sign_escaped, defaults.sign_escaped);
+  NormalizeStyleToken(&style->sign_bang, defaults.sign_bang);
+  NormalizeStyleToken(&style->cli_command, defaults.cli_command);
+  NormalizeStyleToken(&style->cli_unexpected, defaults.cli_unexpected);
+  NormalizeStyleToken(&style->cli_module, defaults.cli_module);
+  NormalizeStyleToken(&style->cli_option, defaults.cli_option);
+  NormalizeStyleToken(&style->varname_public, defaults.varname_public);
+  NormalizeStyleToken(&style->varname_private, defaults.varname_private);
+  NormalizeStyleToken(&style->varname_nonexistent,
+                      defaults.varname_nonexistent);
+  NormalizeStyleToken(&style->varname_dollar, defaults.varname_dollar);
+  NormalizeStyleToken(&style->varname_left_brace,
+                      defaults.varname_left_brace);
+  NormalizeStyleToken(&style->varname_right_brace,
+                      defaults.varname_right_brace);
+  NormalizeStyleToken(&style->varname_colon, defaults.varname_colon);
+  NormalizeStyleToken(&style->varname_equal, defaults.varname_equal);
   NormalizeStyleToken(&style->varvalue, defaults.varvalue);
-  NormalizeStyleToken(&style->nickname, defaults.nickname);
-  NormalizeStyleToken(&style->disconnected_nickname, defaults.disconnected_nickname);
-  NormalizeStyleToken(&style->unestablished_nickname, defaults.unestablished_nickname);
-  NormalizeStyleToken(&style->nonexistent_nickname, defaults.nonexistent_nickname);
-  NormalizeStyleToken(&style->valid_new_nickname, defaults.valid_new_nickname);
-  NormalizeStyleToken(&style->invalid_new_nickname, defaults.invalid_new_nickname);
-  NormalizeStyleToken(&style->builtin_arg, defaults.builtin_arg);
-  NormalizeStyleToken(&style->nonexistent_builtin_arg, defaults.nonexistent_builtin_arg);
-  NormalizeStyleToken(&style->username, defaults.username);
-  NormalizeStyleToken(&style->atsign, defaults.atsign);
-  NormalizeStyleToken(&style->dollarsign, defaults.dollarsign);
-  NormalizeStyleToken(&style->equalsign, defaults.equalsign);
-  NormalizeStyleToken(&style->escapedsign, defaults.escapedsign);
-  NormalizeStyleToken(&style->bangsign, defaults.bangsign);
-  NormalizeStyleToken(&style->shell_cmd, defaults.shell_cmd);
-  NormalizeStyleToken(&style->number, defaults.number);
-  NormalizeStyleToken(&style->timestamp, defaults.timestamp);
-  NormalizeStyleToken(&style->path_like, defaults.path_like);
-  NormalizeStyleToken(&style->termname, defaults.termname);
-  NormalizeStyleToken(&style->disconnected_termname, defaults.disconnected_termname);
-  NormalizeStyleToken(&style->unestablished_termname, defaults.unestablished_termname);
-  NormalizeStyleToken(&style->nonexistent_termname, defaults.nonexistent_termname);
-  NormalizeStyleToken(&style->channelname, defaults.channelname);
-  NormalizeStyleToken(&style->disconnected_channelname, defaults.disconnected_channelname);
-  NormalizeStyleToken(&style->nonexistent_channelname, defaults.nonexistent_channelname);
-  NormalizeStyleToken(&style->valid_new_channelname, defaults.valid_new_channelname);
-  NormalizeStyleToken(&style->invalid_new_channelname, defaults.invalid_new_channelname);
-  if (style->unexpected.empty()) {
-    style->unexpected = style->illegal_command;
-  }
-  if (style->illegal_command.empty()) {
-    style->illegal_command = style->unexpected;
+  NormalizeStyleToken(&style->nickname_ok, defaults.nickname_ok);
+  NormalizeStyleToken(&style->nickname_at, defaults.nickname_at);
+  NormalizeStyleToken(&style->nickname_disconnected,
+                      defaults.nickname_disconnected);
+  NormalizeStyleToken(&style->nickname_unestablished,
+                      defaults.nickname_unestablished);
+  NormalizeStyleToken(&style->nickname_nonexistent,
+                      defaults.nickname_nonexistent);
+  NormalizeStyleToken(&style->nickname_new_valid,
+                      defaults.nickname_new_valid);
+  NormalizeStyleToken(&style->nickname_new_invalid,
+                      defaults.nickname_new_invalid);
+  NormalizeStyleToken(&style->termname_ok, defaults.termname_ok);
+  NormalizeStyleToken(&style->termname_at, defaults.termname_at);
+  NormalizeStyleToken(&style->termname_disconnected,
+                      defaults.termname_disconnected);
+  NormalizeStyleToken(&style->termname_unestablished,
+                      defaults.termname_unestablished);
+  NormalizeStyleToken(&style->termname_nonexistent,
+                      defaults.termname_nonexistent);
+  NormalizeStyleToken(&style->channelname_ok, defaults.channelname_ok);
+  NormalizeStyleToken(&style->channelname_disconnected,
+                      defaults.channelname_disconnected);
+  NormalizeStyleToken(&style->channelname_nonexistent,
+                      defaults.channelname_nonexistent);
+  NormalizeStyleToken(&style->channelname_new_valid,
+                      defaults.channelname_new_valid);
+  NormalizeStyleToken(&style->channelname_new_invalid,
+                      defaults.channelname_new_invalid);
+  NormalizeStyleToken(&style->attr_valid, defaults.attr_valid);
+  NormalizeStyleToken(&style->attr_invalid, defaults.attr_invalid);
+  if (style->type_shell_cmd.empty()) {
+    style->type_shell_cmd = style->cli_command;
   }
 }
 
@@ -362,16 +360,27 @@ void NormalizePathHighlight(PathHighlightStyle *style) {
     return;
   }
   const PathHighlightStyle defaults = {};
-  NormalizeStyleToken(&style->cwd, defaults.cwd);
-  NormalizeStyleToken(&style->path_str, defaults.path_str);
-  NormalizeStyleToken(&style->root, defaults.root);
-  NormalizeStyleToken(&style->node_dir_name, defaults.node_dir_name);
-  NormalizeStyleToken(&style->filename, defaults.filename);
-  NormalizeStyleToken(&style->dir, defaults.dir);
-  NormalizeStyleToken(&style->regular, defaults.regular);
-  NormalizeStyleToken(&style->symlink, defaults.symlink);
-  NormalizeStyleToken(&style->otherspecial, defaults.otherspecial);
-  NormalizeStyleToken(&style->nonexistent, defaults.nonexistent);
+  NormalizeStyleToken(&style->default_style, defaults.default_style);
+  NormalizeStyleToken(&style->tree_root, defaults.tree_root);
+  NormalizeStyleToken(&style->tree_node, defaults.tree_node);
+  NormalizeStyleToken(&style->tree_leaf, defaults.tree_leaf);
+  NormalizeStyleToken(&style->type_dir, defaults.type_dir);
+  NormalizeStyleToken(&style->type_regular, defaults.type_regular);
+  NormalizeStyleToken(&style->type_symlink, defaults.type_symlink);
+  NormalizeStyleToken(&style->type_otherspecial, defaults.type_otherspecial);
+  NormalizeStyleToken(&style->type_nonexistent, defaults.type_nonexistent);
+  if (style->default_style.empty()) {
+    style->default_style = style->type_regular;
+  }
+  if (style->type_regular.empty()) {
+    style->type_regular = style->default_style;
+  }
+  if (style->tree_node.empty()) {
+    style->tree_node = style->type_dir;
+  }
+  if (style->tree_leaf.empty()) {
+    style->tree_leaf = style->type_regular;
+  }
 }
 
 void NormalizeSystemInfo(SystemInfoStyle *style) {

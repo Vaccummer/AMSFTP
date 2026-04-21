@@ -1,21 +1,19 @@
 #pragma once
 
 #include "foundation/tools/string.hpp"
-#include "interface/token_analyser/model/RawToken.hpp"
+#include "interface/input_analysis/model/RawToken.hpp"
+
 #include <algorithm>
 #include <string>
 #include <vector>
 
-namespace AMInterface::parser::lexer {
+namespace AMInterface::input::lexer {
 
 class ShellTokenLexer {
 public:
-  /**
-   * @brief Split input with whitespace/quote/backtick shell rules.
-   */
-  static inline std::vector<AMInterface::parser::model::RawToken>
+  [[nodiscard]] static inline std::vector<AMInterface::input::model::RawToken>
   Split(const std::string &input) {
-    std::vector<AMInterface::parser::model::RawToken> tokens = {};
+    std::vector<AMInterface::input::model::RawToken> tokens = {};
     size_t i = 0;
     while (i < input.size()) {
       while (i < input.size() && AMStr::IsWhitespace(input[i])) {
@@ -25,13 +23,12 @@ public:
         break;
       }
 
-      AMInterface::parser::model::RawToken token = {};
+      AMInterface::input::model::RawToken token = {};
       token.start = i;
       token.content_start = i;
       token.content_end = i;
       token.end = i;
       token.quoted = false;
-      token.type = AMTokenType::Unset;
 
       char active_quote = 0;
       bool saw_quote = false;
@@ -98,6 +95,4 @@ public:
   }
 };
 
-} // namespace AMInterface::parser::lexer
-
-
+} // namespace AMInterface::input::lexer

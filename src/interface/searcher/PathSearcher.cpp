@@ -1,8 +1,8 @@
 #include "domain/client/ClientPort.hpp"
 #include "foundation/tools/string.hpp"
-#include "interface/completion/CompletionRuntime.hpp"
 #include "interface/searcher/Searcher.hpp"
 #include "interface/searcher/SearcherCommon.hpp"
+#include "interface/style/StyleManager.hpp"
 #include <algorithm>
 
 using namespace AMInterface::searcher::detail;
@@ -52,8 +52,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  const CommandState state = ResolveCommandState(ctx);
-  const bool force_path = IsPathSemanticState(ctx, state);
+  const bool force_path = true;
   const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
   if (!force_path && !has_at && !IsPathLikeText(ctx.token_prefix)) {
     return result;
@@ -70,7 +69,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   CacheKey key(path.nickname, path.dir_abs);
   std::vector<PathInfo> listed;
   if (LookupTempCache_(key, &listed)) {
-    AppendPathCandidates_(path, listed, &result.items);
+    AppendPathCandidates_(path, listed, &result.items, ctx.style_service);
     if (!result.items.empty()) {
       SortCandidates(ctx, result.items);
       result.from_cache = true;
@@ -93,7 +92,8 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   StoreTempCache_(key, list_result.data.entries);
-  AppendPathCandidates_(path, list_result.data.entries, &result.items);
+  AppendPathCandidates_(path, list_result.data.entries, &result.items,
+                        ctx.style_service);
   if (!result.items.empty()) {
     SortCandidates(ctx, result.items);
   }
@@ -209,7 +209,9 @@ AMPathSearchEngine::GetCacheStatusAll() const {
  */
 std::string
 AMPathSearchEngine::FormatPathDisplay_(const PathInfo &info,
-                                       const std::string &name) const {
+                                       const std::string &name,
+                                       const AMInterface::style::AMStyleService
+                                           *style_service) const {
   auto wrap_pre = [&](const std::string &styled,
                       const std::string &raw) -> std::string {
     if (styled == raw || raw.empty() ||
@@ -226,10 +228,12 @@ AMPathSearchEngine::FormatPathDisplay_(const PathInfo &info,
     return result;
   };
 
-  if (!runtime_) {
+  if (!style_service) {
     return name;
   }
-  const std::string styled = runtime_->FormatPath(name, &info);
+  const std::string styled =
+      style_service->Format(name, AMInterface::style::StyleIndex::PathLike,
+                            &info);
   return wrap_pre(styled, name);
 }
 
@@ -342,7 +346,8 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
  */
 void AMPathSearchEngine::AppendPathCandidates_(
     const PathContext &path_ctx, const std::vector<PathInfo> &items,
-    std::vector<AMCompletionCandidate> *out) const {
+    std::vector<AMCompletionCandidate> *out,
+    const AMInterface::style::AMStyleService *style_service) const {
   if (!out) {
     return;
   }
@@ -364,7 +369,7 @@ void AMPathSearchEngine::AppendPathCandidates_(
       candidate.insert_text.push_back(path_ctx.sep);
     }
     const std::string display_name = is_dir ? name + path_ctx.sep : name;
-    candidate.display = FormatPathDisplay_(info, display_name);
+    candidate.display = FormatPathDisplay_(info, display_name, style_service);
     candidate.kind = path_ctx.remote ? AMCompletionKind::PathRemote
                                      : AMCompletionKind::PathLocal;
     candidate.path_type = info.type;
@@ -460,7 +465,7 @@ void AMPathSearchEngine::StoreTempCache_(const CacheKey &key,
 
 namespace AMInterface::completer {
 std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
-    std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime) {
+    std::shared_ptr<AMInterface::input::IInputSemanticRuntime> runtime) {
   std::vector<AMSearchEngineRegistration> out;
 
   auto command_engine =
@@ -476,6 +481,7 @@ std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
       {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
         AMCompletionTarget::PoolName, AMCompletionTarget::HostNickname,
         AMCompletionTarget::HostAttr, AMCompletionTarget::TaskId,
+        AMCompletionTarget::PausedTaskId,
         AMCompletionTarget::VarZone, AMCompletionTarget::TerminalName,
         AMCompletionTarget::ChannelTargetExisting,
         AMCompletionTarget::ChannelTargetNew,

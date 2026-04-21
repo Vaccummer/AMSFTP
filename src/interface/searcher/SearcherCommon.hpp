@@ -1,6 +1,7 @@
 #pragma once
 #include "foundation/tools/string.hpp"
 #include "interface/completion/Engine.hpp"
+#include "interface/input_analysis/rules/InputTextRules.hpp"
 #include "interface/parser/CommandTree.hpp"
 #include <algorithm>
 #include <cctype>
@@ -42,23 +43,7 @@ inline std::string EscapeBbcodeText(const std::string &text) {
  * @brief Unescape backtick-escaped sequences.
  */
 inline std::string UnescapeBackticks(const std::string &text) {
-  if (text.empty()) {
-    return text;
-  }
-  std::string out;
-  out.reserve(text.size());
-  for (size_t i = 0; i < text.size(); ++i) {
-    if (text[i] == '`' && i + 1 < text.size()) {
-      const char next = text[i + 1];
-      if (next == '$' || next == '"' || next == '\'' || next == '`') {
-        out.push_back(next);
-        ++i;
-        continue;
-      }
-    }
-    out.push_back(text[i]);
-  }
-  return out;
+  return AMInterface::input::rules::UnescapeBackticks(text, false);
 }
 
 /**
@@ -92,18 +77,7 @@ inline bool StartsWithShortOption(const std::string &text) {
  * @brief Return true when text looks like path input.
  */
 inline bool IsPathLikeText(const std::string &text) {
-  if (text.empty()) {
-    return false;
-  }
-  if (text[0] == '/' || text[0] == '\\' || text[0] == '~' || text[0] == '.') {
-    return true;
-  }
-  if (text.size() >= 2 && std::isalpha(static_cast<unsigned char>(text[0])) &&
-      text[1] == ':') {
-    return true;
-  }
-  return text.find('/') != std::string::npos ||
-         text.find('\\') != std::string::npos;
+  return AMInterface::input::rules::IsPathLikeText(text, true);
 }
 
 /**
@@ -183,7 +157,7 @@ inline std::string ExtractTokenText(const AMCompletionContext &ctx,
   if (index >= ctx.tokens.size()) {
     return "";
   }
-  const auto &token = ctx.tokens[index];
+  const auto &token = ctx.tokens[index].raw;
   if (token.content_end <= token.content_start ||
       token.content_end > ctx.input.size()) {
     return "";
@@ -284,134 +258,6 @@ BuildGeneralMatch(const std::vector<std::string> &keys,
         30);
   }
   return out;
-}
-
-/**
- * @brief Parsed command/argument state from tokens before cursor.
- */
-struct CommandState {
-  std::string command_path;
-  size_t command_tokens = 0;
-  size_t arg_index = 0;
-  std::optional<CommandNode::OptionValueRule> pending_value_rule;
-  size_t pending_value_index = 0;
-};
-
-/**
- * @brief Resolve command path and positional arg index from token context.
- */
-inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
-  CommandState state;
-  const CommandNode *command_tree = ctx.command_tree;
-  if (!command_tree) {
-    return state;
-  }
-  std::vector<std::string> before;
-  before.reserve(ctx.token_index);
-  for (size_t i = 0; i < ctx.tokens.size() && i < ctx.token_index; ++i) {
-    const std::string text = ExtractTokenText(ctx, i);
-    if (!text.empty()) {
-      before.push_back(text);
-    }
-  }
-  if (before.empty()) {
-    return state;
-  }
-
-  state.command_path = before[0];
-  state.command_tokens = 1;
-  if (before.size() >= 2 && command_tree->IsModule(before[0]) &&
-      !StartsWithLongOption(before[1]) && !StartsWithShortOption(before[1])) {
-    state.command_path += " " + before[1];
-    state.command_tokens = 2;
-  }
-
-  auto consume_option_value = [&]() {
-    if (!state.pending_value_rule.has_value()) {
-      return false;
-    }
-    ++state.pending_value_index;
-    if (!state.pending_value_rule->repeat_tail &&
-        state.pending_value_index >= state.pending_value_rule->value_count) {
-      state.pending_value_rule.reset();
-      state.pending_value_index = 0;
-    }
-    return true;
-  };
-  auto set_pending_option_value = [&](const CommandNode::OptionValueRule &rule,
-                                      size_t consumed) {
-    if (!rule.repeat_tail && consumed >= rule.value_count) {
-      state.pending_value_rule.reset();
-      state.pending_value_index = 0;
-      return;
-    }
-    state.pending_value_rule = rule;
-    state.pending_value_index = consumed;
-  };
-
-  for (size_t i = state.command_tokens; i < before.size(); ++i) {
-    const std::string &token = before[i];
-    if (consume_option_value()) {
-      continue;
-    }
-    if (state.command_path.empty()) {
-      if (StartsWithLongOption(token) || StartsWithShortOption(token)) {
-        continue;
-      }
-      ++state.arg_index;
-      continue;
-    }
-    if (StartsWithLongOption(token)) {
-      const size_t eq_pos = token.find('=');
-      const std::string option_name =
-          eq_pos == std::string::npos ? token : token.substr(0, eq_pos);
-      const auto rule = command_tree->ResolveOptionValueRule(
-          state.command_path, option_name, '\0', 0);
-      if (rule.has_value()) {
-        set_pending_option_value(
-            *rule,
-            eq_pos != std::string::npos && eq_pos + 1 < token.size() ? 1 : 0);
-      }
-      continue;
-    }
-    if (StartsWithShortOption(token)) {
-      const std::string body = token.substr(1);
-      if (!body.empty()) {
-        for (size_t cidx = 0; cidx < body.size(); ++cidx) {
-          const auto rule = command_tree->ResolveOptionValueRule(
-              state.command_path, "", body[cidx], 0);
-          if (!rule.has_value()) {
-            continue;
-          }
-          set_pending_option_value(*rule, cidx + 1 < body.size() ? 1 : 0);
-          break;
-        }
-        continue;
-      }
-    }
-    ++state.arg_index;
-  }
-  return state;
-}
-
-/**
- * @brief Return true when current argument state expects a path value.
- */
-inline bool IsPathSemanticState(const AMCompletionContext &ctx,
-                                const CommandState &state) {
-  if (state.command_path.empty()) {
-    return false;
-  }
-  const CommandNode *command_tree = ctx.command_tree;
-  if (!command_tree) {
-    return false;
-  }
-  if (state.pending_value_rule.has_value()) {
-    return IsPathSemantic(state.pending_value_rule->semantic);
-  }
-  const auto semantic = command_tree->ResolvePositionalSemantic(
-      state.command_path, state.arg_index);
-  return semantic.has_value() && IsPathSemantic(*semantic);
 }
 
 } // namespace AMInterface::searcher::detail

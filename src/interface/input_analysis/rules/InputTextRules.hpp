@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <string>
 
-namespace AMInterface::parser::shared {
+namespace AMInterface::input::rules {
 
 [[nodiscard]] inline bool IsQuotedChar(char c) {
   return c == '"' || c == '\'';
@@ -82,4 +82,4 @@ namespace AMInterface::parser::shared {
          text.find('\\') != std::string::npos;
 }
 
-} // namespace AMInterface::parser::shared
+} // namespace AMInterface::input::rules

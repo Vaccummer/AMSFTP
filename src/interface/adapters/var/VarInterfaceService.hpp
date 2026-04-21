@@ -40,6 +40,7 @@ public:
   bool RewriteVarShortcutTokens(std::vector<std::string> *tokens) const;
 
 private:
+  [[nodiscard]] ECM ReportError_(ECM rcm) const;
   [[nodiscard]] std::string ResolveCurrentDomain_() const;
   [[nodiscard]] ECMData<std::string>
   LookupVarValue_(const ParsedVarToken &token,

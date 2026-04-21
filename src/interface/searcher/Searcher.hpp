@@ -1,6 +1,7 @@
 #pragma once
 #include "foundation/core/DataClass.hpp"
 #include "interface/completion/Engine.hpp"
+#include "interface/input_analysis/runtime/InputSemanticRuntime.hpp"
 #include <chrono>
 #include <list>
 #include <memory>
@@ -8,10 +9,10 @@
 #include <unordered_map>
 #include <vector>
 
-
-namespace AMInterface::completion {
-class ICompletionRuntime;
+namespace AMInterface::style {
+class AMStyleService;
 }
+
 namespace AMInterface::searcher {
 using AMInterface::completer::AMCompletionArgs;
 using AMInterface::completer::AMCompletionCandidate;
@@ -47,8 +48,6 @@ public:
                       std::vector<AMCompletionCandidate> &items) override;
 
 private:
-  using CommandNode = AMInterface::parser::CommandNode;
-
   /**
    * @brief Build styled command/module display text.
    */
@@ -56,13 +55,6 @@ private:
                                     const std::string &style_key,
                                     size_t pad_width,
                                     const AMCompletionArgs *args) const;
-
-  /**
-   * @brief Parse command path from tokens before cursor.
-   */
-  void ParseCommandPath_(const AMCompletionContext &ctx, std::string *out_path,
-                         const CommandNode **out_node,
-                         size_t *out_consumed) const;
 };
 
 /**
@@ -74,7 +66,7 @@ public:
    * @brief Construct internal-value search engine.
    */
   explicit AMInternalSearchEngine(
-      std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime =
+      std::shared_ptr<AMInterface::input::IInputSemanticRuntime> runtime =
           nullptr)
       : runtime_(std::move(runtime)) {}
 
@@ -94,7 +86,7 @@ public:
                       std::vector<AMCompletionCandidate> &items) override;
 
 private:
-  std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
+  std::shared_ptr<AMInterface::input::IInputSemanticRuntime> runtime_ =
       nullptr;
 };
 
@@ -107,7 +99,7 @@ public:
    * @brief Construct path search engine.
    */
   explicit AMPathSearchEngine(
-      std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime =
+      std::shared_ptr<AMInterface::input::IInputSemanticRuntime> runtime =
           nullptr)
       : runtime_(std::move(runtime)) {}
 
@@ -210,7 +202,10 @@ private:
    * @brief Style a path entry for display.
    */
   [[nodiscard]] std::string FormatPathDisplay_(const PathInfo &info,
-                                               const std::string &name) const;
+                                               const std::string &name,
+                                               const AMInterface::style::
+                                                   AMStyleService *style_service)
+      const;
 
   /**
    * @brief Build path context from completion token and mode.
@@ -223,7 +218,9 @@ private:
    */
   void AppendPathCandidates_(const PathContext &path_ctx,
                              const std::vector<PathInfo> &items,
-                             std::vector<AMCompletionCandidate> *out) const;
+                             std::vector<AMCompletionCandidate> *out,
+                             const AMInterface::style::AMStyleService
+                                 *style_service) const;
 
   /**
    * @brief Lookup path cache entries.
@@ -253,7 +250,7 @@ private:
   std::unordered_map<std::string,
                      std::unordered_map<std::string, TempCacheEntry>>
       temp_cache_;
-  std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
+  std::shared_ptr<AMInterface::input::IInputSemanticRuntime> runtime_ =
       nullptr;
 };
 

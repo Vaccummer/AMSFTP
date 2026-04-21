@@ -1,7 +1,9 @@
 #pragma once
 #include "domain/client/ClientPort.hpp"
+#include "interface/input_analysis/InputAnalysis.hpp"
+#include "interface/input_analysis/InputAnalyzer.hpp"
+#include "interface/input_analysis/runtime/InputSemanticRuntime.hpp"
 #include "interface/parser/CommandTree.hpp"
-#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -18,9 +20,6 @@
 
 struct ic_completion_env_s;
 using ic_completion_env_t = ic_completion_env_s;
-namespace AMInterface::completion {
-class ICompletionRuntime;
-}
 namespace AMApplication::completion {
 class CompleterConfigManager;
 }
@@ -51,6 +50,7 @@ enum class AMCompletionTarget {
   ChannelTargetExisting = 14,
   ChannelTargetNew = 15,
   SshChannelTarget = 16,
+  PausedTaskId = 17,
 };
 
 /**
@@ -120,11 +120,12 @@ struct AMCompletionContext {
   size_t cursor = 0;
   uint64_t request_id = 0;
   AMCompletionMode mode = AMCompletionMode::Complete;
-  std::vector<AMInterface::parser::TokenTypeAnalyzer::AMToken> tokens;
+  AMInterface::input::InputAnalysis analysis = {};
+  std::vector<AMInterface::input::AnalyzedToken> tokens;
   size_t token_index = 0;
   bool has_token = false;
   bool cursor_in_token = false;
-  AMInterface::parser::TokenTypeAnalyzer::AMToken token;
+  AMInterface::input::AnalyzedToken token;
   std::string token_raw;
   std::string token_text;
   std::string token_prefix_raw;
@@ -134,6 +135,9 @@ struct AMCompletionContext {
   bool token_quoted = false;
   std::string module;
   std::string cmd;
+  std::string command_path;
+  const AMInterface::parser::CommandNode *command_node = nullptr;
+  size_t command_tokens = 0;
   std::vector<std::string> options;
   std::vector<std::string> args;
   std::vector<AMCompletionTarget> targets;
@@ -144,6 +148,7 @@ struct AMCompletionContext {
   bool async_search = false;
   const AMInterface::parser::CommandNode *command_tree = nullptr;
   const AMCompletionArgs *completion_args = nullptr;
+  const AMInterface::style::AMStyleService *style_service = nullptr;
 };
 
 class AMCompletionSearchEngine;
@@ -251,7 +256,7 @@ struct AMSearchEngineRegistration {
  * @brief Build the default completion search-engine registration set.
  */
 std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
-    std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime);
+    std::shared_ptr<AMInterface::input::IInputSemanticRuntime> runtime);
 
 /**
  * @brief Core completion engine that orchestrates parsing, dispatch, and async
@@ -261,12 +266,12 @@ class AMCompleteEngine {
 public:
   AMCompleteEngine(
       const AMInterface::parser::CommandNode *command_tree,
-      AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer,
-      std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
+      AMInterface::input::InputAnalyzer *input_analyzer,
+      std::shared_ptr<AMInterface::input::IInputSemanticRuntime> runtime,
       AMApplication::completion::CompleterConfigManager
           *completer_config_manager = nullptr,
       AMInterface::style::AMStyleService *style_service = nullptr)
-      : command_tree_(command_tree), token_type_analyzer_(token_type_analyzer),
+      : command_tree_(command_tree), input_analyzer_(input_analyzer),
         runtime_(std::move(runtime)),
         completer_config_manager_(completer_config_manager),
         style_service_(style_service) {
@@ -355,9 +360,8 @@ private:
    * @brief Find the token that owns the cursor.
    */
   bool FindTokenAtCursor_(
-      const std::vector<AMInterface::parser::TokenTypeAnalyzer::AMToken>
-          &tokens,
-      size_t cursor, AMInterface::parser::TokenTypeAnalyzer::AMToken *out,
+      const std::vector<AMInterface::input::AnalyzedToken> &tokens,
+      size_t cursor, AMInterface::input::AnalyzedToken *out,
       size_t *out_index) const;
 
   /**
@@ -480,8 +484,8 @@ private:
   std::vector<std::jthread> async_workers_;
 
   const AMInterface::parser::CommandNode *command_tree_ = nullptr;
-  AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer_ = nullptr;
-  std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
+  AMInterface::input::InputAnalyzer *input_analyzer_ = nullptr;
+  std::shared_ptr<AMInterface::input::IInputSemanticRuntime> runtime_ =
       nullptr;
   AMApplication::completion::CompleterConfigManager *completer_config_manager_ =
       nullptr;

@@ -2,7 +2,6 @@
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/parser/CommandTree.hpp"
-#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 
 #include <optional>
 
@@ -109,9 +108,9 @@ bool StartsWithDashLiteral_(const std::string &text) {
 
 std::vector<CliTokenWithMeta_>
 SplitCliTokensWithMeta_(const std::string &input,
-                        const TokenTypeAnalyzer &analyzer) {
+                        const AMInterface::input::InputAnalyzer &analyzer) {
   std::vector<CliTokenWithMeta_> out = {};
-  const auto split = analyzer.SplitToken(input);
+  const auto split = analyzer.SplitTokens(input);
   out.reserve(split.size());
   for (const auto &token : split) {
     if (token.content_end < token.content_start ||
@@ -312,7 +311,7 @@ void ProtectQuotedDashLiterals_(std::vector<CliTokenWithMeta_> *tokens,
  */
 std::vector<std::string>
 AMInputPreprocess::SplitCliTokens(const std::string &input) const {
-  const auto split = SplitCliTokensWithMeta_(input, token_type_analyzer_);
+  const auto split = SplitCliTokensWithMeta_(input, input_analyzer_);
   std::vector<std::string> out;
   out.reserve(split.size());
   for (const auto &token : split) {
@@ -351,9 +350,9 @@ AMInputPreprocess::Preprocess(const std::string &input) const {
     }
   }
 
-  // Branch 3: normal token split.
-  auto split = SplitCliTokensWithMeta_(input, token_type_analyzer_);
-  ProtectQuotedDashLiterals_(&split, token_type_analyzer_.CommandTree());
+  // Branch 3: normal token split + shortcut rewrite.
+  auto split = SplitCliTokensWithMeta_(input, input_analyzer_);
+  ProtectQuotedDashLiterals_(&split, input_analyzer_.CommandTree());
   std::vector<std::string> out = {};
   out.reserve(split.size());
   for (const auto &token : split) {
@@ -361,6 +360,7 @@ AMInputPreprocess::Preprocess(const std::string &input) const {
       out.push_back(token.text);
     }
   }
+  RewriteVarShortcutTokens(&out);
   return {std::move(out), OK};
 }
 

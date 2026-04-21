@@ -100,6 +100,7 @@ CommandNode *CommandNode::AddFunction(const std::string &child_name,
   child->top_level = (root_app_ != nullptr);
   child->app = app->add_subcommand(child_name, child_help);
   child->root_app_ = nullptr;
+  child->ImportFromApp_(child->app);
   subcommands[child_name] = child;
 
   return child.get();

@@ -6,34 +6,31 @@
 #include "application/terminal/TermAppService.hpp"
 #include "application/transfer/TransferAppService.hpp"
 #include "application/var/VarAppService.hpp"
-#include "domain/transfer/TransferDomainModel.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
-#include "interface/completion/CompletionRuntime.hpp"
-#include "interface/style/StyleManager.hpp"
+#include "interface/input_analysis/runtime/InputSemanticRuntime.hpp"
+
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
 
-namespace AMInterface::completion {
-using AMDomain::transfer::TaskID;
-class CompletionRuntimeAdapter final : public ICompletionRuntime {
+namespace AMInterface::input {
+
+class InputSemanticRuntimeAdapter final : public IInputSemanticRuntime {
 public:
-  CompletionRuntimeAdapter(
+  InputSemanticRuntimeAdapter(
       AMApplication::client::ClientAppService &client_service,
       AMApplication::host::HostAppService &host_service,
       AMApplication::terminal::TermAppService &terminal_service,
       AMApplication::var::VarAppService &var_service,
       AMInterface::var::VarInterfaceService &var_interface_service,
-      AMInterface::style::AMStyleService &style_service,
       AMApplication::prompt::PromptProfileManager &prompt_profile_manager,
       AMApplication::transfer::TransferAppService &transfer_service)
       : client_service_(client_service), host_service_(host_service),
         terminal_service_(terminal_service), var_service_(var_service),
         var_interface_service_(var_interface_service),
-        style_service_(style_service),
         prompt_profile_manager_(prompt_profile_manager),
         transfer_service_(transfer_service) {}
-  ~CompletionRuntimeAdapter() override = default;
+  ~InputSemanticRuntimeAdapter() override = default;
 
   [[nodiscard]] AMDomain::client::ClientHandle CurrentClient() const override;
   [[nodiscard]] std::string CurrentNickname() const override;
@@ -48,6 +45,7 @@ public:
   [[nodiscard]] std::vector<std::string>
   ListChannelNames(const std::string &terminal_nickname) const override;
   [[nodiscard]] bool HostExists(const std::string &nickname) const override;
+  [[nodiscard]] bool PoolExists(const std::string &nickname) const override;
   [[nodiscard]] bool TerminalExists(const std::string &nickname) const override;
   [[nodiscard]] TerminalNameState
   QueryTerminalNameState(const std::string &nickname) const override;
@@ -61,8 +59,11 @@ public:
   [[nodiscard]] std::string CurrentVarDomain() const override;
   [[nodiscard]] std::vector<AMDomain::var::VarInfo>
   ListVarsByDomain(const std::string &domain) const override;
+  [[nodiscard]] ECMData<AMDomain::var::VarInfo>
+  GetVar(const std::string &zone, const std::string &varname) const override;
 
-  [[nodiscard]] std::vector<int64_t> ListTaskIDs() const override;
+  [[nodiscard]] std::vector<TaskID> ListTaskIDs() const override;
+  [[nodiscard]] std::vector<TaskID> ListPausedTaskIDs() const override;
 
   [[nodiscard]] PromptPathOptions
   ResolvePromptPathOptions(const std::string &nickname) const override;
@@ -71,12 +72,9 @@ public:
   [[nodiscard]] std::string
   BuildPath(AMDomain::client::ClientHandle client,
             const std::string &raw_path) const override;
-  [[nodiscard]] std::string
-  Format(const std::string &text,
-         AMInterface::style::StyleIndex style_index) const override;
-  [[nodiscard]] std::string
-  FormatPath(const std::string &segment,
-             const PathInfo *path_info) const override;
+  [[nodiscard]] ECMData<PathInfo>
+  StatPath(AMDomain::client::ClientHandle client, const std::string &abs_path,
+           int timeout_ms) const override;
 
 private:
   struct TerminalSnapshot_ {
@@ -96,7 +94,6 @@ private:
   AMApplication::terminal::TermAppService &terminal_service_;
   AMApplication::var::VarAppService &var_service_;
   AMInterface::var::VarInterfaceService &var_interface_service_;
-  AMInterface::style::AMStyleService &style_service_;
   AMApplication::prompt::PromptProfileManager &prompt_profile_manager_;
   AMApplication::transfer::TransferAppService &transfer_service_;
   mutable std::mutex terminal_snapshot_mutex_ = {};
@@ -104,4 +101,4 @@ private:
       terminal_snapshots_ = {};
 };
 
-} // namespace AMInterface::completion
+} // namespace AMInterface::input

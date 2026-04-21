@@ -60,67 +60,55 @@ struct CLIPromptIconsStyle {
   std::string macos = "";
 };
 
-struct CLIPromptNamedStyles {
-  std::string un = "";
-  std::string at = "";
-  std::string hn = "";
-  std::string en = "";
-  std::string nn = "";
-  std::string cwd = "";
-  std::string ds = "";
-  std::string white = "";
-};
-
 struct CLIPromptStyle {
-  // deprecated: use named_styles
   CLIPromptShortcutStyle shortcut = {};
   CLIPromptIconsStyle icons = {};
-  CLIPromptNamedStyles named_styles = {};
   PromptTemplateStyle prompt_template = {};
 };
 
 struct InputHighlightStyle {
-  std::string protocol = "";
-  std::string abort = "";
-  std::string common = "";
-  std::string module = "";
-  std::string command = "";
-  std::string unexpected = "";
-  // deprecated: use unexpected
-  std::string illegal_command = "";
-  std::string option = "";
-  std::string string = "";
-  std::string public_varname = "";
-  std::string private_varname = "";
-  std::string nonexistent_varname = "";
+  std::string default_style = "";
+  std::string type_string = "";
+  std::string type_number = "";
+  std::string type_protocol = "";
+  std::string type_username = "";
+  std::string type_abort = "";
+  std::string type_hostname = "";
+  std::string type_shell_cmd = "";
+  std::string sign_escaped = "";
+  std::string sign_bang = "";
+  std::string cli_command = "";
+  std::string cli_unexpected = "";
+  std::string cli_module = "";
+  std::string cli_option = "";
+  std::string varname_public = "";
+  std::string varname_private = "";
+  std::string varname_nonexistent = "";
+  std::string varname_dollar = "";
+  std::string varname_left_brace = "";
+  std::string varname_right_brace = "";
+  std::string varname_colon = "";
+  std::string varname_equal = "";
   std::string varvalue = "";
-  std::string nickname = "";
-  std::string disconnected_nickname = "";
-  std::string unestablished_nickname = "";
-  std::string nonexistent_nickname = "";
-  std::string valid_new_nickname = "";
-  std::string invalid_new_nickname = "";
-  std::string builtin_arg = "";
-  std::string nonexistent_builtin_arg = "";
-  std::string username = "";
-  std::string atsign = "";
-  std::string dollarsign = "";
-  std::string equalsign = "";
-  std::string escapedsign = "";
-  std::string bangsign = "";
-  std::string shell_cmd = "";
-  std::string number = "";
-  std::string timestamp = "";
-  std::string path_like = "";
-  std::string termname = "";
-  std::string disconnected_termname = "";
-  std::string unestablished_termname = "";
-  std::string nonexistent_termname = "";
-  std::string channelname = "";
-  std::string disconnected_channelname = "";
-  std::string nonexistent_channelname = "";
-  std::string valid_new_channelname = "";
-  std::string invalid_new_channelname = "";
+  std::string nickname_ok = "";
+  std::string nickname_at = "";
+  std::string nickname_disconnected = "";
+  std::string nickname_unestablished = "";
+  std::string nickname_nonexistent = "";
+  std::string nickname_new_valid = "";
+  std::string nickname_new_invalid = "";
+  std::string termname_ok = "";
+  std::string termname_at = "";
+  std::string termname_disconnected = "";
+  std::string termname_unestablished = "";
+  std::string termname_nonexistent = "";
+  std::string channelname_ok = "";
+  std::string channelname_disconnected = "";
+  std::string channelname_nonexistent = "";
+  std::string channelname_new_valid = "";
+  std::string channelname_new_invalid = "";
+  std::string attr_valid = "";
+  std::string attr_invalid = "";
 };
 
 struct ValueQueryHighlightStyle {
@@ -135,16 +123,15 @@ struct InternalStyle {
 };
 
 struct PathHighlightStyle {
-  std::string cwd = "";
-  std::string path_str = "";
-  std::string root = "";
-  std::string node_dir_name = "";
-  std::string filename = "";
-  std::string dir = "";
-  std::string regular = "";
-  std::string symlink = "";
-  std::string otherspecial = "";
-  std::string nonexistent = "";
+  std::string default_style = "";
+  std::string tree_root = "";
+  std::string tree_node = "";
+  std::string tree_leaf = "";
+  std::string type_dir = "";
+  std::string type_regular = "";
+  std::string type_symlink = "";
+  std::string type_otherspecial = "";
+  std::string type_nonexistent = "";
 };
 
 struct SystemInfoStyle {

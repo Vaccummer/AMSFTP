@@ -22,9 +22,9 @@ public:
                                  nullptr)
       : command_tree_(command_tree) {
     const auto &style_cfg = style_service.GetInitArg().style;
-    option_style_ = NormalizeStyleTag_(style_cfg.common.option);
-    module_style_ = NormalizeStyleTag_(style_cfg.common.module);
-    command_style_ = NormalizeStyleTag_(style_cfg.common.command);
+    option_style_ = NormalizeStyleTag_(style_cfg.common.cli_option);
+    module_style_ = NormalizeStyleTag_(style_cfg.common.cli_module);
+    command_style_ = NormalizeStyleTag_(style_cfg.common.cli_command);
     comment_style_ = NormalizeStyleTag_(style_cfg.complete_menu.help_style);
     if (comment_style_.empty()) {
       comment_style_ = NormalizeStyleTag_(style_cfg.internal_style.inline_hint);
