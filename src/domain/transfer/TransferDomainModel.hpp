@@ -16,8 +16,8 @@
 
 namespace AMDomain::transfer {
 class UserTransferSet;
-class TaskInfo;
-class TransferTask;
+struct TaskInfo;
+struct TransferTask;
 using TaskID = int64_t;
 using AMDomain::filesystem::PathTarget;
 using TASKS = std::vector<TransferTask>;

@@ -569,6 +569,7 @@ public:
   UpdateOSType(const AMFSI::UpdateOSTypeArgs &args,
                const ControlComponent &control) override {
     (void)args;
+    (void)control;
     ECMData<AMFSI::UpdateOSTypeResult> out = {};
 #ifdef _WIN32
     out.data.os_type = OS_TYPE::Windows;
@@ -652,6 +653,7 @@ public:
   ECMData<AMFSI::RTTResult> GetRTT(const AMFSI::GetRTTArgs &args,
                                    const ControlComponent &control) override {
     (void)args;
+    (void)control;
     ECMData<AMFSI::RTTResult> out = {};
     out.data.rtt_ms = 0.0;
     out.rcm = {EC::UnImplentedMethod, "", "",

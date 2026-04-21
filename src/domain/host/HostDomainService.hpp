@@ -218,7 +218,7 @@ template <typename T>
 }
 template <typename T>
 [[nodiscard]] inline ECM ValidateFieldValue(ClientMetaData::Attr attr,
-                                            T value) {
+                                            T) {
   auto invalid_type = [attr]() -> ECM {
     if (attr == ClientMetaData::Attr::trash_dir ||
         attr == ClientMetaData::Attr::login_dir ||
@@ -231,7 +231,6 @@ template <typename T>
                AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   };
 
-  using DT = std::decay_t<T>;
   constexpr bool kStringLike = std::is_constructible_v<std::string, T>;
 
   if constexpr (kStringLike) {

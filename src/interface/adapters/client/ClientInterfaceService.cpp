@@ -2931,6 +2931,7 @@ ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
         auto host_result =
             host_config_manager_.GetClientConfig(normalized, false);
         if (!(host_result.rcm)) {
+          prompt_io_manager_.ErrorFormat(host_result.rcm);
           return host_result.rcm;
         }
         resolved = NormalizeNickname(host_result.data.request.nickname);
@@ -2953,6 +2954,7 @@ ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
       const ECM get_rcm =
           hostui::ResolveHostConfig_(host_config_manager_, nickname, &entry);
       if (!(get_rcm)) {
+        prompt_io_manager_.ErrorFormat(get_rcm);
         return get_rcm;
       }
       rows.push_back(hostui::BuildHostListRow_(nickname, entry));
@@ -2998,6 +3000,7 @@ ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
     const ECM get_rcm =
         hostui::ResolveHostConfig_(host_config_manager_, nickname, &entry);
     if (!(get_rcm)) {
+      prompt_io_manager_.ErrorFormat(get_rcm);
       return get_rcm;
     }
     render::PrintHostConfigDetail(prompt_io_manager_, nickname, entry,

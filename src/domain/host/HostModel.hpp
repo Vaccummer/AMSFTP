@@ -175,10 +175,11 @@ struct ConRequest {
              std::string hostname, std::string username, int port = 22,
              std::string password = "", std::string keyfile = "",
              bool compression = false, int64_t buffer_size = 0)
-      : nickname(std::move(nickname)), hostname(std::move(hostname)),
-        buffer_size(buffer_size), protocol(protocol), port(port),
-        username(std::move(username)), password(std::move(password)),
-        keyfile(std::move(keyfile)), compression(std::move(compression)) {}
+      : nickname(std::move(nickname)), protocol(protocol),
+        hostname(std::move(hostname)), username(std::move(username)), port(port),
+        password(std::move(password)), keyfile(std::move(keyfile)),
+        buffer_size(buffer_size),
+        compression(compression) {}
 
   [[nodiscard]] std::vector<std::pair<Attr, Value>> GetDict() const {
     std::vector<std::pair<Attr, Value>> out;

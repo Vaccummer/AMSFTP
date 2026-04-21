@@ -42,7 +42,7 @@ DedupPathTargets(const std::vector<PathTarget> &targets) {
   return deduped;
 }
 
-[[nodiscard]] static std::string
+[[maybe_unused]] [[nodiscard]] static std::string
 BuildShellCommand(OS_TYPE os_type, const std::string &cwd,
                   const std::string &command,
                   const std::string &cmd_template) {
@@ -52,6 +52,6 @@ BuildShellCommand(OS_TYPE os_type, const std::string &cwd,
     return command;
   }
   return AMStr::fmt("{}{}", cmd_template, command);
-};
+}
 
 } // namespace AMDomain::filesystem::service

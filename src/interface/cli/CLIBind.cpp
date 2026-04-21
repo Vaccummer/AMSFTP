@@ -754,38 +754,8 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args) {
       &CliTaskArgs::resume, [&args](CommandNode &node) {
         node.AddOption("id", args.task.resume.ids, 1,
                        static_cast<size_t>(-1), "Task IDs");
+        node.AddPositionalRule(0, Sem::PausedTaskId, true);
       });
-
-  task_node->AddFunction(
-      "retry", "Retry a completed task (retry failed entries)", args,
-      &CliArgsPool::task, &CliTaskArgs::retry, [&args](CommandNode &node) {
-        node.AddFlag("-a", "--async", args.task.retry.is_async,
-                     "Submit task asynchronously");
-        node.AddFlag("-q", "--quiet", args.task.retry.quiet,
-                     "Suppress output");
-        node.AddOption("-i", "--index", args.task.retry.indices, 0,
-                       static_cast<size_t>(-1), Sem::None,
-                       "1-based task indices to retry");
-        node.AddOption("id", args.task.retry.id, 1, 1, "Task ID", true);
-        node.AddPositionalRule(0, Sem::TaskId, false);
-      });
-
-  root->AddFunction("retry",
-                    "Retry a completed but failed task (retry failed entries)",
-                    args, &CliArgsPool::task, &CliTaskArgs::retry,
-                    [&args](CommandNode &node) {
-                      node.AddFlag("-a", "--async", args.task.retry.is_async,
-                                   "Submit task asynchronously");
-                      node.AddFlag("-q", "--quiet", args.task.retry.quiet,
-                                   "Suppress output");
-                      node.AddOption("-i", "--index", args.task.retry.indices,
-                                     0, static_cast<size_t>(-1),
-                                     Sem::None,
-                                     "1-based task indices to retry");
-                      node.AddOption("id", args.task.retry.id, 1, 1, "Task ID",
-                                     true);
-                      node.AddPositionalRule(0, Sem::TaskId, false);
-                    });
 
   args.task.terminate.action = TaskControlArgs::Action::Terminate;
   args.task.pause.action = TaskControlArgs::Action::Pause;

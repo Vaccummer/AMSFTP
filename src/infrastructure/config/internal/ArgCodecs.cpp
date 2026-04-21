@@ -1399,7 +1399,7 @@ void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
   }
 }
 
-Json EncodeInputHighlight_(const InputHighlightStyle &in) {
+[[maybe_unused]] Json EncodeInputHighlight_(const InputHighlightStyle &in) {
   Json out = Json::object();
   out["protocol"] = in.protocol;
   out["abort"] = in.abort;

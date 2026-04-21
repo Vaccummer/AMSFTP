@@ -4,6 +4,7 @@ project(AMSFTP LANGUAGES C CXX)
 option(AMSFTP_ENABLE_LAYER_CHECK
        "Enable Workflow-0 layered include dependency check target"
        ON)
+option(AMSFTP_BUILD_TESTS "Build AMSFTP tests" ON)
 set(AMSFTP_LINK_MODE "dynamic" CACHE STRING
     "Link mode for AMSFTP dependencies: dynamic or static")
 set_property(CACHE AMSFTP_LINK_MODE PROPERTY STRINGS dynamic static)
@@ -50,6 +51,11 @@ list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/dep/.*\\.(cpp|cc|cxx)$")
 list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/.*\\.dep\\.(cpp|cc|cxx)$")
 list(APPEND AMSFTP_SOURCES
   "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c"
+)
+set_source_files_properties(
+  "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c"
+  PROPERTIES
+    COMPILE_OPTIONS "/W0"
 )
 
 add_executable(amsftp ${AMSFTP_SOURCES})

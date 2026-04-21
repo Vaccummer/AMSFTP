@@ -596,7 +596,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
               {AMStr::fmt("{} {}", styled_label, latest_size)});
           return true;
         },
-        [this](const PathTarget &error_path, ECM rcm) {
+        [this](const PathTarget &, ECM rcm) {
           prompt_io_manager_.ErrorFormat(rcm);
         });
 
@@ -636,7 +636,7 @@ ECM FilesystemInterfaceSerivce::Find(
   ECM status = OK;
   auto result = filesystem_service_.find(
       split_result.data, SearchType::All, control, {},
-      [this, &status](const PathTarget &error_path, ECM rcm) {
+      [this, &status](const PathTarget &, ECM rcm) {
         prompt_io_manager_.ErrorFormat(rcm);
         status = MergeStatus_(status, rcm);
       });
@@ -735,7 +735,7 @@ ECM FilesystemInterfaceSerivce::Tree(
     const FilesystemTreeArg &arg,
     const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  const auto print_error = [&](const std::string &label, const ECM &rcm) {
+  const auto print_error = [&](const std::string &, const ECM &rcm) {
     if (!arg.quiet) {
       prompt_io_manager_.ErrorFormat(rcm);
     }
@@ -1299,7 +1299,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
   }
 
   auto execute_result = filesystem_service_.ExecuteRmfile(
-      prepare_result.data, control, [this](const PathTarget &path, ECM rcm) {
+      prepare_result.data, control, [this](const PathTarget &, ECM rcm) {
         prompt_io_manager_.ErrorFormat(rcm);
       });
   return MergeStatus_(status, execute_result.rcm);
@@ -1354,7 +1354,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
   }
 
   auto rmdir_result = filesystem_service_.Rmdir(
-      std::move(targets), control, [this](const PathTarget &path, ECM rcm) {
+      std::move(targets), control, [this](const PathTarget &, ECM rcm) {
         prompt_io_manager_.ErrorFormat(rcm);
       });
   return MergeStatus_(status, rmdir_result.rcm);
@@ -1433,7 +1433,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
         prompt_io_manager_.RefreshRender(
             {AMStr::fmt("Removing {}", interface_print::BuildPathLabel(path))});
       },
-      [this, &arg](const PathTarget &path, ECM rcm) {
+      [this, &arg](const PathTarget &, ECM rcm) {
         if (!arg.quiet) {
           prompt_io_manager_.ErrorFormat(rcm);
         }

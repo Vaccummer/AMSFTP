@@ -130,8 +130,7 @@ public:
     static_assert(!std::is_reference_v<ValueT>,
                   "StoreTypedValue expects value-like type");
     return StoreTypedData(std::type_index(typeid(ValueT)),
-                          std::move(std::any(std::forward<T>(value))),
-                          overwrite);
+                          std::any(std::forward<T>(value)), overwrite);
   }
 
   template <typename T>
@@ -140,8 +139,7 @@ public:
     using ValueT = std::decay_t<T>;
     static_assert(!std::is_reference_v<ValueT>,
                   "StoreNamedValue expects value-like type");
-    return StoreNamedData(name, std::move(std::any(std::forward<T>(value))),
-                          overwrite);
+    return StoreNamedData(name, std::any(std::forward<T>(value)), overwrite);
   }
 
   /**

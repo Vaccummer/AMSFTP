@@ -3,7 +3,7 @@
 #include <string>
 
 namespace AMDomain::var {
-class ParsedVarToken;
+struct ParsedVarToken;
 using VarSet = std::map<std::string, std::map<std::string, std::string>>;
 using VarRef = ParsedVarToken;
 inline constexpr const char *kRoot = "UserVars";

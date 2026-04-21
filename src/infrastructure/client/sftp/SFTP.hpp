@@ -557,7 +557,7 @@ public:
 
   void Signal() {
     SOCKET wake_sock = INVALID_SOCKET;
-    Backend backend = Backend::None;
+    [[maybe_unused]] Backend backend = Backend::None;
     {
       std::lock_guard<std::mutex> lock(mtx_);
       wake_sock = write_sock_;
@@ -592,7 +592,7 @@ public:
 
   void Drain() {
     auto wake_sock = INVALID_SOCKET;
-    Backend backend = Backend::None;
+    [[maybe_unused]] Backend backend = Backend::None;
     {
       std::lock_guard<std::mutex> lock(mtx_);
       wake_sock = read_sock_;
@@ -1300,6 +1300,7 @@ protected:
 
   ECM ErrorRecord(int code, TraceLevel level, const std::string &taregt,
                   const std::string &action) {
+    (void)level;
     ECM rcm = OK;
     if (code >= 0) {
       return rcm;
@@ -1316,6 +1317,7 @@ protected:
   template <typename T>
   ECM ErrorRecord(const NBResult<T> &result, TraceLevel level,
                   const std::string &target, const std::string &action) {
+    (void)level;
     ECM rcm = result.rcm;
     if (!result) {
       rcm.operation = action;
@@ -2061,6 +2063,7 @@ protected:
    */
 
   ECM _precheck(const std::string &path, const ControlComponent &control) {
+    (void)control;
     if (path.empty()) {
       return {EC::InvalidArg, "_precheck", "<empty>", "Invalid path"};
     }
