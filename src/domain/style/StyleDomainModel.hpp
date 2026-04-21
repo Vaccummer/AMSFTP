@@ -83,6 +83,7 @@ struct InputHighlightStyle {
   std::string cli_option = "";
   std::string varname_public = "";
   std::string varname_private = "";
+  std::string varname_zone = "";
   std::string varname_nonexistent = "";
   std::string varname_dollar = "";
   std::string varname_left_brace = "";

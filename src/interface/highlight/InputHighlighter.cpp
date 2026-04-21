@@ -95,15 +95,7 @@ std::optional<StyleIndex> ResolveStyleIndex_(TokenRole role, TokenState state) {
     return state == TokenState::Missing ? StyleIndex::NonexistentVarname
                                         : StyleIndex::PublicVarname;
   case TokenRole::VariableZone:
-    switch (state) {
-    case TokenState::Valid:
-      return StyleIndex::Nickname;
-    case TokenState::Unestablished:
-      return StyleIndex::UnestablishedNickname;
-    case TokenState::Nonexistent:
-    default:
-      return StyleIndex::NonexistentNickname;
-    }
+    return StyleIndex::VarnameZone;
   case TokenRole::VariableValue:
     return StyleIndex::VarValue;
   case TokenRole::AtSign:
@@ -186,68 +178,76 @@ void AppendStyledRange_(const AMInterface::style::AMStyleService *style_service,
   out->append(style_service->Format(text, *style_index));
 }
 
+void RenderVarTokenText_(const AMInterface::style::AMStyleService *style_service,
+                         const std::string &raw, TokenState state,
+                         TokenRole fallback_role, std::string *out) {
+  if (raw.empty() || raw.front() != '$') {
+    AppendStyledRange_(style_service, out, raw, fallback_role, state);
+    return;
+  }
+
+  AppendStyledRange_(style_service, out, "$",
+                     TokenRole::DollarSign, TokenState::Neutral);
+  const bool braced = raw.size() >= 2 && raw[1] == '{';
+  if (braced) {
+    AppendStyledRange_(style_service, out, "{",
+                       TokenRole::LeftBrace, TokenState::Neutral);
+  }
+
+  const size_t body_begin = braced ? 2 : 1;
+  if (body_begin >= raw.size()) {
+    return;
+  }
+
+  size_t body_end = raw.size();
+  const bool closed = braced && raw.back() == '}';
+  if (closed) {
+    --body_end;
+  }
+  if (body_end < body_begin) {
+    body_end = body_begin;
+  }
+
+  const std::string body = raw.substr(body_begin, body_end - body_begin);
+  const size_t colon = body.find(':');
+  if (colon == std::string::npos) {
+    AppendStyledRange_(style_service, out, body, TokenRole::VariableName,
+                       state);
+  } else {
+    const std::string zone = body.substr(0, colon);
+    AppendStyledRange_(style_service, out, zone, TokenRole::VariableZone,
+                       state == TokenState::Missing
+                           ? TokenState::Nonexistent
+                           : TokenState::Valid);
+    AppendStyledRange_(style_service, out, ":", TokenRole::ColonSign,
+                       TokenState::Neutral);
+    AppendStyledRange_(style_service, out, body.substr(colon + 1),
+                       TokenRole::VariableName, state);
+  }
+
+  if (closed) {
+    AppendStyledRange_(style_service, out, "}", TokenRole::RightBrace,
+                       TokenState::Neutral);
+  }
+}
+
 void RenderVarReference_(const AMInterface::style::AMStyleService *style_service,
                          const std::string &input, const AnalyzedToken &token,
                          std::string *out) {
   const std::string raw = input.substr(token.raw.start, token.raw.end - token.raw.start);
-  size_t parsed_end = 0;
-  AMDomain::var::VarRef ref = {};
-  if (!AMDomain::var::ParseVarRefAt(raw, 0, raw.size(), true, true, &parsed_end,
-                                    &ref) ||
-      !ref.valid || parsed_end == 0) {
-    AppendStyledRange_(style_service, out, raw, token.role, token.state);
-    return;
-  }
-
-  size_t cursor = 0;
-  AppendStyledRange_(style_service, out, raw.substr(cursor, 1),
-                     TokenRole::DollarSign, TokenState::Neutral);
-  cursor += 1;
-  if (ref.braced && cursor < parsed_end) {
-    AppendStyledRange_(style_service, out, raw.substr(cursor, 1),
-                       TokenRole::LeftBrace, TokenState::Neutral);
-    ++cursor;
-  }
-
-  if (ref.explicit_domain) {
-    const size_t body_begin = ref.braced ? 2 : 1;
-    size_t body_end = std::min(parsed_end, raw.size());
-    if (body_end > 0 && raw[body_end - 1] == '}') {
-      --body_end;
-    }
-    const std::string body = raw.substr(body_begin, body_end - body_begin);
-    const size_t colon = body.find(':');
-    if (colon != std::string::npos) {
-      const std::string zone = body.substr(0, colon);
-      AppendStyledRange_(style_service, out, zone, TokenRole::VariableZone,
-                         token.state == TokenState::Missing ? TokenState::Nonexistent
-                                                            : TokenState::Valid);
-      AppendStyledRange_(style_service, out, ":", TokenRole::ColonSign,
+  const size_t eq = raw.find('=');
+  if (eq != std::string::npos) {
+    const std::string lhs = raw.substr(0, eq);
+    if (AMDomain::var::ParseVarToken(lhs)) {
+      RenderVarTokenText_(style_service, lhs, token.state, token.role, out);
+      AppendStyledRange_(style_service, out, "=", TokenRole::EqualSign,
                          TokenState::Neutral);
-      AppendStyledRange_(style_service, out, body.substr(colon + 1),
-                         TokenRole::VariableName, token.state);
-    } else {
-      AppendStyledRange_(style_service, out, body, TokenRole::VariableName,
-                         token.state);
+      AppendStyledRange_(style_service, out, raw.substr(eq + 1),
+                         TokenRole::VariableValue, TokenState::Neutral);
+      return;
     }
-  } else {
-    const size_t body_begin = ref.braced ? 2 : 1;
-    size_t body_end = std::min(parsed_end, raw.size());
-    if (ref.braced && body_end > 0 && raw[body_end - 1] == '}') {
-      --body_end;
-    }
-    AppendStyledRange_(style_service, out, raw.substr(body_begin, body_end - body_begin),
-                       TokenRole::VariableName, token.state);
   }
-
-  if (ref.braced && parsed_end <= raw.size() && parsed_end > 0 &&
-      raw[parsed_end - 1] == '}') {
-    AppendStyledRange_(style_service, out, "}", TokenRole::RightBrace,
-                       TokenState::Neutral);
-  }
-  if (parsed_end < raw.size()) {
-    out->append(EscapeBbcode_(raw.substr(parsed_end)));
-  }
+  RenderVarTokenText_(style_service, raw, token.state, token.role, out);
 }
 
 void RenderPath_(const AMInterface::style::AMStyleService *style_service,

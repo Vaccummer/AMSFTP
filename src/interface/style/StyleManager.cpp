@@ -30,6 +30,8 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.common.varname_public;
   case StyleIndex::PrivateVarname:
     return &cfg.common.varname_private;
+  case StyleIndex::VarnameZone:
+    return &cfg.common.varname_zone;
   case StyleIndex::NonexistentVarname:
     return &cfg.common.varname_nonexistent;
   case StyleIndex::VarValue:

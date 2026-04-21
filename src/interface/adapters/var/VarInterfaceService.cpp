@@ -2,6 +2,8 @@
 #include "domain/var/VarDomainService.hpp"
 #include "foundation/tools/string.hpp"
 
+#include <algorithm>
+
 namespace AMInterface::var {
 namespace {
 enum class ShortcutVarKind { None, GetVar, ListAll, ListDomain };
@@ -84,13 +86,23 @@ std::string JoinValueWithTail_(const std::string &first_segment,
   out.append(tail);
   return out;
 }
+
+std::string VarDisplayName_(const VarInfo &info) {
+  return "$" + info.varname;
+}
+
+AMInterface::style::StyleIndex VarNameStyle_(const VarInfo &info) {
+  return info.IsPublic() ? AMInterface::style::StyleIndex::PublicVarname
+                         : AMInterface::style::StyleIndex::PrivateVarname;
+}
 } // namespace
 
 VarInterfaceService::VarInterfaceService(VarAppService &var_service,
                                          ClientAppService &client_service,
-                                         PromptIOManager &prompt_io_manager)
+                                         PromptIOManager &prompt_io_manager,
+                                         AMStyleService &style_service)
     : var_service_(var_service), client_service_(client_service),
-      prompt_io_manager_(prompt_io_manager) {}
+      prompt_io_manager_(prompt_io_manager), style_service_(style_service) {}
 
 ECM VarInterfaceService::ReportError_(ECM rcm) const {
   if (rcm.code != EC::Success) {
@@ -197,8 +209,7 @@ ECM VarInterfaceService::QueryAndPrintVar(const std::string &token_expr) const {
   if (!(info.rcm)) {
     return ReportError_(info.rcm);
   }
-  prompt_io_manager_.FmtPrint("[{}] ${} = {}", info.data.domain,
-                              info.data.varname, info.data.varvalue);
+  PrintVars_({info.data});
   return OK;
 }
 
@@ -271,13 +282,13 @@ ECM VarInterfaceService::DeleteVar(
 
 ECM VarInterfaceService::ListVars(
     const std::vector<std::string> &sections) const {
-  const auto print_zone =
-      [this](const std::string &zone_name,
-             const AMApplication::var::ZoneVarInfoMap &zone_vars) {
-        prompt_io_manager_.FmtPrint("\\[{}]", zone_name);
+  std::vector<VarInfo> rows = {};
+  const auto append_zone =
+      [&rows](const AMApplication::var::ZoneVarInfoMap &zone_vars) {
+        rows.reserve(rows.size() + zone_vars.size());
         for (const auto &[name, info] : zone_vars) {
           (void)name;
-          prompt_io_manager_.FmtPrint("${} = {}", info.varname, info.varvalue);
+          rows.push_back(info);
         }
       };
 
@@ -287,8 +298,10 @@ ECM VarInterfaceService::ListVars(
       return ReportError_(all_vars.rcm);
     }
     for (const auto &[zone_name, zone_vars] : all_vars.data) {
-      print_zone(zone_name, zone_vars);
+      (void)zone_name;
+      append_zone(zone_vars);
     }
+    PrintVars_(rows);
     return OK;
   }
 
@@ -300,9 +313,52 @@ ECM VarInterfaceService::ListVars(
       last = zone_vars.rcm;
       continue;
     }
-    print_zone(zone, zone_vars.data);
+    append_zone(zone_vars.data);
   }
+  PrintVars_(rows);
   return last;
+}
+
+void VarInterfaceService::PrintVars_(const std::vector<VarInfo> &vars) const {
+  if (vars.empty()) {
+    prompt_io_manager_.Print(
+        style_service_.Format("No variables", AMInterface::style::StyleIndex::Common));
+    return;
+  }
+
+  size_t zone_width = AMStr::DisplayWidthUtf8("Zone");
+  size_t name_width = AMStr::DisplayWidthUtf8("Variable");
+  size_t value_width = AMStr::DisplayWidthUtf8("Value");
+  for (const auto &info : vars) {
+    zone_width = std::max(zone_width, AMStr::DisplayWidthUtf8(info.domain));
+    name_width =
+        std::max(name_width, AMStr::DisplayWidthUtf8(VarDisplayName_(info)));
+    value_width = std::max(value_width, AMStr::DisplayWidthUtf8(info.varvalue));
+  }
+
+  const auto style_header = [this](const std::string &text, size_t width) {
+    return style_service_.Format(AMStr::PadRightUtf8(text, width),
+                                 AMInterface::style::StyleIndex::BuiltinArg);
+  };
+  std::string header =
+      style_header("Zone", zone_width) + "  " +
+      style_header("Variable", name_width) + "  " +
+      style_header("Value", value_width);
+  prompt_io_manager_.Print(header);
+
+  for (const auto &info : vars) {
+    const std::string zone = AMStr::PadRightUtf8(info.domain, zone_width);
+    const std::string raw_name = VarDisplayName_(info);
+    const std::string padded_name = AMStr::PadRightUtf8(raw_name, name_width);
+    const std::string value = AMStr::PadRightUtf8(info.varvalue, value_width);
+
+    std::string line =
+        style_service_.Format(zone, AMInterface::style::StyleIndex::VarnameZone) +
+        "  " + style_service_.Format(padded_name, VarNameStyle_(info)) +
+        "  " +
+        style_service_.Format(value, AMInterface::style::StyleIndex::VarValue);
+    prompt_io_manager_.Print(line);
+  }
 }
 
 ECMData<std::string>

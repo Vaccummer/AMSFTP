@@ -290,6 +290,7 @@ void NormalizeInputHighlight(InputHighlightStyle *style) {
   NormalizeStyleToken(&style->cli_option, defaults.cli_option);
   NormalizeStyleToken(&style->varname_public, defaults.varname_public);
   NormalizeStyleToken(&style->varname_private, defaults.varname_private);
+  NormalizeStyleToken(&style->varname_zone, defaults.varname_zone);
   NormalizeStyleToken(&style->varname_nonexistent,
                       defaults.varname_nonexistent);
   NormalizeStyleToken(&style->varname_dollar, defaults.varname_dollar);

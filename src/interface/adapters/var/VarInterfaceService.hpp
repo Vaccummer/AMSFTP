@@ -4,11 +4,13 @@
 #include "application/var/VarAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "interface/prompt/Prompt.hpp"
+#include "interface/style/StyleManager.hpp"
 
 namespace AMInterface::var {
 using VarAppService = AMApplication::var::VarAppService;
 using ClientAppService = AMApplication::client::ClientAppService;
 using PromptIOManager = AMInterface::prompt::PromptIOManager;
+using AMStyleService = AMInterface::style::AMStyleService;
 using ParsedVarToken = AMDomain::var::ParsedVarToken;
 using VarInfo = AMDomain::var::VarInfo;
 using AllVarInfoMap = AMApplication::var::AllVarInfoMap;
@@ -17,7 +19,8 @@ class VarInterfaceService final : public NonCopyableNonMovable {
 public:
   VarInterfaceService(VarAppService &var_service,
                       ClientAppService &client_service,
-                      PromptIOManager &prompt_io_manager);
+                      PromptIOManager &prompt_io_manager,
+                      AMStyleService &style_service);
   ~VarInterfaceService() override = default;
 
   [[nodiscard]] ECMData<ParsedVarToken>
@@ -42,6 +45,7 @@ public:
 private:
   [[nodiscard]] ECM ReportError_(ECM rcm) const;
   [[nodiscard]] std::string ResolveCurrentDomain_() const;
+  void PrintVars_(const std::vector<VarInfo> &vars) const;
   [[nodiscard]] ECMData<std::string>
   LookupVarValue_(const ParsedVarToken &token,
                   const AllVarInfoMap &all_vars) const;
@@ -52,5 +56,6 @@ private:
   VarAppService &var_service_;
   ClientAppService &client_service_;
   PromptIOManager &prompt_io_manager_;
+  AMStyleService &style_service_;
 };
 } // namespace AMInterface::var
