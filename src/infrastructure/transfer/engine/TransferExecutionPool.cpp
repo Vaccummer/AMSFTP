@@ -155,6 +155,7 @@ void TransferExecutionPool::HandleCompletedTask(const TaskHandle &task_info) {
   if (!task_info || !task_info->TryMarkCompletionDispatched()) {
     return;
   }
+  task_info->NotifyCompletionWakeups();
   task_info->Core.clients.ReleaseAll();
   if (task_info->Callback.result) {
     CallCallbackSafe(task_info->Callback.result, task_info);

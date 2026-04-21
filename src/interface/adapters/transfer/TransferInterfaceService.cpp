@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <semaphore>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -28,8 +29,8 @@ using TaskInfo = AMDomain::transfer::TaskInfo;
 using TransferTask = AMDomain::transfer::TransferTask;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 
-constexpr int kTaskPollIntervalMs = 80;
-constexpr int kMinTaskRefreshIntervalMs = 30;
+constexpr int kTaskPollIntervalMs = 1000;
+constexpr int kMinTaskRefreshIntervalMs = 1000;
 
 std::string NormalizeNickname_(const std::string &nickname) {
   return AMDomain::host::HostService::NormalizeNickname(nickname);
@@ -177,9 +178,10 @@ std::string ResolveStopLabel_(EC code) {
   return "Terminated";
 }
 
-void WriteTransientHttpRuntimeMetadata_(
-    AMDomain::client::IClientPort &client, const std::string &proxy,
-    int max_redirect_times, const std::string &bear_token) {
+void WriteTransientHttpRuntimeMetadata_(AMDomain::client::IClientPort &client,
+                                        const std::string &proxy,
+                                        int max_redirect_times,
+                                        const std::string &bear_token) {
   auto &metadata = client.MetaDataPort();
   (void)metadata.StoreNamedData("http.proxy", proxy, true);
   (void)metadata.StoreNamedData("http.max_redirect_times",
@@ -1263,7 +1265,7 @@ ECM TransferInterfaceService::WaitTask_(
         prompt->RefreshEnd();
       }
     }
-  } scoped_refresh{&prompt_io_manager_, false};
+  } scoped_refresh(&prompt_io_manager_, false);
 
   struct ScopedCursor_ {
     AMInterface::prompt::PromptIOManager *prompt = nullptr;
@@ -1273,7 +1275,7 @@ ECM TransferInterfaceService::WaitTask_(
         prompt->SetCursorVisible(true);
       }
     }
-  } scoped_cursor{&prompt_io_manager_, false};
+  } scoped_cursor(&prompt_io_manager_, false);
 
   auto build_bar = [this, &task_info]() -> std::unique_ptr<BaseProgressBar> {
     const auto total_size = static_cast<int64_t>(
@@ -1368,6 +1370,35 @@ ECM TransferInterfaceService::WaitTask_(
     return rcm;
   };
 
+  std::counting_semaphore<8> completion_wakeup(0);
+  const size_t completion_token =
+      task_info->RegisterCompletionWakeup([&completion_wakeup]() {
+        completion_wakeup.release();
+      });
+  struct ScopedCompletionWakeup_ {
+    TaskInfo *task_info = nullptr;
+    size_t token = 0;
+    ~ScopedCompletionWakeup_() {
+      if (task_info != nullptr && token != 0) {
+        (void)task_info->UnregisterCompletionWakeup(token);
+      }
+    }
+  } scoped_completion_wakeup{task_info.get(), completion_token};
+
+  const auto control_token = control.ControlToken();
+  const AMDomain::client::InterruptWakeupSafeGuard interrupt_wakeup_guard(
+      control_token, [&completion_wakeup]() { completion_wakeup.release(); });
+
+  auto resolve_wait_ms = [&]() -> int {
+    if (show_progress) {
+      return std::max(1, refresh_ms);
+    }
+    if (const auto remain_ms = control.RemainingTimeMs(); remain_ms.has_value()) {
+      return static_cast<int>(std::max<size_t>(1, std::min<size_t>(*remain_ms, 2000)));
+    }
+    return 2000;
+  };
+
   while (true) {
     const auto status = task_info->GetStatus();
     if (status == AMDomain::transfer::TaskStatus::Finished) {
@@ -1392,7 +1423,9 @@ ECM TransferInterfaceService::WaitTask_(
       prompt_io_manager_.RefreshRender({last_progress_line});
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
+    const int wait_ms = resolve_wait_ms();
+    (void)completion_wakeup.try_acquire_for(
+        std::chrono::milliseconds(std::max(1, wait_ms)));
   }
 }
 

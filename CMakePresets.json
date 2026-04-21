@@ -32,6 +32,38 @@
                 "VCPKG_TARGET_TRIPLET": "x64-windows-static",
                 "CMAKE_TOOLCHAIN_FILE": "D:/compiler/vcpkg/scripts/buildsystems/vcpkg.cmake"
             }
+        },
+        {
+            "name": "win-clang-release",
+            "displayName": "Windows clang Release (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER": "clang-cl",
+                "CMAKE_CXX_COMPILER": "clang-cl",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "AMSFTP_BUILD_TESTS": "ON",
+                "AMSFTP_LINK_MODE": "dynamic",
+                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "CMAKE_TOOLCHAIN_FILE": "D:/compiler/vcpkg/scripts/buildsystems/vcpkg.cmake"
+            }
+        },
+        {
+            "name": "win-clang-static-release",
+            "displayName": "Windows clang Static Release (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER": "clang-cl",
+                "CMAKE_CXX_COMPILER": "clang-cl",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "AMSFTP_BUILD_TESTS": "ON",
+                "AMSFTP_LINK_MODE": "static",
+                "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+                "CMAKE_TOOLCHAIN_FILE": "D:/compiler/vcpkg/scripts/buildsystems/vcpkg.cmake"
+            }
         }
     ],
     "buildPresets": [
@@ -42,6 +74,14 @@
         {
             "name": "win-clang-static-debug",
             "configurePreset": "win-clang-static-debug"
+        },
+        {
+            "name": "win-clang-release",
+            "configurePreset": "win-clang-release"
+        },
+        {
+            "name": "win-clang-static-release",
+            "configurePreset": "win-clang-static-release"
         }
     ],
     "testPresets": [
@@ -52,6 +92,14 @@
         {
             "name": "win-clang-static-debug",
             "configurePreset": "win-clang-static-debug"
+        },
+        {
+            "name": "win-clang-release",
+            "configurePreset": "win-clang-release"
+        },
+        {
+            "name": "win-clang-static-release",
+            "configurePreset": "win-clang-static-release"
         }
     ]
 }
