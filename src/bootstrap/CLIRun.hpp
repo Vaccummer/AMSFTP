@@ -1,29 +1,21 @@
 #pragma once
 
-#include "CLI/CLI.hpp"
-#include "bootstrap/BootstrapServices.hpp"
+#include "bootstrap/AppRuntime.hpp"
 #include "interface/cli/CLIBind.hpp"
 #include "interface/cli/CliParseFlow.hpp"
 #include "interface/cli/InteractiveLoop.hpp"
-#include "interface/cli/MainHelpFormatter.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <atomic>
 
 namespace AMBootstrap {
-inline int RunCLI(BootstrapServices &runtime, int argc, char **argv) {
-  runtime.cli_app = std::make_unique<CLI::App>("AMSFTP CLI", runtime.app_name);
-  runtime.cli_app->set_version_flag("--version", "Show version information");
-  runtime.cli_app->allow_windows_style_options(false);
-  runtime.command_tree = {};
-  runtime.cli_args_pool = {};
-  runtime.cli_commands = AMInterface::cli::BindCliOptions(
-      *runtime.cli_app, runtime.cli_args_pool, runtime.command_tree);
+inline int RunCLI(AppRuntime &runtime, int argc, char **argv) {
+  if (!runtime.cli_app || !runtime.cli_commands.app || !runtime.cli_commands.args) {
+    return static_cast<int>(EC::InvalidHandle);
+  }
 
   const AMInterface::style::AMStyleService *style_service = nullptr;
   if (runtime.managers.interfaces.style_service.IsReady()) {
     style_service = &runtime.managers.interfaces.style_service.Get();
-    AMInterface::cli::InstallMainHelpFormatter(*runtime.cli_app, *style_service,
-                                               &runtime.command_tree);
   }
 
   const auto parse_outcome = AMInterface::cli::ParseCliArgv(
