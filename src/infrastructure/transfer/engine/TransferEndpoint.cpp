@@ -10,6 +10,7 @@
 #include "infrastructure/transfer/engine/TransferExecutionDetail.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <curl/curl.h>
@@ -129,60 +130,99 @@ using AMDomain::transfer::TaskID;
 using TaskRegistry = AMAtomic<std::unordered_map<TaskID, TaskHandle>>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TransferBufferPolicy = AMInfra::transfer::TransferBufferPolicy;
-using SftpWriteStats = AMInfra::transfer::SftpWriteStats;
+using SftpWriteTuning = AMInfra::transfer::SftpWriteTuning;
 constexpr const char *kHttpUserAgent = "amsftp-wget/1.0";
 constexpr const char *kHttpProxyKey = "http.proxy";
 constexpr const char *kHttpMaxRedirectTimesKey = "http.max_redirect_times";
 constexpr const char *kHttpBearerTokenKey = "http.bear_token";
+constexpr std::array<size_t, 9> kSftpWriteQuantumBuckets = {
+    16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024,
+    512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024};
+constexpr size_t kSftpQuantumDownshiftEagainThreshold = 8;
+constexpr size_t kSftpQuantumDownshiftShortThreshold = 3;
+constexpr size_t kSftpQuantumUpshiftGoodThreshold = 4;
 
-void NoteSftpWriteRequest_(RuntimeProgress *pd, size_t request_size) {
-  if (pd == nullptr || pd->sftp_write_stats == nullptr || request_size == 0) {
-    return;
+SftpWriteTuning *EnsureSftpWriteTuning_(RuntimeProgress *pd) {
+  if (pd == nullptr) {
+    return nullptr;
   }
-  auto &stats = *pd->sftp_write_stats;
-  ++stats.write_requests;
-  stats.logical_requested_bytes += static_cast<uint64_t>(request_size);
-  stats.max_request_bytes =
-      std::max<uint64_t>(stats.max_request_bytes, request_size);
+  if (!pd->sftp_write_tuning) {
+    pd->sftp_write_tuning = std::make_shared<SftpWriteTuning>();
+  }
+  return pd->sftp_write_tuning.get();
 }
 
-void NoteSftpWriteAttempt_(RuntimeProgress *pd, size_t request_size,
-                           ssize_t rc) {
-  if (pd == nullptr || pd->sftp_write_stats == nullptr || request_size == 0) {
+size_t ResolveSftpWriteQuantum_(RuntimeProgress *pd, size_t requested_size) {
+  if (requested_size == 0) {
+    return 0;
+  }
+  auto *tuning = EnsureSftpWriteTuning_(pd);
+  if (tuning == nullptr) {
+    return requested_size;
+  }
+  const size_t bucket_index =
+      std::min(tuning->bucket_index, kSftpWriteQuantumBuckets.size() - 1);
+  return std::min(requested_size, kSftpWriteQuantumBuckets[bucket_index]);
+}
+
+void AdjustSftpWriteQuantum_(RuntimeProgress *pd, size_t request_size,
+                             ssize_t rc) {
+  if (request_size == 0) {
+    return;
+  }
+  auto *tuning = EnsureSftpWriteTuning_(pd);
+  if (tuning == nullptr) {
     return;
   }
 
-  auto &stats = *pd->sftp_write_stats;
-  const double now = AMTime::seconds();
-  if (stats.libssh2_calls == 0) {
-    stats.first_call_time = now;
-  }
-  stats.last_call_time = now;
-
-  ++stats.libssh2_calls;
-  stats.attempted_bytes += static_cast<uint64_t>(request_size);
+  const size_t bucket_index =
+      std::min(tuning->bucket_index, kSftpWriteQuantumBuckets.size() - 1);
+  const size_t current_quantum = kSftpWriteQuantumBuckets[bucket_index];
 
   if (rc == LIBSSH2_ERROR_EAGAIN) {
-    ++stats.eagain_retries;
-    return;
-  }
-  if (rc < 0) {
-    ++stats.fatal_errors;
-    return;
-  }
-
-  ++stats.success_calls;
-  if (rc == 0) {
-    ++stats.zero_writes;
+    tuning->consecutive_good = 0;
+    tuning->consecutive_short = 0;
+    ++tuning->consecutive_eagain;
+    if (tuning->consecutive_eagain >= kSftpQuantumDownshiftEagainThreshold &&
+        tuning->bucket_index > 0) {
+      --tuning->bucket_index;
+      tuning->consecutive_eagain = 0;
+    }
     return;
   }
 
-  const auto written = static_cast<uint64_t>(rc);
-  stats.written_bytes += written;
-  stats.max_written_bytes = std::max(stats.max_written_bytes, written);
-  if (written < request_size) {
-    ++stats.short_writes;
+  tuning->consecutive_eagain = 0;
+  if (rc <= 0) {
+    tuning->consecutive_good = 0;
+    tuning->consecutive_short = 0;
+    return;
   }
+
+  const size_t written = static_cast<size_t>(rc);
+  if (written * 4 < request_size) {
+    tuning->consecutive_good = 0;
+    ++tuning->consecutive_short;
+    if (tuning->consecutive_short >= kSftpQuantumDownshiftShortThreshold &&
+        tuning->bucket_index > 0) {
+      --tuning->bucket_index;
+      tuning->consecutive_short = 0;
+    }
+    return;
+  }
+
+  tuning->consecutive_short = 0;
+  if (request_size == current_quantum &&
+      written >= ((request_size * 15) / 16) &&
+      tuning->bucket_index + 1 < kSftpWriteQuantumBuckets.size()) {
+    ++tuning->consecutive_good;
+    if (tuning->consecutive_good >= kSftpQuantumUpshiftGoodThreshold) {
+      ++tuning->bucket_index;
+      tuning->consecutive_good = 0;
+    }
+    return;
+  }
+
+  tuning->consecutive_good = 0;
 }
 
 struct HttpTransferRuntime {
@@ -761,11 +801,13 @@ public:
     if (to_write > 0) {
       if (is_sftp) {
         // SFTP write (non-blocking)
+        const size_t write_size =
+            ResolveSftpWriteQuantum_(pd, static_cast<size_t>(to_write));
         std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
-        NoteSftpWriteRequest_(pd, static_cast<size_t>(to_write));
         auto nb_res = client->NBPerform(control, [&]() {
-          const ssize_t rc = libssh2_sftp_write(sftp_handle, read_ptr, to_write);
-          NoteSftpWriteAttempt_(pd, static_cast<size_t>(to_write), rc);
+          const ssize_t rc = libssh2_sftp_write(
+              sftp_handle, read_ptr, static_cast<ssize_t>(write_size));
+          AdjustSftpWriteQuantum_(pd, write_size, rc);
           return rc;
         });
         if (!nb_res) {
@@ -847,13 +889,13 @@ public:
     }
 
     if (is_sftp) {
+      const size_t write_size = ResolveSftpWriteQuantum_(pd, to_write);
       std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
-      NoteSftpWriteRequest_(pd, to_write);
       auto nb_res = client->NBPerform(control, [&]() {
         const ssize_t rc =
             libssh2_sftp_write(sftp_handle, buffer,
-                               static_cast<ssize_t>(to_write));
-        NoteSftpWriteAttempt_(pd, to_write, rc);
+                               static_cast<ssize_t>(write_size));
+        AdjustSftpWriteQuantum_(pd, write_size, rc);
         return rc;
       });
       if (!nb_res) {

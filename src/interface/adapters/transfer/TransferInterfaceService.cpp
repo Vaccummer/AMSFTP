@@ -1370,24 +1370,44 @@ ECM TransferInterfaceService::WaitTask_(
     return rcm;
   };
 
-  std::counting_semaphore<8> completion_wakeup(0);
-  const size_t completion_token =
-      task_info->RegisterCompletionWakeup([&completion_wakeup]() {
-        completion_wakeup.release();
+  struct CompletionWakeupState_ {
+    std::counting_semaphore<8> semaphore{0};
+    std::atomic<bool> active{true};
+  };
+  auto completion_wakeup = std::make_shared<CompletionWakeupState_>();
+  const std::weak_ptr<CompletionWakeupState_> completion_wakeup_weak =
+      completion_wakeup;
+  const size_t completion_token = task_info->RegisterCompletionWakeup(
+      [completion_wakeup_weak]() {
+        auto state = completion_wakeup_weak.lock();
+        if (!state || !state->active.load(std::memory_order_acquire)) {
+          return;
+        }
+        state->semaphore.release();
       });
   struct ScopedCompletionWakeup_ {
+    std::shared_ptr<CompletionWakeupState_> state = nullptr;
     TaskInfo *task_info = nullptr;
     size_t token = 0;
     ~ScopedCompletionWakeup_() {
+      if (state) {
+        state->active.store(false, std::memory_order_release);
+      }
       if (task_info != nullptr && token != 0) {
         (void)task_info->UnregisterCompletionWakeup(token);
       }
     }
-  } scoped_completion_wakeup{task_info.get(), completion_token};
+  } scoped_completion_wakeup{completion_wakeup, task_info.get(), completion_token};
 
   const auto control_token = control.ControlToken();
   const AMDomain::client::InterruptWakeupSafeGuard interrupt_wakeup_guard(
-      control_token, [&completion_wakeup]() { completion_wakeup.release(); });
+      control_token, [completion_wakeup_weak]() {
+        auto state = completion_wakeup_weak.lock();
+        if (!state || !state->active.load(std::memory_order_acquire)) {
+          return;
+        }
+        state->semaphore.release();
+      });
 
   auto resolve_wait_ms = [&]() -> int {
     if (show_progress) {
@@ -1402,7 +1422,6 @@ ECM TransferInterfaceService::WaitTask_(
   while (true) {
     const auto status = task_info->GetStatus();
     if (status == AMDomain::transfer::TaskStatus::Finished) {
-      task_info->Core.clients.ReleaseAll();
       const ECM result = task_info->GetResult();
       return finalize_and_return(result);
     }
@@ -1424,7 +1443,7 @@ ECM TransferInterfaceService::WaitTask_(
     }
 
     const int wait_ms = resolve_wait_ms();
-    (void)completion_wakeup.try_acquire_for(
+    (void)completion_wakeup->semaphore.try_acquire_for(
         std::chrono::milliseconds(std::max(1, wait_ms)));
   }
 }

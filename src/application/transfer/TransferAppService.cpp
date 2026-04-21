@@ -328,7 +328,6 @@ void TransferAppService::OnTaskCompleted_(const TaskHandle &task_info) {
   if (!task_info || task_info->id == 0) {
     return;
   }
-  ReleaseClients_(task_info);
   if (task_info->GetStatus() == TaskStatus::Paused) {
     StorePaused_(task_info);
     return;

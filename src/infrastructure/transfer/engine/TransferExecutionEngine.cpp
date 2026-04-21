@@ -1,12 +1,8 @@
 #include "foundation/tools/path.hpp"
-#include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/http/HTTP.hpp"
 #include "infrastructure/transfer/Engine.hpp"
 #include "infrastructure/transfer/engine/TransferExecutionDetail.hpp"
-
-#include <cstdio>
-#include <string>
 
 namespace {
 using AMDomain::client::ClientProtocol;
@@ -15,63 +11,17 @@ using ClientHandle = AMInfra::transfer::ClientHandle;
 using EC = ErrorCode;
 using ErrorCBInfo = AMDomain::transfer::ErrorCBInfo;
 using RuntimeProgress = AMInfra::transfer::TransferRuntimeProgress;
-using SftpWriteStats = AMInfra::transfer::SftpWriteStats;
+using SftpWriteTuning = AMInfra::transfer::SftpWriteTuning;
 using TaskHandle = AMInfra::transfer::TaskHandle;
 using TaskStatus = AMInfra::transfer::TaskStatus;
 using TransferTask = AMDomain::transfer::TransferTask;
 
-void ResetSftpWriteStats_(RuntimeProgress &progress) {
-  if (!progress.sftp_write_stats) {
-    progress.sftp_write_stats = std::make_shared<SftpWriteStats>();
+void ResetSftpWriteTuning_(RuntimeProgress &progress) {
+  if (!progress.sftp_write_tuning) {
+    progress.sftp_write_tuning = std::make_shared<SftpWriteTuning>();
   } else {
-    progress.sftp_write_stats->Reset();
+    progress.sftp_write_tuning->Reset();
   }
-}
-
-void PrintSftpWriteStats_(const RuntimeProgress &progress, const TransferTask &task,
-                          const char *mode) {
-  const auto stats = progress.sftp_write_stats;
-  if (!stats || stats->write_requests == 0) {
-    return;
-  }
-
-  const std::string mode_copy = mode != nullptr ? std::string(mode) : "unknown";
-  const std::string src_copy = task.src;
-  const std::string dst_copy = task.dst;
-
-  const double duration_ms =
-      (stats->last_call_time >= stats->first_call_time)
-          ? ((stats->last_call_time - stats->first_call_time) * 1000.0)
-          : 0.0;
-  const double avg_request =
-      stats->write_requests > 0
-          ? static_cast<double>(stats->logical_requested_bytes) /
-                static_cast<double>(stats->write_requests)
-          : 0.0;
-  const double avg_attempt =
-      stats->libssh2_calls > 0
-          ? static_cast<double>(stats->attempted_bytes) /
-                static_cast<double>(stats->libssh2_calls)
-          : 0.0;
-  const double avg_write =
-      stats->success_calls > 0
-          ? static_cast<double>(stats->written_bytes) /
-                static_cast<double>(stats->success_calls)
-          : 0.0;
-  const std::string line = AMStr::fmt(
-      "[sftp-write-stats] mode={} src=\"{}\" dst=\"{}\" requests={} "
-      "libssh2_calls={} eagain={} short={} zero={} fatal={} "
-      "logical_bytes={} attempted_bytes={} written_bytes={} "
-      "avg_request={:.1f} avg_attempt={:.1f} avg_write={:.1f} "
-      "max_request={} max_written={} duration_ms={:.2f}\n",
-      mode_copy, src_copy, dst_copy, stats->write_requests,
-      stats->libssh2_calls, stats->eagain_retries, stats->short_writes,
-      stats->zero_writes, stats->fatal_errors, stats->logical_requested_bytes,
-      stats->attempted_bytes, stats->written_bytes, avg_request, avg_attempt,
-      avg_write, stats->max_request_bytes, stats->max_written_bytes,
-      duration_ms);
-  std::fputs(line.c_str(), stderr);
-  std::fflush(stderr);
 }
 } // namespace
 
@@ -188,7 +138,7 @@ ECM TransferExecutionEngine::TransferSignleFile(
   if (!task) {
     return {EC::InvalidArg, "", "", "Invalid transfer input"};
   }
-  ResetSftpWriteStats_(pd);
+  ResetSftpWriteTuning_(pd);
   const auto src_protocol = src_client->ConfigPort().GetProtocol();
   const auto dst_protocol = dst_client->ConfigPort().GetProtocol();
   const bool src_is_http =
@@ -246,11 +196,10 @@ ECM TransferExecutionEngine::TransferSignleFile(
   }
 
   const size_t begin_transferred = task->transferred;
-  const bool direct_local_sftp =
-      (src_protocol == ClientProtocol::LOCAL &&
-       dst_protocol == ClientProtocol::SFTP) ||
-      (src_protocol == ClientProtocol::SFTP &&
-       dst_protocol == ClientProtocol::LOCAL);
+  const bool direct_local_sftp = (src_protocol == ClientProtocol::LOCAL &&
+                                  dst_protocol == ClientProtocol::SFTP) ||
+                                 (src_protocol == ClientProtocol::SFTP &&
+                                  dst_protocol == ClientProtocol::LOCAL);
   if (direct_local_sftp) {
     const size_t chunk_size = ResolveTaskBufferSize_(task_info);
     const ECM direct_rcm = detail::ExecuteSequentialDirectTransfer(
@@ -261,8 +210,8 @@ ECM TransferExecutionEngine::TransferSignleFile(
     }
   } else {
     if (!pd.ring_buffer) {
-      pd.ring_buffer = std::make_shared<StreamRingBuffer>(
-          ResolveTaskBufferSize_(task_info));
+      pd.ring_buffer =
+          std::make_shared<StreamRingBuffer>(ResolveTaskBufferSize_(task_info));
     }
     std::future<ECM> read_future = EnqueueReadJob_(src_client, task_info, &pd);
     const ECM write_rcm =
@@ -282,7 +231,6 @@ ECM TransferExecutionEngine::TransferSignleFile(
 
   task->transferred =
       task_info->Size.cur_task_transferred.load(std::memory_order_relaxed);
-  PrintSftpWriteStats_(pd, *task, direct_local_sftp ? "direct" : "buffered");
 
   if (task_info->Core.control.IsTimeout()) {
     return {EC::OperationTimeout, "", "", "Task timeout"};
