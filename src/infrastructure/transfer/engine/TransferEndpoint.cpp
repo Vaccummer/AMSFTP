@@ -15,6 +15,7 @@
 #include <curl/curl.h>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -128,10 +129,61 @@ using AMDomain::transfer::TaskID;
 using TaskRegistry = AMAtomic<std::unordered_map<TaskID, TaskHandle>>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TransferBufferPolicy = AMInfra::transfer::TransferBufferPolicy;
+using SftpWriteStats = AMInfra::transfer::SftpWriteStats;
 constexpr const char *kHttpUserAgent = "amsftp-wget/1.0";
 constexpr const char *kHttpProxyKey = "http.proxy";
 constexpr const char *kHttpMaxRedirectTimesKey = "http.max_redirect_times";
 constexpr const char *kHttpBearerTokenKey = "http.bear_token";
+
+void NoteSftpWriteRequest_(RuntimeProgress *pd, size_t request_size) {
+  if (pd == nullptr || pd->sftp_write_stats == nullptr || request_size == 0) {
+    return;
+  }
+  auto &stats = *pd->sftp_write_stats;
+  ++stats.write_requests;
+  stats.logical_requested_bytes += static_cast<uint64_t>(request_size);
+  stats.max_request_bytes =
+      std::max<uint64_t>(stats.max_request_bytes, request_size);
+}
+
+void NoteSftpWriteAttempt_(RuntimeProgress *pd, size_t request_size,
+                           ssize_t rc) {
+  if (pd == nullptr || pd->sftp_write_stats == nullptr || request_size == 0) {
+    return;
+  }
+
+  auto &stats = *pd->sftp_write_stats;
+  const double now = AMTime::seconds();
+  if (stats.libssh2_calls == 0) {
+    stats.first_call_time = now;
+  }
+  stats.last_call_time = now;
+
+  ++stats.libssh2_calls;
+  stats.attempted_bytes += static_cast<uint64_t>(request_size);
+
+  if (rc == LIBSSH2_ERROR_EAGAIN) {
+    ++stats.eagain_retries;
+    return;
+  }
+  if (rc < 0) {
+    ++stats.fatal_errors;
+    return;
+  }
+
+  ++stats.success_calls;
+  if (rc == 0) {
+    ++stats.zero_writes;
+    return;
+  }
+
+  const auto written = static_cast<uint64_t>(rc);
+  stats.written_bytes += written;
+  stats.max_written_bytes = std::max(stats.max_written_bytes, written);
+  if (written < request_size) {
+    ++stats.short_writes;
+  }
+}
 
 struct HttpTransferRuntime {
   std::string proxy = {};
@@ -251,6 +303,17 @@ bool IsTaskHardInterrupted_(const TaskHandle &task_info) {
 bool IsTaskInterrupted_(const RuntimeProgress &pd) {
   return pd.io_abort.load(std::memory_order_relaxed) ||
          IsTaskHardInterrupted_(pd.task_info);
+}
+
+int ResolveRingBufferWaitMs_(const RuntimeProgress &pd) {
+  if (!pd.task_info) {
+    return -1;
+  }
+  const auto remain_ms = pd.task_info->Core.control.RemainingTimeMs();
+  if (!remain_ms.has_value()) {
+    return -1;
+  }
+  return static_cast<int>(std::min<size_t>(*remain_ms, size_t{60 * 1000}));
 }
 
 void SignalTaskIoAbort_(RuntimeProgress &pd) {
@@ -611,6 +674,77 @@ public:
     return {0, OK};
   }
 
+  std::pair<ssize_t, ECM> ReadChunk(char *buffer, size_t buffer_size) {
+    if (!IsValid()) {
+      return {-1, {EC::LocalFileOpenError, "", "", "File not initialized"}};
+    }
+    if (buffer == nullptr || buffer_size == 0) {
+      return {0, OK};
+    }
+
+    const size_t remaining =
+        file_size > offset ? (file_size - offset) : size_t{0};
+    const size_t to_read = std::min(buffer_size, remaining);
+    if (to_read == 0) {
+      return {0, {EC::EndOfFile, "", "", "End of file"}};
+    }
+
+    if (is_sftp) {
+      std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
+      auto nb_res = client->NBPerform(control, [&]() {
+        return libssh2_sftp_read(sftp_handle, buffer,
+                                 static_cast<ssize_t>(to_read));
+      });
+      if (!nb_res) {
+        return {-1,
+                ContextualizeTransferRCM_(nb_res.rcm, "transfer.file.read",
+                                          path)};
+      }
+      const ssize_t bytes_read = nb_res.value;
+      if (bytes_read > 0) {
+        offset += static_cast<size_t>(bytes_read);
+        return {bytes_read, OK};
+      }
+      if (bytes_read == 0) {
+        return {0, {EC::EndOfFile, "", "", "End of file"}};
+      }
+      return {bytes_read, Err(client->GetLastEC(), "transfer.file.read", path,
+                              AMStr::fmt("Read sftp file \"{}\" failed: {}",
+                                         path, client->GetLastErrorMsg()))};
+    }
+
+#ifdef _WIN32
+    DWORD bytes_read = 0;
+    if (!ReadFile(file_handle, buffer, static_cast<DWORD>(to_read), &bytes_read,
+                  nullptr)) {
+      const int win_ec = static_cast<int>(GetLastError());
+      return {-1,
+              {EC::LocalFileReadError,
+               AMStr::fmt("Read local file \"{}\" failed: error code {}", path,
+                          win_ec),
+               RawError{RawErrorSource::WindowsAPI, win_ec}}};
+    }
+    if (bytes_read > 0) {
+      offset += static_cast<size_t>(bytes_read);
+      return {static_cast<ssize_t>(bytes_read), OK};
+    }
+    return {0, {EC::EndOfFile, "", "", "End of file"}};
+#else
+    ssize_t bytes_read = read(file_handle, buffer, to_read);
+    if (bytes_read > 0) {
+      offset += static_cast<size_t>(bytes_read);
+      return {bytes_read, OK};
+    }
+    if (bytes_read == 0) {
+      return {0, {EC::EndOfFile, "", "", "End of file"}};
+    }
+    return {-1,
+            {EC::LocalFileReadError, "", "",
+             AMStr::fmt("Read local file \"{}\" failed: {}", path,
+                        strerror(errno))}};
+#endif
+  }
+
   std::pair<ssize_t, ECM> Write() {
     if (!IsValid()) {
       return {-1, {EC::LocalFileOpenError, "", "", "File not initialized"}};
@@ -628,8 +762,11 @@ public:
       if (is_sftp) {
         // SFTP write (non-blocking)
         std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
+        NoteSftpWriteRequest_(pd, static_cast<size_t>(to_write));
         auto nb_res = client->NBPerform(control, [&]() {
-          return libssh2_sftp_write(sftp_handle, read_ptr, to_write);
+          const ssize_t rc = libssh2_sftp_write(sftp_handle, read_ptr, to_write);
+          NoteSftpWriteAttempt_(pd, static_cast<size_t>(to_write), rc);
+          return rc;
         });
         if (!nb_res) {
           return {-1, ContextualizeTransferRCM_(nb_res.rcm,
@@ -692,6 +829,82 @@ public:
       }
     }
     return {0, OK};
+  }
+
+  std::pair<ssize_t, ECM> WriteChunk(const char *buffer, size_t buffer_size) {
+    if (!IsValid()) {
+      return {-1, {EC::LocalFileOpenError, "", "", "File not initialized"}};
+    }
+    if (buffer == nullptr || buffer_size == 0) {
+      return {0, OK};
+    }
+
+    const size_t remaining =
+        file_size > offset ? (file_size - offset) : size_t{0};
+    const size_t to_write = std::min(buffer_size, remaining);
+    if (to_write == 0) {
+      return {0, {EC::EndOfFile, "", "", "End of file"}};
+    }
+
+    if (is_sftp) {
+      std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
+      NoteSftpWriteRequest_(pd, to_write);
+      auto nb_res = client->NBPerform(control, [&]() {
+        const ssize_t rc =
+            libssh2_sftp_write(sftp_handle, buffer,
+                               static_cast<ssize_t>(to_write));
+        NoteSftpWriteAttempt_(pd, to_write, rc);
+        return rc;
+      });
+      if (!nb_res) {
+        return {-1,
+                ContextualizeTransferRCM_(nb_res.rcm, "transfer.file.write",
+                                          path)};
+      }
+      const ssize_t bytes_written = nb_res.value;
+      if (bytes_written > 0) {
+        offset += static_cast<size_t>(bytes_written);
+        return {bytes_written, OK};
+      }
+      if (bytes_written == 0) {
+        return {0, {EC::EndOfFile, "", "", "End of file"}};
+      }
+      return {bytes_written,
+              Err(client->GetLastEC(), "transfer.file.write", path,
+                  AMStr::fmt("Write sftp file \"{}\" failed: {}", path,
+                             client->GetLastErrorMsg()))};
+    }
+
+#ifdef _WIN32
+    DWORD bytes_written = 0;
+    if (!WriteFile(file_handle, buffer, static_cast<DWORD>(to_write),
+                   &bytes_written, nullptr)) {
+      const int win_ec = static_cast<int>(GetLastError());
+      return {-1,
+              {EC::LocalFileWriteError,
+               AMStr::fmt("Write local file \"{}\" failed: error code {}", path,
+                          win_ec),
+               RawError{RawErrorSource::WindowsAPI, win_ec}}};
+    }
+    if (bytes_written > 0) {
+      offset += static_cast<size_t>(bytes_written);
+      return {static_cast<ssize_t>(bytes_written), OK};
+    }
+    return {0, {EC::EndOfFile, "", "", "End of file"}};
+#else
+    ssize_t bytes_written = write(file_handle, buffer, to_write);
+    if (bytes_written > 0) {
+      offset += static_cast<size_t>(bytes_written);
+      return {bytes_written, OK};
+    }
+    if (bytes_written == 0) {
+      return {0, {EC::EndOfFile, "", "", "End of file"}};
+    }
+    return {-1,
+            {EC::LocalFileWriteError, "", "",
+             AMStr::fmt("Write local file \"{}\" failed: {}", path,
+                        strerror(errno))}};
+#endif
   }
 };
 
@@ -796,20 +1009,38 @@ public:
 private:
   static bool WaitWritableUntilReady_(RuntimeProgress &pd,
                                       const UnionFileHandle &file_handle) {
+    const auto token = pd.task_info ? pd.task_info->Core.control.ControlToken()
+                                    : nullptr;
+    const AMDomain::client::InterruptWakeupSafeGuard wake_guard(
+        token, [&pd]() {
+          if (pd.ring_buffer) {
+            pd.ring_buffer->NotifyAll();
+          }
+        });
     while (pd.ring_buffer->full() && !IsTaskInterrupted_(pd) &&
            file_handle.offset < file_handle.file_size) {
+      const int wait_ms = ResolveRingBufferWaitMs_(pd);
       (void)pd.ring_buffer->WaitWritable([&]() {
         return IsTaskInterrupted_(pd) ||
                file_handle.offset >= file_handle.file_size;
-      });
+      }, wait_ms);
     }
     return !IsTaskInterrupted_(pd);
   }
 
   static bool WaitReadableUntilReady_(RuntimeProgress &pd) {
+    const auto token = pd.task_info ? pd.task_info->Core.control.ControlToken()
+                                    : nullptr;
+    const AMDomain::client::InterruptWakeupSafeGuard wake_guard(
+        token, [&pd]() {
+          if (pd.ring_buffer) {
+            pd.ring_buffer->NotifyAll();
+          }
+        });
     while (pd.ring_buffer->empty() && !IsTaskInterrupted_(pd)) {
+      const int wait_ms = ResolveRingBufferWaitMs_(pd);
       (void)pd.ring_buffer->WaitReadable(
-          [&]() { return IsTaskInterrupted_(pd); });
+          [&]() { return IsTaskInterrupted_(pd); }, wait_ms);
     }
     return !IsTaskInterrupted_(pd);
   }
@@ -837,7 +1068,6 @@ private:
         return;
       }
     }
-    std::lock_guard<std::recursive_mutex> lock(client_sftp->TransferMutex());
     while (file_handle.offset < file_handle.file_size &&
            !IsTaskInterrupted_(pd)) {
       if (!WaitWritableUntilReady_(pd, file_handle)) {
@@ -1382,6 +1612,109 @@ ECM ExecuteBufferToSink(const ClientHandle &client, const TaskHandle &task_info,
   if (task && task->rcm.has_value() && task->rcm->code != EC::Success) {
     return *task->rcm;
   }
+  return OK;
+}
+
+ECM ExecuteSequentialDirectTransfer(const ClientHandle &src_client,
+                                    const ClientHandle &dst_client,
+                                    const TaskHandle &task_info,
+                                    TransferRuntimeProgress &progress,
+                                    size_t chunk_size) {
+  if (!src_client || !dst_client || !task_info) {
+    return Err(EC::InvalidArg, "", "", "Invalid direct transfer input");
+  }
+
+  auto *task = progress.GetCurrentTask();
+  if (!task) {
+    return Err(EC::InvalidArg, "", "", "Current transfer task is null");
+  }
+
+  const auto src_protocol = src_client->ConfigPort().GetProtocol();
+  const auto dst_protocol = dst_client->ConfigPort().GetProtocol();
+  const bool local_to_sftp =
+      src_protocol == ClientProtocol::LOCAL &&
+      dst_protocol == ClientProtocol::SFTP;
+  const bool sftp_to_local =
+      src_protocol == ClientProtocol::SFTP &&
+      dst_protocol == ClientProtocol::LOCAL;
+  if (!local_to_sftp && !sftp_to_local) {
+    return Err(EC::OperationUnsupported, "transfer.direct", task->src,
+               "Direct transfer currently supports LOCAL <-> SFTP only");
+  }
+
+  auto *src_sftp =
+      src_protocol == ClientProtocol::SFTP
+          ? dynamic_cast<AMSFTPIOCore *>(&src_client->IOPort())
+          : nullptr;
+  auto *dst_sftp =
+      dst_protocol == ClientProtocol::SFTP
+          ? dynamic_cast<AMSFTPIOCore *>(&dst_client->IOPort())
+          : nullptr;
+  if (src_protocol == ClientProtocol::SFTP && src_sftp == nullptr) {
+    return Err(EC::InvalidHandle, "transfer.direct", task->src,
+               "SFTP source IO port implementation mismatch");
+  }
+  if (dst_protocol == ClientProtocol::SFTP && dst_sftp == nullptr) {
+    return Err(EC::InvalidHandle, "transfer.direct", task->dst,
+               "SFTP destination IO port implementation mismatch");
+  }
+
+  UnionFileHandle src_handle = {};
+  ECM rcm = src_handle.Init(task->src, task->size, src_sftp, false, true, true,
+                            &progress);
+  if (!(rcm)) {
+    return rcm;
+  }
+
+  const bool resume = task->transferred > 0;
+  UnionFileHandle dst_handle = {};
+  rcm = dst_handle.Init(task->dst, task->size, dst_sftp, true, true, !resume,
+                        &progress);
+  if (!(rcm)) {
+    return rcm;
+  }
+
+  if (resume) {
+    rcm = src_handle.Seek(task->transferred);
+    if (!(rcm)) {
+      return rcm;
+    }
+    rcm = dst_handle.Seek(task->transferred);
+    if (!(rcm)) {
+      return rcm;
+    }
+  }
+
+  std::vector<char> chunk(std::max<size_t>(1, chunk_size));
+  while (src_handle.offset < src_handle.file_size &&
+         !IsTaskInterrupted_(progress)) {
+    auto [bytes_read, read_rcm] =
+        src_handle.ReadChunk(chunk.data(), chunk.size());
+    if (read_rcm.code != EC::Success && read_rcm.code != EC::EndOfFile) {
+      return read_rcm;
+    }
+    if (bytes_read <= 0) {
+      break;
+    }
+
+    size_t written_total = 0;
+    const size_t bytes_to_write = static_cast<size_t>(bytes_read);
+    while (written_total < bytes_to_write && !IsTaskInterrupted_(progress)) {
+      auto [bytes_written, write_rcm] = dst_handle.WriteChunk(
+          chunk.data() + written_total, bytes_to_write - written_total);
+      if (write_rcm.code != EC::Success && write_rcm.code != EC::EndOfFile) {
+        return write_rcm;
+      }
+      if (bytes_written <= 0) {
+        return Err(EC::CommonFailure, "transfer.direct", task->dst,
+                   "Destination write returned zero bytes");
+      }
+      written_total += static_cast<size_t>(bytes_written);
+      progress.UpdateSize(static_cast<size_t>(bytes_written));
+      progress.CallInnerCallback(false);
+    }
+  }
+
   return OK;
 }
 } // namespace AMInfra::transfer::detail

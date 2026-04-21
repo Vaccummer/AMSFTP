@@ -87,9 +87,14 @@ public:
       return true;
     }
     std::unique_lock<std::mutex> lock(wait_mtx_);
-    wait_cv_.wait_for(
-        lock, std::chrono::milliseconds(std::max(1, wait_ms)),
-        [&]() { return writable() > 0 || (should_stop && should_stop()); });
+    if (wait_ms < 0) {
+      wait_cv_.wait(
+          lock, [&]() { return writable() > 0 || (should_stop && should_stop()); });
+    } else {
+      wait_cv_.wait_for(
+          lock, std::chrono::milliseconds(std::max(1, wait_ms)),
+          [&]() { return writable() > 0 || (should_stop && should_stop()); });
+    }
     return writable() > 0;
   }
 
@@ -99,9 +104,14 @@ public:
       return true;
     }
     std::unique_lock<std::mutex> lock(wait_mtx_);
-    wait_cv_.wait_for(
-        lock, std::chrono::milliseconds(std::max(1, wait_ms)),
-        [&]() { return available() > 0 || (should_stop && should_stop()); });
+    if (wait_ms < 0) {
+      wait_cv_.wait(
+          lock, [&]() { return available() > 0 || (should_stop && should_stop()); });
+    } else {
+      wait_cv_.wait_for(
+          lock, std::chrono::milliseconds(std::max(1, wait_ms)),
+          [&]() { return available() > 0 || (should_stop && should_stop()); });
+    }
     return available() > 0;
   }
 };

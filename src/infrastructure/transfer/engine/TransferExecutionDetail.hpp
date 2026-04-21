@@ -28,4 +28,8 @@ void MarkUnfinishedTransferEntries(
 [[nodiscard]] ECM ExecuteBufferToSink(const ClientHandle &client,
                                       const TaskHandle &task_info,
                                       TransferRuntimeProgress &progress);
+[[nodiscard]] ECM ExecuteSequentialDirectTransfer(
+    const ClientHandle &src_client, const ClientHandle &dst_client,
+    const TaskHandle &task_info, TransferRuntimeProgress &progress,
+    size_t chunk_size);
 } // namespace AMInfra::transfer::detail

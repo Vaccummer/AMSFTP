@@ -162,8 +162,20 @@ else()
 endif()
 
 # ========= Compile Options =========
+set(AMSFTP_USING_MSVC_FRONTEND OFF)
+if (MSVC OR
+    (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
+     CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"))
+  set(AMSFTP_USING_MSVC_FRONTEND ON)
+endif()
+
 target_compile_options(amsftp PRIVATE
-  $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
+  $<$<BOOL:${AMSFTP_USING_MSVC_FRONTEND}>:/W4>
+  $<$<AND:$<BOOL:${AMSFTP_USING_MSVC_FRONTEND}>,$<OR:$<CONFIG:Debug>,$<CONFIG:Release>>>:/Zi>
+)
+
+target_link_options(amsftp PRIVATE
+  $<$<AND:$<BOOL:${AMSFTP_USING_MSVC_FRONTEND}>,$<CONFIG:Release>>:/DEBUG:FULL>
 )
 
 # target_compile_options(amtest PRIVATE

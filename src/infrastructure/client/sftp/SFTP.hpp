@@ -1571,11 +1571,15 @@ public:
         return {rc, {}};
       }
       const int dir = libssh2_session_block_directions(session);
+      const bool wait_read =
+          dir == 0 || (dir & LIBSSH2_SESSION_BLOCK_INBOUND);
+      const bool wait_write =
+          dir == 0 || (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND);
+
       if (dir == 0) {
         if (auto kill_rcm = control.BuildECM(); kill_rcm.has_value()) {
           return {rc, *kill_rcm};
         }
-        continue;
       }
 
       fd_set readfds;
@@ -1583,10 +1587,10 @@ public:
       FD_ZERO(&readfds);
       FD_ZERO(&writefds);
 
-      if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) {
+      if (wait_read) {
         FD_SET(sock, &readfds);
       }
-      if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
+      if (wait_write) {
         FD_SET(sock, &writefds);
       }
       if (wake_read_sock != INVALID_SOCKET) {

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -333,6 +334,9 @@ struct TaskSet {
   TransferCallback callback;
   std::atomic<bool> keep_start_time{false};
   std::atomic<bool> completion_dispatched{false};
+  AMAtomic<std::map<size_t, std::function<void()>>> completion_wakeups =
+      AMAtomic<std::map<size_t, std::function<void()>>>{};
+  std::atomic<size_t> completion_wakeup_seed{1};
   std::atomic<int> OnWhichThread{-1};
   std::atomic<int> affinity_thread{-1};
   std::atomic<TaskAssignType> assign_type{TaskAssignType::Public};
@@ -420,6 +424,41 @@ struct TaskInfo {
 
   void ResetCompletionDispatch() {
     Set.completion_dispatched.store(false, std::memory_order_release);
+  }
+
+  size_t RegisterCompletionWakeup(std::function<void()> wakeup) {
+    if (!wakeup) {
+      return 0;
+    }
+    const size_t id =
+        Set.completion_wakeup_seed.fetch_add(1, std::memory_order_relaxed);
+    auto wakeups = Set.completion_wakeups.lock();
+    (*wakeups)[id] = std::move(wakeup);
+    return id;
+  }
+
+  bool UnregisterCompletionWakeup(size_t token) {
+    if (token == 0) {
+      return false;
+    }
+    auto wakeups = Set.completion_wakeups.lock();
+    return wakeups->erase(token) > 0;
+  }
+
+  void NotifyCompletionWakeups() {
+    std::vector<std::function<void()>> wakeups_copy = {};
+    {
+      auto wakeups = Set.completion_wakeups.lock();
+      wakeups_copy.reserve(wakeups->size());
+      for (const auto &[_, wakeup] : *wakeups) {
+        if (wakeup) {
+          wakeups_copy.push_back(wakeup);
+        }
+      }
+    }
+    for (auto &wakeup : wakeups_copy) {
+      wakeup();
+    }
   }
 
   TaskStatus GetStatus() const {
