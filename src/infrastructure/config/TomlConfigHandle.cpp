@@ -1,4 +1,5 @@
 #include "infrastructure/config/TomlConfigHandle.hpp"
+#include "domain/config/ConfigSchema.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <fstream>
@@ -70,7 +71,7 @@ ECM TomlConfigHandle::Init(const ConfigDocumentSpec &spec) {
     return Err(EC::ConfigLoadFailed, "", "", "config path is empty");
   }
 
-  const char *schema_json = spec_.schema_json;
+  const char *schema_json = AMDomain::config::schema::GetSchemaJson(spec_.kind);
   if (schema_json == nullptr) {
     schema_json = "{}";
   }

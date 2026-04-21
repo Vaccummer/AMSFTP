@@ -87,4 +87,10 @@ public:
  */
 [[nodiscard]] ECMData<std::unique_ptr<IConfigStorePort>>
 CreateConfigStorePort(const ConfigStoreInitArg &arg);
+
+/**
+ * @brief Build default config-store init payload for one project root.
+ */
+[[nodiscard]] ConfigStoreInitArg
+BuildDefaultConfigStoreInitArg(const std::filesystem::path &root_dir);
 } // namespace AMDomain::config

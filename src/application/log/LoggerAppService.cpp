@@ -9,6 +9,79 @@ namespace AMApplication::log {
 namespace {
 using AMDomain::log::service::kDefaultTraceLevel;
 using AMDomain::writer::IWriteSchedulerPort;
+
+std::string BuildClientHostLabel_(
+    const std::optional<AMDomain::host::ConRequest> &request) {
+  if (!request.has_value()) {
+    return {};
+  }
+
+  const auto &req = *request;
+  if (req.hostname.empty()) {
+    return {};
+  }
+
+  std::ostringstream host;
+  if (!req.username.empty()) {
+    host << req.username << "@";
+  }
+  host << req.hostname;
+  if (req.port >= 0) {
+    host << "@" << req.port;
+  }
+  return host.str();
+}
+
+std::string ResolveClientNickname_(const AMDomain::log::TraceInfo &info) {
+  if (!info.nickname.empty()) {
+    return info.nickname;
+  }
+  if (info.request.has_value()) {
+    return info.request->nickname;
+  }
+  return {};
+}
+
+std::string ResolveClientProtocol_(const AMDomain::log::TraceInfo &info) {
+  if (!info.request.has_value()) {
+    return {};
+  }
+  return AMStr::ToString(info.request->protocol);
+}
+
+std::string BuildClientLogLine_(const AMDomain::log::TraceInfo &info,
+                                const std::string &time_str) {
+  std::ostringstream line;
+  line << time_str << " [" << AMStr::ToString(info.level) << "]";
+
+  const std::string protocol = ResolveClientProtocol_(info);
+  if (!protocol.empty()) {
+    line << " [" << protocol << "]";
+  }
+
+  const std::string nickname = ResolveClientNickname_(info);
+  if (!nickname.empty()) {
+    line << " [nick:" << nickname << "]";
+  }
+
+  const std::string host = BuildClientHostLabel_(info.request);
+  if (!host.empty()) {
+    line << " [host:" << host << "]";
+  }
+
+  line << " [ec:" << AMStr::ToString(info.error_code) << "]";
+
+  if (!info.action.empty()) {
+    line << " [action:" << info.action << "]";
+  }
+  if (!info.target.empty()) {
+    line << " [target:" << info.target << "]";
+  }
+  if (!info.message.empty()) {
+    line << " " << info.message;
+  }
+  return line.str();
+}
 } // namespace
 
 LoggerAppService::LoggerAppService(
@@ -214,6 +287,11 @@ LoggerAppService::BuildLogLine_(const AMDomain::log::TraceInfo &info) {
   const double stamp = info.timestamp > 0 ? info.timestamp : AMTime::seconds();
   const std::string time_str =
       FormatTime(static_cast<size_t>(stamp), "%Y/%m/%d %H:%M:%S");
+
+  if (info.source == AMDomain::client::TraceSource::Client) {
+    return BuildClientLogLine_(info, time_str);
+  }
+
   std::ostringstream line;
   line << time_str << " [" << AMStr::ToString(info.source) << "]"
        << " [" << AMStr::ToString(info.level) << "]";
