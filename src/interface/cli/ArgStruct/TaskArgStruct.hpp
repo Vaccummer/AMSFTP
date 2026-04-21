@@ -7,17 +7,6 @@
 #include <vector>
 
 namespace AMInterface::cli {
-namespace task_arg_detail {
-
-inline ECM UnsupportedCommand(AMInterface::prompt::PromptIOManager &prompt,
-                              const std::string &message) {
-  (void)prompt;
-  const ECM rcm = Err(EC::OperationUnsupported, "", "", message);
-  return rcm;
-}
-
-} // namespace task_arg_detail
-
 /**
  * @brief CLI argument container for task list.
  */
@@ -168,33 +157,6 @@ struct TaskControlArgs : BaseArgStruct {
   void reset() override {
     ids.clear();
     grace_period_ms = 1500;
-  }
-};
-
-/**
- * @brief CLI argument container for task retry (failed tasks).
- */
-struct TaskRetryArgs : BaseArgStruct {
-  std::string id = {};
-  bool is_async = false;
-  bool quiet = false;
-  std::vector<int> indices = {};
-  [[nodiscard]] ECM Run(const CLIServices &managers,
-                        const CliRunContext &ctx) const override {
-    (void)ctx;
-    (void)id;
-    (void)is_async;
-    (void)quiet;
-    (void)indices;
-    return task_arg_detail::UnsupportedCommand(
-        managers.interfaces.prompt_io_manager,
-        "task retry is deprecated in current service mode");
-  }
-  void reset() override {
-    id.clear();
-    is_async = false;
-    quiet = false;
-    indices.clear();
   }
 };
 

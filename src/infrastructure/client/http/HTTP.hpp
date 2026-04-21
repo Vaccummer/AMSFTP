@@ -795,6 +795,7 @@ public:
   Check(const AMFSI::CheckArgs &args = {},
         const ControlComponent &control = {}) override {
     (void)args;
+    (void)control;
     return {AMFSI::CheckResult{ClientStatus::OK}, OK};
   }
 

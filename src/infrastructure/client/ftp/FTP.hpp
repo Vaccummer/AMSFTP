@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <climits>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -748,7 +749,10 @@ int ResolveCurrentTimeoutMs(CURLM *multi, const ControlComponent &control) {
 
   const auto remain_opt = control.RemainTime_ms();
   if (remain_opt.has_value()) {
-    wait_ms = wait_ms > *remain_opt ? *remain_opt : wait_ms;
+    const int remain_ms = (*remain_opt > static_cast<int64_t>(INT_MAX))
+                              ? INT_MAX
+                              : static_cast<int>(*remain_opt);
+    wait_ms = wait_ms > remain_ms ? remain_ms : wait_ms;
   }
   return wait_ms;
 }

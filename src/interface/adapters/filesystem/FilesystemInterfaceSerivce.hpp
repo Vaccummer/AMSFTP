@@ -99,7 +99,7 @@ private:
   [[nodiscard]] ECMData<PathTarget> MatchOne(const PathTarget &path) const;
 
   AMApplication::client::ClientAppService &client_service_;
-  AMApplication::host::HostAppService &host_service_;
+  [[maybe_unused]] AMApplication::host::HostAppService &host_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   AMInterface::style::AMStyleService &style_service_;
   AMInterface::prompt::PromptIOManager &prompt_io_manager_;

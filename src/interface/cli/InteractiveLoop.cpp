@@ -121,7 +121,7 @@ std::string ResolvePromptCwd_(const AMDomain::client::ClientHandle &client) {
  *
  * This makes external edits effective without requiring process restart.
  */
-ECM ReloadSettingsIfUpdated_(
+[[maybe_unused]] ECM ReloadSettingsIfUpdated_(
     AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager,
     AMApplication::config::ConfigAppService &config_service,
     bool *reloaded = nullptr) {
@@ -368,10 +368,10 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
       [&completion_engine]() { completion_engine.CancelPendingAsync(); });
-  (void)interactive_callbacks.Register(
-      InteractiveEventCategory::InteractiveLoopExit, [&managers]() {
-        (void)managers.interfaces.config_interface_service->SaveAll();
-      });
+  // (void)interactive_callbacks.Register(
+  //     InteractiveEventCategory::InteractiveLoopExit, [&managers]() {
+  //       managers.interfaces.prompt_io_manager->SyncCurrentHistory();
+  //     });
 
   AMInterface::prompt::CLIPromtRender core_prompt(
       managers.interfaces.style_service.Get());

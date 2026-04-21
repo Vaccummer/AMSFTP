@@ -105,7 +105,6 @@ struct CliTaskArgs {
   TaskControlArgs terminate = {};
   TaskControlArgs pause = {};
   TaskControlArgs resume = {};
-  TaskRetryArgs retry = {};
 };
 
 struct CliArgsPool {

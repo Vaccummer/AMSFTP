@@ -582,8 +582,8 @@ private:
 #endif
 };
 
-LocalInputPollStatus_ PollLocalTerminalInput_(std::string *out,
-                                              std::string *error) {
+[[maybe_unused]] LocalInputPollStatus_ PollLocalTerminalInput_(
+    std::string *out, std::string *error) {
   if (out == nullptr || error == nullptr) {
     return LocalInputPollStatus_::Error;
   }
