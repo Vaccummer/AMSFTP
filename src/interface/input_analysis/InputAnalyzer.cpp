@@ -212,6 +212,59 @@ bool IsVarShortcutDefineToken_(const std::string &raw_text) {
   return AMDomain::var::ParseVarToken(lhs);
 }
 
+bool StartsWithUnescapedDollar_(const std::string &raw_text) {
+  return !raw_text.empty() && raw_text.front() == '$';
+}
+
+bool ParseVariablePrefix_(const std::string &raw_text,
+                          AMDomain::var::VarRef *out_ref) {
+  if (!StartsWithUnescapedDollar_(raw_text)) {
+    return false;
+  }
+  if (raw_text == "$") {
+    if (out_ref) {
+      *out_ref = {.valid = true};
+    }
+    return true;
+  }
+  if (raw_text == "${") {
+    if (out_ref) {
+      *out_ref = {.valid = true, .braced = true};
+    }
+    return true;
+  }
+
+  size_t end = 0;
+  AMDomain::var::VarRef ref = {};
+  if (!AMDomain::var::ParseVarRefAt(raw_text, 0, raw_text.size(), true, true,
+                                    &end, &ref) ||
+      !ref.valid || end != raw_text.size()) {
+    return false;
+  }
+  if (out_ref) {
+    *out_ref = std::move(ref);
+  }
+  return true;
+}
+
+TokenState VariableRefState_(const std::shared_ptr<IInputSemanticRuntime> &runtime,
+                             const AMDomain::var::VarRef &ref) {
+  if (!ref.valid || ref.varname.empty()) {
+    if (ref.explicit_domain) {
+      return VarZoneState_(runtime, ref.domain);
+    }
+    return TokenState::Valid;
+  }
+  if (ref.explicit_domain) {
+    if (!runtime) {
+      return TokenState::Missing;
+    }
+    auto scoped = runtime->GetVar(ref.domain, ref.varname);
+    return (scoped.rcm) ? TokenState::Valid : TokenState::Missing;
+  }
+  return VarNameState_(runtime, ref.varname);
+}
+
 bool IsIntegerLiteral_(const std::string &raw_text) {
   const std::string text = AMStr::Strip(raw_text);
   if (text.empty()) {
@@ -445,7 +498,8 @@ CommandScanResult_ ScanCommandPrefix_(
       const bool should_mark_illegal =
           (idx == 0) && !text.empty() && text.front() != '!' &&
           !StartsWithLongOption_(text) && !StartsWithShortOption_(text) &&
-          !IsVarShortcutDefineToken_(text);
+          !IsVarShortcutDefineToken_(text) &&
+          !ParseVariablePrefix_(text, nullptr);
       if (should_mark_illegal) {
         SetTokenClassification_(&token, TokenRole::IllegalCommand,
                                 TokenState::Invalid);
@@ -528,6 +582,9 @@ void MarkIllegalCommandGaps_(const CommandNode *command_tree,
         continue;
       }
       if (IsVarShortcutDefineToken_(texts[idx])) {
+        continue;
+      }
+      if (ParseVariablePrefix_(texts[idx], nullptr)) {
         continue;
       }
       SetTokenClassification_(&token, TokenRole::IllegalCommand,
@@ -907,16 +964,9 @@ InputAnalysis InputAnalyzer::Analyze(const std::string &input) const {
         continue;
       case AMCommandArgSemantic::VariableName: {
         AMDomain::var::VarRef ref = {};
-        TokenState state = TokenState::Invalid;
-        if (AMDomain::var::ParseVarToken(raw_text, &ref) && ref.valid &&
-            !ref.varname.empty()) {
-          if (ref.explicit_domain && runtime_) {
-            auto scoped = runtime_->GetVar(ref.domain, ref.varname);
-            state = (scoped.rcm) ? TokenState::Valid : TokenState::Missing;
-          } else {
-            state = VarNameState_(runtime_, ref.varname);
-          }
-        }
+        const TokenState state = ParseVariablePrefix_(raw_text, &ref)
+                                     ? VariableRefState_(runtime_, ref)
+                                     : TokenState::Invalid;
         SetTokenClassification_(&token, TokenRole::VariableName, state);
         ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
         continue;
@@ -934,15 +984,17 @@ InputAnalysis InputAnalyzer::Analyze(const std::string &input) const {
 
     if (token.role == TokenRole::None) {
       AMDomain::var::VarRef ref = {};
-      if (AMDomain::var::ParseVarToken(raw_text, &ref) && ref.valid &&
+      const size_t eq = raw_text.find('=');
+      if (eq != std::string::npos &&
+          ParseVariablePrefix_(raw_text.substr(0, eq), &ref) &&
           !ref.varname.empty()) {
-        TokenState state = TokenState::Missing;
-        if (ref.explicit_domain && runtime_) {
-          auto scoped = runtime_->GetVar(ref.domain, ref.varname);
-          state = (scoped.rcm) ? TokenState::Valid : TokenState::Missing;
-        } else {
-          state = VarNameState_(runtime_, ref.varname);
-        }
+        const TokenState state = VariableRefState_(runtime_, ref);
+        SetTokenClassification_(&token, TokenRole::VariableReference, state);
+        ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
+        continue;
+      }
+      if (ParseVariablePrefix_(raw_text, &ref)) {
+        const TokenState state = VariableRefState_(runtime_, ref);
         SetTokenClassification_(&token, TokenRole::VariableReference, state);
         ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
         continue;

@@ -505,7 +505,7 @@ ECM BuildInterfaceAssembly_(const ConfigSnapshots &snapshots,
   state->var_interface_service =
       std::make_unique<AMInterface::var::VarInterfaceService>(
           *app_state->var_service, *app_state->client_service,
-          *state->prompt_io_manager);
+          *state->prompt_io_manager, *state->style_service);
 
   app_state->transfer_service =
       std::make_unique<AMApplication::transfer::TransferAppService>(

@@ -243,20 +243,6 @@ bool ParseVarZonePrefix_(const std::string &prefix, std::string *out_prefix,
   return true;
 }
 
-/**
- * @brief Classify one zone name into style key.
- */
-AMInterface::style::StyleIndex
-ZoneStyleKey_(const std::string &zone, bool domain_exists, bool host_exists) {
-  if (domain_exists || zone == AMDomain::var::kPublic) {
-    return AMInterface::style::StyleIndex::Nickname;
-  }
-  if (host_exists) {
-    return AMInterface::style::StyleIndex::UnestablishedNickname;
-  }
-  return AMInterface::style::StyleIndex::NonexistentNickname;
-}
-
 AMInterface::style::StyleIndex TerminalStyleKey_(
     AMInterface::input::IInputSemanticRuntime::TerminalNameState state) {
   switch (state) {
@@ -362,35 +348,28 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
     struct ZoneInfo {
       std::string zone;
-      bool domain_exists = false;
-      bool host_exists = false;
     };
     std::vector<ZoneInfo> zones;
     std::unordered_map<std::string, size_t> zone_index;
     zones.reserve(16);
 
-    auto append_zone = [&](const std::string &zone, bool domain_exists,
-                           bool host_exists) {
-      const auto it = zone_index.find(zone);
-      if (it != zone_index.end()) {
-        auto &existing = zones[it->second];
-        existing.domain_exists = existing.domain_exists || domain_exists;
-        existing.host_exists = existing.host_exists || host_exists;
+    auto append_zone = [&](const std::string &zone) {
+      if (zone_index.contains(zone)) {
         return;
       }
       zone_index[zone] = zones.size();
-      zones.push_back({zone, domain_exists, host_exists});
+      zones.push_back({zone});
     };
 
     const auto domains = runtime->ListVarDomains();
     for (const auto &domain : domains) {
-      append_zone(domain, true, runtime->HostExists(domain));
+      append_zone(domain);
     }
     const auto hosts = runtime->ListHostNames();
     for (const auto &host : hosts) {
-      append_zone(host, runtime->HasVarDomain(host), true);
+      append_zone(host);
     }
-    append_zone(AMDomain::var::kPublic, true, true);
+    append_zone(AMDomain::var::kPublic);
 
     std::vector<std::string> keys;
     keys.reserve(zones.size());
@@ -412,9 +391,8 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       } else {
         candidate.insert_text = item.zone;
       }
-      const AMInterface::style::StyleIndex style_index =
-          ZoneStyleKey_(item.zone, item.domain_exists, item.host_exists);
-      candidate.display = FormatWithStyle_(ctx, item.zone, style_index);
+      candidate.display = FormatWithStyle_(
+          ctx, item.zone, AMInterface::style::StyleIndex::VarnameZone);
       candidate.kind = AMCompletionKind::VarZone;
       candidate.help.clear();
       candidate.score = match.score_bias;

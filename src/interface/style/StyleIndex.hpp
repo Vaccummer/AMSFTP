@@ -14,6 +14,7 @@ enum class StyleIndex : uint8_t {
   String,
   PublicVarname,
   PrivateVarname,
+  VarnameZone,
   NonexistentVarname,
   VarValue,
   Nickname,
