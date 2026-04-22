@@ -56,7 +56,7 @@ set_source_files_properties(
   PROPERTIES COMPILE_OPTIONS "/W0"
 )
 
-add_executable(amsftp app.rc ${AMSFTP_SOURCES})
+add_executable(amsftp resource/app.rc ${AMSFTP_SOURCES})
 target_include_directories(amsftp PRIVATE
   "${PROJECT_SOURCE_DIR}/src"
   "${PROJECT_SOURCE_DIR}/src/third_party"
