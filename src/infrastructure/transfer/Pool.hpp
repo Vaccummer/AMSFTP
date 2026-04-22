@@ -54,15 +54,6 @@ private:
     std::vector<std::unique_ptr<TransferExecutionEngine>> engines = {};
   };
 
-  struct HeartbeatRuntime_ {
-    std::jthread thread = {};
-    std::atomic<bool> running{false};
-    std::atomic<int> interval_s{0};
-    std::atomic<int> timeout_ms{100};
-    mutable std::mutex wait_mtx = {};
-    std::condition_variable cv = {};
-  };
-
   struct QueueRuntime_ {
     mutable std::mutex mtx = {};
     std::condition_variable cv = {};
@@ -100,16 +91,11 @@ private:
   void EnsureWorkerCapacity_(size_t worker_count);
   void RecomputeDesiredThreadCount_();
   [[nodiscard]] bool HasPendingTasksUnsafe_() const;
-  void StartHeartbeat_();
-  void StopHeartbeat_();
-  void HeartbeatLoop_(std::stop_token stop_token);
-  void HeartbeatTick_();
   [[nodiscard]] std::unordered_map<TaskID, TaskHandle> GetRegistryCopy() const;
 
 private:
   PoolControlState_ control_ = {};
   WorkerRuntime_ workers_ = {};
-  HeartbeatRuntime_ heartbeat_ = {};
   QueueRuntime_ queue_ = {};
   ConductingRuntime_ conducting_ = {};
   PoolConfig_ config_ = {};

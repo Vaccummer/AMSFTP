@@ -4,6 +4,7 @@
 #include "domain/terminal/TerminalPort.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/terminal.hpp"
+#include "interface/parser/LuaInterpreter.hpp"
 #include "interface/style/StyleIndex.hpp"
 #include "interface/style/StyleManager.hpp"
 
@@ -15,10 +16,10 @@
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <unordered_set>
 
 #ifdef _WIN32
@@ -259,39 +260,49 @@ private:
   bool active_ = false;
 };
 
-std::string SubstituteTemplateVars_(
-    const std::string &cmd_template,
-    const std::unordered_map<std::string, std::string> &vars) {
-  if (cmd_template.empty()) {
-    return cmd_template;
-  }
-  std::string out = {};
-  out.reserve(cmd_template.size());
+AMInterface::prompt::PromptVarMap BuildShellRunLuaVars_(
+    const AMDomain::host::ConRequest &request,
+    const AMDomain::host::ClientMetaData &metadata,
+    const std::string &cmd) {
+  using AMInterface::prompt::PromptVarMap;
+  using AMInterface::prompt::PromptVarValue;
 
-  size_t i = 0;
-  while (i < cmd_template.size()) {
-    if (cmd_template[i] == '{' && i + 1 < cmd_template.size() &&
-        cmd_template[i + 1] == '$') {
-      const size_t close = cmd_template.find('}', i + 2);
-      if (close == std::string::npos) {
-        out.append(cmd_template.substr(i));
-        break;
-      }
-      const std::string key =
-          AMStr::Strip(cmd_template.substr(i + 2, close - (i + 2)));
-      const auto it = vars.find(key);
-      if (it != vars.end()) {
-        out.append(it->second);
-      } else {
-        out.append(cmd_template.substr(i, close - i + 1));
-      }
-      i = close + 1;
-      continue;
-    }
-    out.push_back(cmd_template[i]);
-    ++i;
+  PromptVarMap vars = {};
+  vars["cmd"] = PromptVarValue{cmd};
+  vars["nickname"] = PromptVarValue{request.nickname};
+  vars["protocol"] =
+      PromptVarValue{AMStr::lowercase(AMStr::ToString(request.protocol))};
+  vars["hostname"] = PromptVarValue{request.hostname};
+  vars["username"] = PromptVarValue{request.username};
+  vars["port"] = PromptVarValue{request.port};
+  vars["password"] = PromptVarValue{request.password};
+  vars["keyfile"] = PromptVarValue{request.keyfile};
+  vars["compression"] = PromptVarValue{request.compression};
+  vars["trash_dir"] = PromptVarValue{metadata.trash_dir};
+  vars["login_dir"] = PromptVarValue{metadata.login_dir};
+  vars["cwd"] = PromptVarValue{metadata.cwd};
+  vars["cmd_template"] = PromptVarValue{metadata.cmd_template};
+  vars["is_cwd_exists"] = PromptVarValue{!AMStr::Strip(metadata.cwd).empty()};
+  return vars;
+}
+
+std::pair<std::string, std::optional<ECM>> ResolveShellRunCommand_(
+    const AMDomain::host::ConRequest &request,
+    const AMDomain::host::ClientMetaData &metadata,
+    const std::string &cmd) {
+  const std::string cmd_template = AMStr::Strip(metadata.cmd_template);
+  if (cmd_template.empty()) {
+    return {cmd, std::nullopt};
   }
-  return out;
+
+  const auto render =
+      AMInterface::prompt::LUARender({cmd_template},
+                                     BuildShellRunLuaVars_(request, metadata,
+                                                           cmd));
+  if (!(render.rcm)) {
+    return {cmd, render.rcm};
+  }
+  return {render.data, std::nullopt};
 }
 
 enum class LocalInputPollStatus_ { Ready, Closed, Error };
@@ -1134,21 +1145,18 @@ ECM TerminalInterfaceService::ShellRun(
   std::string final_cmd = command;
   auto metadata_client_result = client_service_.GetClient(nickname, true);
   if ((metadata_client_result.rcm) && metadata_client_result.data) {
+    const auto request = metadata_client_result.data->ConfigPort().GetRequest();
     auto metadata_opt =
         AMApplication::client::ClientAppService::GetClientMetadata(
             metadata_client_result.data);
     if (metadata_opt.has_value()) {
-      const std::string cmd_template = AMStr::Strip(metadata_opt->cmd_template);
-      if (!cmd_template.empty()) {
-        std::unordered_map<std::string, std::string> vars = {};
-        const auto dict = metadata_opt->GetStrDict();
-        vars.reserve(dict.size() + 2);
-        for (const auto &entry : dict) {
-          vars[entry.first] = entry.second;
-        }
-        vars["cmd"] = command;
-        vars["escaped_cmd"] = command;
-        final_cmd = SubstituteTemplateVars_(cmd_template, vars);
+      auto [resolved_cmd, render_error] =
+          ResolveShellRunCommand_(request, metadata_opt.value(), command);
+      final_cmd = std::move(resolved_cmd);
+      if (render_error.has_value()) {
+        prompt_io_manager_.Print(AMStr::fmt(
+            "cmd_template lua render failed, fallback to cmd: {}",
+            render_error->msg()));
       }
     }
   }
@@ -1186,8 +1194,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const TerminalLaunchArg &arg,
     const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  const int send_timeout_ms =
-      filesystem_service_.GetInitArg().terminal_send_timeout_ms;
+  const int send_timeout_ms = terminal_service_.GetInitArg().send_timeout_ms;
   const int write_kick_timeout_ms = (send_timeout_ms < 0) ? 0 : send_timeout_ms;
   std::string default_nickname = filesystem_service_.CurrentNickname();
   if (default_nickname.empty()) {

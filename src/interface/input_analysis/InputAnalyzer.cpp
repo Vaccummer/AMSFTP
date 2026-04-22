@@ -3,6 +3,7 @@
 #include "domain/host/HostDomainService.hpp"
 #include "domain/var/VarDomainService.hpp"
 #include "foundation/tools/string.hpp"
+#include "foundation/tools/url.hpp"
 #include "interface/input_analysis/lexer/ShellTokenLexer.hpp"
 #include "interface/input_analysis/rules/InputTextRules.hpp"
 #include "interface/parser/CommandTree.hpp"
@@ -920,6 +921,13 @@ InputAnalysis InputAnalyzer::Analyze(const std::string &input) const {
       case AMCommandArgSemantic::HostAttrValue:
         SetTokenClassification_(&token, TokenRole::ValidatedValue,
                                 TokenState::Neutral);
+        ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
+        continue;
+      case AMCommandArgSemantic::Url:
+        SetTokenClassification_(&token, TokenRole::ValidatedValue,
+                                AMUrl::IsHttpUrl(unescaped_text)
+                                    ? TokenState::Valid
+                                    : TokenState::Invalid);
         ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
         continue;
       case AMCommandArgSemantic::HostNickname:

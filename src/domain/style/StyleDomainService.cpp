@@ -276,6 +276,7 @@ void NormalizeInputHighlight(InputHighlightStyle *style) {
   const InputHighlightStyle defaults = {};
   NormalizeStyleToken(&style->default_style, defaults.default_style);
   NormalizeStyleToken(&style->type_string, defaults.type_string);
+  NormalizeStyleToken(&style->type_error, defaults.type_error);
   NormalizeStyleToken(&style->type_number, defaults.type_number);
   NormalizeStyleToken(&style->type_protocol, defaults.type_protocol);
   NormalizeStyleToken(&style->type_username, defaults.type_username);
@@ -344,7 +345,6 @@ void NormalizeValueQueryHighlight(ValueQueryHighlightStyle *style) {
   const ValueQueryHighlightStyle defaults = {};
   NormalizeStyleToken(&style->valid_value, defaults.valid_value);
   NormalizeStyleToken(&style->invalid_value, defaults.invalid_value);
-  NormalizeStyleToken(&style->prompt_style, defaults.prompt_style);
 }
 
 void NormalizeInternalStyle(InternalStyle *style) {
@@ -384,17 +384,6 @@ void NormalizePathHighlight(PathHighlightStyle *style) {
   }
 }
 
-void NormalizeSystemInfo(SystemInfoStyle *style) {
-  if (!style) {
-    return;
-  }
-  const SystemInfoStyle defaults = {};
-  NormalizeStyleToken(&style->info, defaults.info);
-  NormalizeStyleToken(&style->success, defaults.success);
-  NormalizeStyleToken(&style->error, defaults.error);
-  NormalizeStyleToken(&style->warning, defaults.warning);
-}
-
 void NormalizeStyleConfig(StyleConfig *config) {
   if (!config) {
     return;
@@ -407,7 +396,6 @@ void NormalizeStyleConfig(StyleConfig *config) {
   NormalizeValueQueryHighlight(&config->value_query_highlight);
   NormalizeInternalStyle(&config->internal_style);
   NormalizePathHighlight(&config->path);
-  NormalizeSystemInfo(&config->system_info);
 }
 
 void NormalizeStyleConfigArg(StyleConfigArg *arg) {

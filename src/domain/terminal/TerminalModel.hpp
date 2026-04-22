@@ -22,12 +22,20 @@ struct ChannelCacheThresholdBytes {
  * @brief Settings payload for `Options.TerminalManager`.
  */
 struct TerminalManagerArg {
+  int read_timeout_ms = -1;
+  int send_timeout_ms = 0;
   ChannelCacheThresholdBytes channel_cache_threshold_bytes = {};
 };
 
 inline void NormalizeTerminalManagerArg(TerminalManagerArg *arg) {
   if (!arg) {
     return;
+  }
+  if (arg->read_timeout_ms == 0 || arg->read_timeout_ms < -1) {
+    arg->read_timeout_ms = -1;
+  }
+  if (arg->send_timeout_ms < -1) {
+    arg->send_timeout_ms = 0;
   }
   arg->channel_cache_threshold_bytes.warning =
       std::max<size_t>(1U, arg->channel_cache_threshold_bytes.warning);
