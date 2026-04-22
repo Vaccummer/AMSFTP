@@ -9,22 +9,27 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace AMApplication::log {
+class LoggerAppService;
+}
 
 namespace AMApplication::transfer {
 
 class TransferAppService final : public NonCopyableNonMovable {
 public:
   using TaskID = AMDomain::transfer::TaskID;
-  using TaskInfo = AMDomain::transfer::TaskInfo;
-  using TaskHandle = std::shared_ptr<TaskInfo>;
+  using TaskHandle = std::shared_ptr<AMDomain::transfer::TaskInfo>;
   using TaskStatus = AMDomain::transfer::TaskStatus;
 
   TransferAppService(
       AMDomain::transfer::ITransferPoolPort &transfer_pool,
       AMApplication::client::ClientAppService &client_service,
-      AMApplication::filesystem::FilesystemAppService &filesystem_service);
+      AMApplication::filesystem::FilesystemAppService &filesystem_service,
+      AMApplication::log::LoggerAppService *logger = nullptr);
   ~TransferAppService() override = default;
 
   ECM Submit(const TaskHandle &task_info);
@@ -76,6 +81,15 @@ private:
   static void ReleaseClients_(const TaskHandle &task_info);
   [[nodiscard]] ECMData<AMDomain::transfer::TransferClientContainer>
   RecollectTransferClients_(const TaskHandle &task_info);
+  void TraceTask_(AMDomain::client::TraceLevel level, EC code, TaskID id,
+                  const std::string &action,
+                  const std::string &message = "") const;
+  void TraceTask_(AMDomain::client::TraceLevel level, const ECM &rcm, TaskID id,
+                  const std::string &action,
+                  const std::string &message = "") const;
+  void TraceTask_(AMDomain::client::TraceLevel level, const ECM &rcm,
+                  const TaskHandle &task_info, const std::string &action,
+                  const std::string &message = "") const;
   void StorePaused_(const TaskHandle &task_info);
   void StoreFinished_(const TaskHandle &task_info);
 
@@ -83,6 +97,7 @@ private:
   AMDomain::transfer::ITransferPoolPort &transfer_pool_;
   AMApplication::client::ClientAppService &client_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
+  AMApplication::log::LoggerAppService *logger_ = nullptr;
   mutable AMAtomic<std::unordered_map<TaskID, TaskHandle>> paused_tasks_ = {};
   mutable AMAtomic<std::unordered_map<TaskID, TaskHandle>> finished_tasks_ = {};
 };

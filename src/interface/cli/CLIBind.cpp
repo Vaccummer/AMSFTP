@@ -1,11 +1,120 @@
 #include "interface/cli/CLIBind.hpp"
 #include "CLI/App.hpp"
+#include "application/log/LoggerAppService.hpp"
+#include "foundation/tools/string.hpp"
+#include "foundation/tools/time.hpp"
 #include "interface/parser/CommandTree.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <iostream>
+#include <string>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace AMInterface::cli {
 
 using AMInterface::parser::AMCommandArgSemantic;
 using AMInterface::parser::CommandNode;
+
+namespace {
+using TraceLevel = AMDomain::client::TraceLevel;
+
+TraceLevel CommandTraceLevel_(const ECM &rcm) {
+  if ((rcm)) {
+    return TraceLevel::Info;
+  }
+  if (rcm.code == EC::Terminate || rcm.code == EC::OperationTimeout ||
+      rcm.code == EC::ConfigCanceled) {
+    return TraceLevel::Warning;
+  }
+  return TraceLevel::Error;
+}
+
+std::string CommandTraceMode_(const CliRunContext &ctx) {
+  const bool interactive =
+      ctx.is_interactive && ctx.is_interactive->load(std::memory_order_relaxed);
+  return interactive ? std::string("interactive") : std::string("single");
+}
+
+void TraceProgramCommand_(const CLIServices &managers, TraceLevel level,
+                          EC code, const std::string &command,
+                          const std::string &action,
+                          const std::string &message) {
+  if (!managers.application.log_manager.IsReady()) {
+    return;
+  }
+  const std::string target = command.empty() ? std::string("<none>") : command;
+  (void)managers.application.log_manager->Trace(
+      AMDomain::log::LoggerType::Program, level, code, "", target, action,
+      message);
+}
+
+void TraceProgramCommand_(const CLIServices &managers, const ECM &rcm,
+                          const std::string &command,
+                          const std::string &action,
+                          const std::string &message) {
+  std::string detail = message;
+  if (!(rcm)) {
+    if (!detail.empty()) {
+      detail += "; ";
+    }
+    detail += AMStr::fmt("result={} error={}", AMStr::ToString(rcm.code),
+                         rcm.msg());
+  }
+  TraceProgramCommand_(managers, CommandTraceLevel_(rcm), rcm.code, command,
+                       action, detail);
+}
+
+class ScopedConsoleProcessedInput_ {
+public:
+  ScopedConsoleProcessedInput_() {
+#ifdef _WIN32
+    input_ = GetStdHandle(STD_INPUT_HANDLE);
+    if (input_ == nullptr || input_ == INVALID_HANDLE_VALUE) {
+      return;
+    }
+    DWORD mode = 0;
+    if (GetConsoleMode(input_, &mode) == 0) {
+      return;
+    }
+    previous_mode_ = mode;
+    const DWORD command_mode = mode | ENABLE_PROCESSED_INPUT;
+    if (command_mode == mode) {
+      return;
+    }
+    active_ = SetConsoleMode(input_, command_mode) != 0;
+#endif
+  }
+
+  ~ScopedConsoleProcessedInput_() {
+#ifdef _WIN32
+    if (active_ && input_ != nullptr && input_ != INVALID_HANDLE_VALUE) {
+      (void)SetConsoleMode(input_, previous_mode_);
+    }
+#endif
+  }
+
+  ScopedConsoleProcessedInput_(const ScopedConsoleProcessedInput_ &) = delete;
+  ScopedConsoleProcessedInput_ &
+  operator=(const ScopedConsoleProcessedInput_ &) = delete;
+
+private:
+#ifdef _WIN32
+  HANDLE input_ = nullptr;
+  DWORD previous_mode_ = 0;
+  bool active_ = false;
+#endif
+};
+} // namespace
 
 /**
  * @brief Bind config-related CLI commands.
@@ -453,13 +562,13 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
       });
 
   root->AddFunction(
-      "move", "Move one source to destination directory", args,
-      &CliArgsPool::fs, &CliFilesystemArgs::move,
+      "mv", "Move one source to destination directory", args,
+      &CliArgsPool::fs, &CliFilesystemArgs::mv,
       [&args](CommandNode &node) {
-        node.AddOption("src", args.fs.move.src, 1, 1, "Source path", true);
-        node.AddOption("dst", args.fs.move.dst, 0, 1,
+        node.AddOption("src", args.fs.mv.src, 1, 1, "Source path", true);
+        node.AddOption("dst", args.fs.mv.dst, 0, 1,
                        "Destination directory path");
-        node.AddFlag("-f", "--force", args.fs.move.force,
+        node.AddFlag("-f", "--force", args.fs.mv.force,
                      "Overwrite existing targets");
         node.AddPositionalRule(0, Sem::Path, false);
         node.AddPositionalRule(1, Sem::Path, false);
@@ -501,9 +610,9 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                        Sem::None, "Basic auth password");
         node.AddOption("-b", "--bear", args.fs.wget.bear_token, 1, 1,
                        Sem::None, "Bearer token");
-        node.AddOption("-p", "--proxy", args.fs.wget.proxy, 1, 1, Sem::None,
+        node.AddOption("-p", "--proxy", args.fs.wget.proxy, 1, 1, Sem::Url,
                        "HTTP proxy");
-        node.AddOption("-s", "--sproxy", args.fs.wget.sproxy, 1, 1, Sem::None,
+        node.AddOption("-s", "--sproxy", args.fs.wget.sproxy, 1, 1, Sem::Url,
                        "HTTPS proxy");
         node.AddOption("-R", "--redirect", args.fs.wget.redirect_times, 1, 1,
                        Sem::None,
@@ -514,6 +623,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                      "Overwrite existing destination file");
         node.AddFlag("-q", "--quiet", args.fs.wget.quiet,
                      "Suppress transfer output");
+        node.AddPositionalRule(0, Sem::Url, false);
         node.AddPositionalRule(1, Sem::Path, false);
       });
 
@@ -788,6 +898,14 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args) {
         node.AddPositionalRule(0, Sem::PausedTaskId, true);
       });
 
+  task_node->AddFunction(
+      "rm", "Remove finished task record(s)", args, &CliArgsPool::task,
+      &CliTaskArgs::rm, [&args](CommandNode &node) {
+        node.AddOption("id", args.task.rm.ids, 1, static_cast<size_t>(-1),
+                       "Finished task IDs");
+        node.AddPositionalRule(0, Sem::TaskId, true);
+      });
+
   args.task.terminate.action = TaskControlArgs::Action::Terminate;
   args.task.pause.action = TaskControlArgs::Action::Pause;
   args.task.resume.action = TaskControlArgs::Action::Resume;
@@ -834,6 +952,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     const std::string msg = "CLI args pool is not initialized";
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::UnknownError, "", "", msg};
+    TraceProgramCommand_(managers, ctx.rcm, "", "cli.dispatch.error", msg);
     store_exit_code(static_cast<int>(ctx.rcm.code));
     return;
   }
@@ -841,6 +960,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     const std::string msg = "CLI session task control token is not initialized";
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::InvalidArg, "", "", msg};
+    TraceProgramCommand_(managers, ctx.rcm, "", "cli.dispatch.error", msg);
     store_exit_code(static_cast<int>(ctx.rcm.code));
     if (cli_commands.args) {
       cli_commands.args->ClearActive();
@@ -867,6 +987,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     std::string msg = "No valid command provided";
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::InvalidArg, "", "", msg};
+    TraceProgramCommand_(managers, ctx.rcm, "", "cli.dispatch.error", msg);
     store_exit_code(static_cast<int>(ctx.rcm.code));
     args.ClearActive();
     return;
@@ -881,6 +1002,8 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     }
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::InvalidArg, "", "", msg};
+    TraceProgramCommand_(managers, ctx.rcm, command_name,
+                         "cli.dispatch.error", msg);
     store_exit_code(static_cast<int>(ctx.rcm.code));
     args.ClearActive();
     return;
@@ -889,6 +1012,13 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   ctx.command_name = command_name;
 
   BaseArgStruct *selected = args.GetActive();
+  const ScopedConsoleProcessedInput_ processed_input_guard;
+  const auto dispatch_begin = AMTime::SteadyNow();
+  TraceProgramCommand_(
+      managers, TraceLevel::Info, EC::Success, command_name,
+      "cli.dispatch.start",
+      AMStr::fmt("mode={} async={}", CommandTraceMode_(ctx),
+                 ctx.async ? "true" : "false"));
   const ECM run_rcm = selected->Run(managers, ctx);
   const ECM sync_rcm =
       managers.application.config_service->FlushDirtyParticipants();
@@ -896,6 +1026,14 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   if ((ctx.rcm) && !(sync_rcm)) {
     ctx.rcm = sync_rcm;
   }
+  const int64_t duration_ms =
+      std::max<int64_t>(0,
+                        AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
+  TraceProgramCommand_(
+      managers, ctx.rcm, command_name, "cli.dispatch.end",
+      AMStr::fmt("duration_ms={} run={} sync={}", duration_ms,
+                 AMStr::ToString(run_rcm.code),
+                 AMStr::ToString(sync_rcm.code)));
   selected->reset();
   args.ClearActive();
   store_exit_code(static_cast<int>(ctx.rcm.code));

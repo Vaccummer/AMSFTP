@@ -4,9 +4,11 @@
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/tools/string.hpp"
+#include <chrono>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -166,13 +168,12 @@ private:
  * @brief Settings payload for `Options.TransferManager`.
  */
 struct TransferManagerArg {
+  static constexpr size_t kMinBufferBytes = 1024;
+  static constexpr size_t kMaxBufferBytes = 1024 * 1024 * 1024;
+
   int max_threads = 16;
   int bar_refresh_interval_ms = 200;
-  int heartbeat_interval_s = 10;
-  int heartbeat_timeout_ms = 5000;
-  size_t buffer_size = AMDomain::client::ClientService::AMDefaultBufferSize;
-  size_t min_buffer = AMDomain::client::ClientService::AMMinBufferSize;
-  size_t max_buffer = AMDomain::client::ClientService::AMMaxBufferSize;
+  size_t ring_buffersize = AMDomain::client::ClientService::AMDefaultBufferSize;
 };
 
 struct ProgressCBInfo {
@@ -315,8 +316,19 @@ struct TaskSize {
   std::atomic<size_t> cur_task{0};
   std::atomic<size_t> cur_task_transferred{0};
   std::atomic<size_t> filenum{0};
+  std::atomic<size_t> finished_filenum{0};
   std::atomic<size_t> success_filenum{0};
   std::atomic<size_t> buffer{0};
+};
+
+struct TaskProgressData {
+  struct SpeedSample {
+    std::chrono::steady_clock::time_point when = {};
+    size_t transferred = 0;
+  };
+
+  mutable AMAtomic<std::deque<SpeedSample>> speed_samples =
+      AMAtomic<std::deque<SpeedSample>>(std::deque<SpeedSample>{});
 };
 
 struct TaskCoreData {
@@ -354,6 +366,7 @@ struct TaskInfo {
   TaskStruct::TaskTime Time;
   TaskStruct::TaskState State;
   TaskStruct::TaskSize Size;
+  TaskStruct::TaskProgressData Progress;
   TaskStruct::TaskCoreData Core;
   TaskStruct::TaskSet Set;
   TaskStruct::TaskCallback Callback;
@@ -414,7 +427,80 @@ struct TaskInfo {
     return current;
   }
 
-  void DeleteProgressData() {}
+  void DeleteProgressData() {
+    auto samples = Progress.speed_samples.lock();
+    samples->clear();
+  }
+
+  void ResetProgressData(bool seed_current_sample = true) {
+    auto samples = Progress.speed_samples.lock();
+    samples->clear();
+    if (!seed_current_sample) {
+      return;
+    }
+    AppendSpeedSampleLocked_(
+        &samples, Size.transferred.load(std::memory_order_relaxed),
+        std::chrono::steady_clock::now());
+  }
+
+  void SetTransferredSize(size_t value) {
+    Size.transferred.store(value, std::memory_order_relaxed);
+    AppendSpeedSample_(value);
+  }
+
+  [[nodiscard]] size_t AddTransferredSize(size_t delta) {
+    if (delta == 0) {
+      return Size.transferred.load(std::memory_order_relaxed);
+    }
+    const size_t next =
+        Size.transferred.fetch_add(delta, std::memory_order_relaxed) + delta;
+    AppendSpeedSample_(next);
+    return next;
+  }
+
+  [[nodiscard]] size_t SubTransferredSize(size_t delta) {
+    if (delta == 0) {
+      return Size.transferred.load(std::memory_order_relaxed);
+    }
+    size_t current = Size.transferred.load(std::memory_order_relaxed);
+    while (true) {
+      const size_t next = (delta >= current) ? 0 : (current - delta);
+      if (Size.transferred.compare_exchange_weak(
+              current, next, std::memory_order_relaxed,
+              std::memory_order_relaxed)) {
+        AppendSpeedSample_(next);
+        return next;
+      }
+    }
+  }
+
+  [[nodiscard]] double GetSpeedBytesPerSecond(
+      int64_t window_ms = 7000) const {
+    const auto horizon =
+        std::chrono::milliseconds(std::max<int64_t>(1, window_ms));
+    auto samples = Progress.speed_samples.lock();
+    if (samples->size() < 2) {
+      return 0.0;
+    }
+
+    const auto &latest = samples->back();
+    const auto cutoff = latest.when - horizon;
+    auto first = samples->begin();
+    for (auto it = samples->begin(); it != samples->end(); ++it) {
+      if (it->when <= cutoff) {
+        first = it;
+        continue;
+      }
+      break;
+    }
+
+    const double dt =
+        std::chrono::duration<double>(latest.when - first->when).count();
+    if (dt <= 0.0 || latest.transferred < first->transferred) {
+      return 0.0;
+    }
+    return static_cast<double>(latest.transferred - first->transferred) / dt;
+  }
 
   bool TryMarkCompletionDispatched() {
     bool expected = false;
@@ -542,6 +628,32 @@ struct TaskInfo {
     out.size = task->size;
     out.transferred = task->transferred;
     return out;
+  }
+
+private:
+  static constexpr int64_t kSpeedSampleRetentionMs = 60000;
+  using SpeedSamples = std::deque<TaskStruct::TaskProgressData::SpeedSample>;
+  using SpeedSamplesGuard = AMAtomic<SpeedSamples>::Guard;
+
+  void AppendSpeedSample_(size_t transferred) {
+    auto samples = Progress.speed_samples.lock();
+    AppendSpeedSampleLocked_(&samples, transferred,
+                             std::chrono::steady_clock::now());
+  }
+
+  void AppendSpeedSampleLocked_(
+      SpeedSamplesGuard *samples, size_t transferred,
+      std::chrono::steady_clock::time_point when) {
+    if (samples == nullptr) {
+      return;
+    }
+    (*samples)->push_back({when, transferred});
+    const auto retention =
+        std::chrono::milliseconds(kSpeedSampleRetentionMs);
+    while ((*samples)->size() > 1 &&
+           (when - (*samples)->front().when) > retention) {
+      (*samples)->pop_front();
+    }
   }
 };
 

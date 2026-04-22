@@ -68,4 +68,8 @@ struct TransferTaskResultArg {
   bool remove = false;
 };
 
+struct TransferTaskRemoveArg {
+  std::vector<AMDomain::transfer::TaskID> ids = {};
+};
+
 } // namespace AMInterface::transfer
