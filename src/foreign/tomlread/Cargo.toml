@@ -1,10 +1,11 @@
 [package]
-name = "cfgffi"
+name = "rust_toml_read"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+name = "rust_toml_read"
+crate-type = ["staticlib"]
 
 [dependencies]
 toml_edit = "0.22"
@@ -13,3 +14,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 libc = "0.2"
 atomicwrites = "0.4"
+
+[profile.release]
+lto = true

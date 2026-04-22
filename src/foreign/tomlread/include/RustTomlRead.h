@@ -19,44 +19,45 @@ extern "C" {
 #define RUST_TOML_READ_API
 #endif
 
-using ConfigHandle = struct ConfigHandle;
-// Read TOML and filter unknown fields by JSON Schema; return a handle.
+// Opaque handle
+typedef struct ConfigHandle ConfigHandle;
+
+// Read TOML and filter unknown fields by JSON Schema, then return a handle
 // Returns NULL on failure; out_err returns UTF-8 error text and must be freed
-// with RustTomlFreeString release.
+// by RustTomlFreeString
 RUST_TOML_READ_API ConfigHandle *RustTomlRead(const char *path,
                                               const char *schema_json,
                                               char **out_err);
 
-// Get filtered JSON (UTF-8). Memory is allocated by Rust and must be freed
-// with RustTomlFreeString.
+// Get filtered JSON (UTF-8). Memory is allocated by Rust and must be freed by
+// RustTomlFreeString
 RUST_TOML_READ_API char *RustTomlGetJson(const ConfigHandle *h);
 
-// Get filtered TOML (UTF-8). Memory is allocated by Rust and must be freed
-// with RustTomlFreeString.
+// Get filtered TOML (UTF-8). Memory is allocated by Rust and must be freed by
+// RustTomlFreeString
 RUST_TOML_READ_API char *RustTomlGetToml(const ConfigHandle *h);
 
-// Write back TOML:
-// - new_json is a UTF-8 JSON string (filtered again by schema)
-// - Existing key order is preserved; new keys are appended to the end
-// Returns 0 on success; non-zero on failure. out_err returns error text (must
-// be freed with RustTomlFreeString).
+// Write TOML back:
+// - new_json is a UTF-8 JSON string (filtered by schema again)
+// - Existing key order remains unchanged; new keys are appended at the end
+// Returns 0 on success; non-zero on failure, out_err returns error text (free
+// with RustTomlFreeString)
 RUST_TOML_READ_API int RustTomlWrite(ConfigHandle *h, const char *out_path,
                                      const char *new_json, char **out_err);
 
-// Optional: write directly back to the original path read.
+// Optional: write directly back to the original path from read
 RUST_TOML_READ_API int RustTomlWriteInplace(ConfigHandle *h,
                                             const char *new_json,
                                             char **out_err);
 
 // Debug: compare TOML key order after Rust-side filtering with generated JSON
 // key order Returns JSON string: {"same":bool,"before":[...],"after":[...]}
-// Returned memory is allocated by Rust and must be freed with
-// RustTomlFreeString.
+// Returned memory is allocated by Rust and must be freed by RustTomlFreeString
 RUST_TOML_READ_API char *RustTomlDebugOrder(const char *path,
                                             const char *schema_json,
                                             char **out_err);
 
-// Release.
+// Release
 RUST_TOML_READ_API void RustTomlFreeString(char *p);
 RUST_TOML_READ_API void RustTomlFreeHandle(ConfigHandle *h);
 
