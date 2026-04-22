@@ -39,7 +39,6 @@ const std::vector<HostSetFieldRef> &EditableHostSetFields() {
     add_request(ConRequest::Attr::protocol);
     add_request(ConRequest::Attr::password);
     add_request(ConRequest::Attr::keyfile);
-    add_request(ConRequest::Attr::buffer_size);
     add_request(ConRequest::Attr::compression);
 
     add_metadata(ClientMetaData::Attr::trash_dir);
@@ -186,12 +185,6 @@ ECM ValidateConfig(const ConRequest &request) {
   }
 
   validate_rcm = ValidateFieldValue(ConRequest::Attr::keyfile, request.keyfile);
-  if (!(validate_rcm)) {
-    return validate_rcm;
-  }
-
-  validate_rcm =
-      ValidateFieldValue(ConRequest::Attr::buffer_size, request.buffer_size);
   if (!(validate_rcm)) {
     return validate_rcm;
   }

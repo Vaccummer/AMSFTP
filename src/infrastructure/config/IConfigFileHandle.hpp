@@ -33,7 +33,7 @@ public:
   virtual ECM DumpTo(const std::filesystem::path &dst_path) = 0;
 
   /**
-   * @brief Close underlying cfgffi handle and reset state.
+   * @brief Close underlying RustTomlRead handle and reset state.
    */
   virtual void Close() = 0;
 

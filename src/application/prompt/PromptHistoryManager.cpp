@@ -1,9 +1,13 @@
 #include "application/prompt/PromptHistoryManager.hpp"
+#include "domain/host/HostDomainService.hpp"
+#include "domain/host/HostModel.hpp"
 #include "foundation/tools/string.hpp"
 
 namespace AMApplication::prompt {
 namespace {
 using EC = ErrorCode;
+using AMDomain::host::HostService::IsLocalNickname;
+using AMDomain::prompt::kPromptProfileDefault;
 
 std::vector<std::string>
 DedupContinuousHistory_(const std::vector<std::string> &history) {
@@ -18,14 +22,41 @@ DedupContinuousHistory_(const std::vector<std::string> &history) {
   return deduped;
 }
 
+std::string NormalizeHistoryZone_(const std::string &zone) {
+  const std::string stripped = AMStr::Strip(zone);
+  if (stripped.empty() || stripped == kPromptProfileDefault ||
+      IsLocalNickname(stripped)) {
+    return AMDomain::host::klocalname;
+  }
+  return stripped;
+}
+
+void NormalizePromptHistorySet_(PromptHistoryArg *arg) {
+  if (arg == nullptr) {
+    return;
+  }
+  AMDomain::prompt::PromptHistorySet normalized = {};
+  auto append_history = [&normalized](const std::string &zone,
+                                      const std::vector<std::string> &history) {
+    auto &bucket = normalized[zone];
+    bucket.insert(bucket.end(), history.begin(), history.end());
+  };
+
+  for (const auto &[zone, history] : arg->set) {
+    append_history(NormalizeHistoryZone_(zone), history);
+  }
+  for (auto &[zone, history] : normalized) {
+    (void)zone;
+    history = DedupContinuousHistory_(history);
+  }
+  arg->set = std::move(normalized);
+}
+
 void NormalizePromptHistoryArg_(PromptHistoryArg *arg) {
   if (arg == nullptr) {
     return;
   }
-  for (auto &[zone, history] : arg->set) {
-    (void)zone;
-    history = DedupContinuousHistory_(history);
-  }
+  NormalizePromptHistorySet_(arg);
 }
 } // namespace
 
@@ -63,32 +94,35 @@ void PromptHistoryManager::SetInitArg(PromptHistoryArg arg) {
 
 ECMData<PromptHistoryQueryResult>
 PromptHistoryManager::GetZoneHistory(const std::string &zone) const {
+  const std::string normalized_zone = NormalizeHistoryZone_(zone);
   auto guard = init_arg_.lock();
-  const auto zone_it = guard->set.find(zone);
+  const auto zone_it = guard->set.find(normalized_zone);
   if (zone_it != guard->set.end()) {
     PromptHistoryQueryResult out = {};
     out.request_zone = zone;
-    out.resolved_zone = zone;
-    out.from_fallback = false;
+    out.resolved_zone = normalized_zone;
+    out.from_fallback = (normalized_zone != AMStr::Strip(zone));
     out.history = DedupContinuousHistory_(zone_it->second);
     return {std::move(out), OK};
   }
 
   PromptHistoryQueryResult out = {};
   out.request_zone = zone;
-  out.resolved_zone = zone;
-  out.from_fallback = false;
+  out.resolved_zone = normalized_zone;
+  out.from_fallback = (normalized_zone != AMStr::Strip(zone));
   out.history = {};
   return {std::move(out),
           Err(EC::PathNotExist, "", "",
-              AMStr::fmt("Prompt history not found for zone: {}", zone))};
+              AMStr::fmt("Prompt history not found for zone: {}",
+                         normalized_zone))};
 }
 
 ECM PromptHistoryManager::SetZoneHistory(const std::string &zone,
                                          std::vector<std::string> history) {
+  const std::string normalized_zone = NormalizeHistoryZone_(zone);
   history = DedupContinuousHistory_(std::move(history));
   auto guard = init_arg_.lock();
-  guard->set[zone] = std::move(history);
+  guard->set[normalized_zone] = std::move(history);
   MarkConfigDirty();
   return OK;
 }
@@ -98,8 +132,9 @@ ECM PromptHistoryManager::AppendZoneHistory(const std::string &zone,
   if (entry.empty()) {
     return Err(EC::InvalidArg, "", "", "Prompt history entry is empty");
   }
+  const std::string normalized_zone = NormalizeHistoryZone_(zone);
   auto guard = init_arg_.lock();
-  auto &bucket = guard->set[zone];
+  auto &bucket = guard->set[normalized_zone];
   if (!bucket.empty() && bucket.back() == entry) {
     return OK;
   }
@@ -109,11 +144,13 @@ ECM PromptHistoryManager::AppendZoneHistory(const std::string &zone,
 }
 
 ECM PromptHistoryManager::ClearZoneHistory(const std::string &zone) {
+  const std::string normalized_zone = NormalizeHistoryZone_(zone);
   auto guard = init_arg_.lock();
-  auto it = guard->set.find(zone);
+  auto it = guard->set.find(normalized_zone);
   if (it == guard->set.end()) {
     return Err(EC::PathNotExist, "", "",
-               AMStr::fmt("Prompt history zone not found: {}", zone));
+               AMStr::fmt("Prompt history zone not found: {}",
+                          normalized_zone));
   }
   it->second.clear();
   MarkConfigDirty();

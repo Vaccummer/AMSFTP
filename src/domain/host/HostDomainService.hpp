@@ -91,11 +91,6 @@ template <typename T>
       return Err(EC::InvalidArg, "", "",
                  "Invalid type for path/text field, expected string-like type");
     }
-    if (attr == ConRequest::Attr::buffer_size) {
-      return Err(EC::InvalidArg, "", "",
-                 "Invalid type for buffer_size, expected integer or "
-                 "string-like type");
-    }
     if (attr == ConRequest::Attr::compression) {
       return Err(EC::InvalidArg, "", "",
                  "Invalid type for compression, expected bool or "
@@ -132,9 +127,6 @@ template <typename T>
         return Err(EC::InvalidArg, "", "",
                    "Port must be an integer between 1 and 65535");
       }
-      return OK;
-    }
-    if (attr == ConRequest::Attr::buffer_size) {
       return OK;
     }
     return invalid_type();
@@ -189,16 +181,6 @@ template <typename T>
 
     if (attr == ConRequest::Attr::password ||
         attr == ConRequest::Attr::keyfile) {
-      return OK;
-    }
-
-    if (attr == ConRequest::Attr::buffer_size) {
-      int64_t parsed_size = 0;
-      if (!AMStr::GetNumber(text_value, &parsed_size)) {
-        return Err(
-            EC::InvalidArg, "", "",
-            "No number found in buffer_size text, or value out of range");
-      }
       return OK;
     }
 

@@ -24,9 +24,7 @@ CreateClient(const ConRequest &request,
              AMDomain::client::KnownHostCallback known_host_cb,
              TraceCallback trace_cb, AuthCallback auth_cb,
              const std::vector<std::string> &private_keys) {
-  ConRequest normalized = request;
-  normalized.buffer_size =
-      ClientService::ClampBufferSize(normalized.buffer_size);
+  const ConRequest normalized = request;
 
   auto metadata_port = std::make_unique<AMInfra::client::ClientMetaDataStore>();
   auto config_port =

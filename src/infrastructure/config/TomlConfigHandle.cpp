@@ -196,7 +196,7 @@ ECM TomlConfigHandle::DumpTo(const std::filesystem::path &dst_path) {
   }
 
   if (rc != 0) {
-    std::string msg = err ? err : "cfgffi write failed";
+    std::string msg = err ? err : "RustTomlRead write failed";
     if (err) {
       RustTomlFreeString(err);
     }
