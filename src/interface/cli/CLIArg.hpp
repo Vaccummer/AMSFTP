@@ -49,7 +49,7 @@ struct CliFilesystemArgs {
   RttArgs rtt = {};
   ClearArgs clear = {};
   CpArgs cp = {};
-  MoveArgs move = {};
+  MoveArgs mv = {};
   CloneArgs clone = {};
   WgetArgs wget = {};
   SftpArgs sftp = {};
@@ -108,6 +108,7 @@ struct CliTaskArgs {
   TaskControlArgs terminate = {};
   TaskControlArgs pause = {};
   TaskControlArgs resume = {};
+  TaskRemoveArgs rm = {};
 };
 
 struct CliArgsPool {

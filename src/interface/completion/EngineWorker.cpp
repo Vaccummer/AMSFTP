@@ -229,6 +229,8 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
   switch (semantic) {
   case AMCommandArgSemantic::Path:
     return AMCompletionTarget::Path;
+  case AMCommandArgSemantic::Url:
+    return AMCompletionTarget::Disabled;
   case AMCommandArgSemantic::ShellCmd:
     return std::nullopt;
   case AMCommandArgSemantic::HostNickname:
