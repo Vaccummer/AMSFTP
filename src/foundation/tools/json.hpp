@@ -306,13 +306,7 @@ bool StrValueParse(const std::string &input, T *out) {
 }
 
 template <typename T> std::vector<T> VectorDedup(const std::vector<T> &input) {
-  std::vector<T> output;
-  output.reserve(input.size());
-  for (const auto &item : input) {
-    if (std::find(output.begin(), output.end(), item) == output.end()) {
-      output.push_back(item);
-    }
-  }
-  return output;
+  return AMStr::DedupVectorKeepOrder(input,
+                                     [](const T &item) { return item; });
 }
 } // namespace AMJson

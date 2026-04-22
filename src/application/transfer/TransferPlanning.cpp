@@ -50,17 +50,10 @@ void DedupAndSortTasks_(std::vector<AMDomain::transfer::TransferTask> *tasks) {
                             static_cast<int>(rhs.path_type);
                    });
 
-  std::unordered_set<std::string> seen = {};
-  seen.reserve(tasks->size());
-  std::vector<AMDomain::transfer::TransferTask> uniq = {};
-  uniq.reserve(tasks->size());
-  for (const auto &task : *tasks) {
-    const std::string key = BuildTaskKey_(task);
-    if (seen.insert(key).second) {
-      uniq.push_back(task);
-    }
-  }
-  tasks->swap(uniq);
+  *tasks = AMStr::DedupVectorKeepOrder(
+      *tasks, [](const AMDomain::transfer::TransferTask &task) {
+        return BuildTaskKey_(task);
+      });
 }
 } // namespace
 

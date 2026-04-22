@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -259,6 +260,23 @@ void PrintStyledNicknamesCompact_(
 
 ECM MergeStatus_(const ECM &current, const ECM &next) {
   return (next) ? current : next;
+}
+
+[[nodiscard]] ECM TimeoutSecondsToMs_(double timeout_s, const char *operation,
+                                      int *out_timeout_ms) {
+  if (out_timeout_ms == nullptr) {
+    return Err(EC::InvalidArg, operation, "timeout", "Timeout output is null");
+  }
+  if (!std::isfinite(timeout_s) || timeout_s <= 0.0) {
+    return Err(EC::InvalidArg, operation, "timeout",
+               "Timeout must be greater than 0 seconds");
+  }
+  const double timeout_ms = timeout_s * 1000.0;
+  if (timeout_ms > static_cast<double>(std::numeric_limits<int>::max())) {
+    return Err(EC::InvalidArg, operation, "timeout", "Timeout is too large");
+  }
+  *out_timeout_ms = std::max(1, static_cast<int>(std::llround(timeout_ms)));
+  return OK;
 }
 
 std::string
@@ -696,19 +714,19 @@ bool ParseInt64_(const std::string &text, int64_t *out) {
 
 std::vector<std::string>
 DedupTargets_(const std::vector<std::string> &targets) {
-  std::vector<std::string> out = {};
-  std::unordered_set<std::string> seen = {};
-  out.reserve(targets.size());
+  std::vector<std::string> normalized = {};
+  normalized.reserve(targets.size());
   for (const auto &target : targets) {
     const std::string value = AMStr::Strip(target);
     if (value.empty()) {
       continue;
     }
-    if (seen.insert(value).second) {
-      out.push_back(value);
-    }
+    normalized.push_back(value);
   }
-  return out;
+  return AMStr::DedupVectorKeepOrder(normalized,
+                                     [](const std::string &value) {
+                                       return value;
+                                     });
 }
 
 std::string ResolveLocalUsername_() {
@@ -2177,6 +2195,101 @@ ECM ClientInterfaceService::CheckClients(
     render::PrintClientDetail(prompt_io_manager_, entry.first, entry.second,
                               checks[entry.first], true);
   }
+  return status;
+}
+
+ECM ClientInterfaceService::ClearClients(
+    const ClearClientsRequest &request,
+    const std::optional<ControlComponent> &component) {
+  constexpr const char *kOp = "client.clear";
+  int timeout_ms = 0;
+  ECM timeout_rcm = TimeoutSecondsToMs_(request.timeout_s, kOp, &timeout_ms);
+  if (!(timeout_rcm)) {
+    prompt_io_manager_.ErrorFormat(timeout_rcm);
+    return timeout_rcm;
+  }
+
+  const ControlComponent base_control = ResolveControl_(component);
+  const auto clients = client_service_.GetClients();
+  if (clients.empty()) {
+    prompt_io_manager_.FmtPrint(
+        "client clear: checked=0 removed=0 kept=0 skipped=0 timeout={}s",
+        request.timeout_s);
+    return OK;
+  }
+
+  const std::string current_lower =
+      AMStr::lowercase(AMStr::Strip(client_service_.CurrentNickname()));
+  ECM status = OK;
+  size_t checked_count = 0U;
+  size_t removed_count = 0U;
+  size_t kept_count = 0U;
+  size_t skipped_count = 0U;
+  bool removed_current = false;
+
+  for (const auto &[name, client] : clients) {
+    if (base_control.IsInterrupted()) {
+      return Err(EC::Terminate, kOp, name, "Interrupted by user");
+    }
+
+    ++checked_count;
+    const std::string display_name =
+        IsLocalNickname(name) ? std::string("local") : name;
+    const ControlComponent check_control(base_control.ControlToken(),
+                                         timeout_ms);
+    const auto checked =
+        client_service_.CheckClientHandle(client, false, true, check_control);
+    const bool healthy =
+        (checked.rcm) &&
+        checked.data.status == AMDomain::client::ClientStatus::OK;
+
+    if (healthy) {
+      ++kept_count;
+      prompt_io_manager_.FmtPrint("✅ Client kept: {} ({})", display_name,
+                                  AMStr::ToString(checked.data.status));
+      continue;
+    }
+
+    if (IsLocalNickname(display_name)) {
+      ++skipped_count;
+      prompt_io_manager_.FmtPrint("⚠️  Client skipped: local {} {}",
+                                  AMStr::ToString(checked.rcm.code),
+                                  checked.rcm.msg());
+      continue;
+    }
+
+    const ECM remove_rcm = client_service_.RemoveClient(display_name);
+    if (!(remove_rcm)) {
+      status = MergeStatus_(status, remove_rcm);
+      prompt_io_manager_.FmtPrint("❌ Client remove failed: {} {} {}",
+                                  display_name,
+                                  AMStr::ToString(remove_rcm.code),
+                                  remove_rcm.msg());
+      continue;
+    }
+
+    ++removed_count;
+    if (!current_lower.empty() &&
+        AMStr::lowercase(AMStr::Strip(display_name)) == current_lower) {
+      removed_current = true;
+    }
+    prompt_io_manager_.FmtPrint("🧹 Client removed: {} {} {}", display_name,
+                                AMStr::ToString(checked.rcm.code),
+                                checked.rcm.msg());
+  }
+
+  if (removed_current) {
+    const ECM prompt_rcm = prompt_io_manager_.ChangeClient("local");
+    if (!(prompt_rcm)) {
+      prompt_io_manager_.ErrorFormat(prompt_rcm);
+      status = MergeStatus_(status, prompt_rcm);
+    }
+  }
+
+  prompt_io_manager_.FmtPrint(
+      "client clear: checked={} removed={} kept={} skipped={} timeout={}s",
+      checked_count, removed_count, kept_count, skipped_count,
+      request.timeout_s);
   return status;
 }
 

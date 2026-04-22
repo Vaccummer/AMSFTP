@@ -214,8 +214,8 @@ void SortAndDedupResults_(std::vector<PathInfo> *results) {
     return;
   }
   std::ranges::sort(*results, {}, &PathInfo::path);
-  const auto unique_range = std::ranges::unique(*results, {}, &PathInfo::path);
-  results->erase(unique_range.begin(), unique_range.end());
+  *results = AMStr::DedupVectorKeepOrder(
+      *results, [](const PathInfo &info) { return info.path; });
 }
 } // namespace
 
@@ -245,10 +245,12 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
 
   auto resolved_result = ResolvePath_(path, control);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
-    return {{},
-            (resolved_result.rcm) ? Err(EC::InvalidHandle, "find.resolve", "",
-                                        "Resolved client is null")
-                                  : resolved_result.rcm};
+    const ECM rcm =
+        (resolved_result.rcm) ? Err(EC::InvalidHandle, "find.resolve", "",
+                                    "Resolved client is null")
+                              : resolved_result.rcm;
+    TraceFs_(rcm, path, "filesystem.find", "resolve failed");
+    return {{}, rcm};
   }
   const auto &resolved = resolved_result.data;
 
@@ -304,14 +306,18 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     PathTarget error_path = BuildPathTarget_(nickname, literal_root);
     const ECM cb_rcm = notify_error(error_path, stat_result.rcm);
     if (!(cb_rcm)) {
+      TraceFs_(cb_rcm, path, "filesystem.find", "error callback failed");
       return {std::move(results), cb_rcm};
     }
+    TraceFs_(stat_result.rcm, path, "filesystem.find", "root stat failed");
     return {std::move(results), stat_result.rcm};
   }
 
   if (compiled.empty()) {
     (void)push_result(stat_result.data);
     SortAndDedupResults_(&results);
+    TraceFs_(final_rcm, path, "filesystem.find",
+             AMStr::fmt("matches={}", results.size()));
     return {std::move(results), final_rcm};
   }
 
@@ -447,6 +453,8 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   }
 
   SortAndDedupResults_(&results);
+  TraceFs_(final_rcm, path, "filesystem.find",
+           AMStr::fmt("matches={}", results.size()));
   return {std::move(results), final_rcm};
 }
 } // namespace AMApplication::filesystem
