@@ -1499,6 +1499,82 @@ private:
     return total;
   }
 
+public:
+  struct FTPDirectLocalContext {
+    RuntimeProgress *progress = nullptr;
+    UnionFileHandle *local_handle = nullptr;
+  };
+
+  static size_t LocalFileToFTPWk(char *ptr, size_t size, size_t nmemb,
+                                 void *userdata) {
+    auto *ctx = static_cast<FTPDirectLocalContext *>(userdata);
+    if (ctx == nullptr || ctx->progress == nullptr || ctx->local_handle == nullptr) {
+      return CURL_READFUNC_ABORT;
+    }
+
+    auto &pd = *ctx->progress;
+    auto *cur_task = pd.GetCurrentTask();
+    if (cur_task == nullptr) {
+      return CURL_READFUNC_ABORT;
+    }
+
+    if (IsTaskInterrupted_(pd)) {
+      return CURL_READFUNC_ABORT;
+    }
+
+    const size_t capacity = size * nmemb;
+    auto [bytes_read, read_rcm] = ctx->local_handle->ReadChunk(ptr, capacity);
+    if (read_rcm.code != EC::Success && read_rcm.code != EC::EndOfFile) {
+      cur_task->rcm = read_rcm;
+      SignalTaskIoAbort_(pd);
+      return CURL_READFUNC_ABORT;
+    }
+    if (bytes_read <= 0) {
+      return 0;
+    }
+
+    pd.UpdateSize(static_cast<size_t>(bytes_read));
+    pd.CallInnerCallback(false);
+    return static_cast<size_t>(bytes_read);
+  }
+
+  static size_t FTPToLocalFileWk(char *ptr, size_t size, size_t nmemb,
+                                 void *userdata) {
+    auto *ctx = static_cast<FTPDirectLocalContext *>(userdata);
+    if (ctx == nullptr || ctx->progress == nullptr || ctx->local_handle == nullptr) {
+      return 0;
+    }
+
+    auto &pd = *ctx->progress;
+    auto *cur_task = pd.GetCurrentTask();
+    if (cur_task == nullptr) {
+      return 0;
+    }
+
+    if (IsTaskInterrupted_(pd)) {
+      return 0;
+    }
+
+    const size_t total = size * nmemb;
+    auto [bytes_written, write_rcm] = ctx->local_handle->WriteChunk(ptr, total);
+    if (write_rcm.code != EC::Success && write_rcm.code != EC::EndOfFile) {
+      cur_task->rcm = write_rcm;
+      SignalTaskIoAbort_(pd);
+      return 0;
+    }
+    if (bytes_written <= 0) {
+      cur_task->rcm =
+          Err(EC::CommonFailure, "ftp.download", cur_task->dst,
+              "Local destination write returned zero bytes");
+      SignalTaskIoAbort_(pd);
+      return 0;
+    }
+
+    pd.UpdateSize(static_cast<size_t>(bytes_written));
+    pd.CallInnerCallback(false);
+    return static_cast<size_t>(bytes_written);
+  }
+
   // Upload with ProgressData (legacy - for AMSFTPWorker)
   static void FTPUploadSet(AMFTPIOCore *client, const std::string &dst,
                            RuntimeProgress *pd,
@@ -1546,6 +1622,61 @@ private:
     }
   }
 
+  static ECM FTPUploadLocalFileSet(AMFTPIOCore *client, const std::string &dst,
+                                   RuntimeProgress *pd,
+                                   UnionFileHandle *local_handle) {
+    if (!client || !pd || !local_handle) {
+      return Err(EC::InvalidArg, "ftp.upload", dst,
+                 "FTP upload local context is invalid");
+    }
+    FTPDirectLocalContext ctx = {pd, local_handle};
+    std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
+
+    TransferTask *cur_task = pd->GetCurrentTask();
+    if (!cur_task) {
+      SignalTaskIoAbort_(*pd);
+      return Err(EC::InvalidHandle, "ftp.upload", dst, "Current task is null");
+    }
+    const size_t resume_offset = cur_task->transferred;
+    ECM ecm = client->SetupPath(dst, false);
+    if (ecm.code != EC::Success) {
+      cur_task->rcm = ecm;
+      SignalTaskIoAbort_(*pd);
+      return ecm;
+    }
+
+    CURL *curl = client->GetCURL();
+    curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+    curl_easy_setopt(curl, CURLOPT_READFUNCTION, LocalFileToFTPWk);
+    curl_easy_setopt(curl, CURLOPT_READDATA, &ctx);
+    curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
+                     static_cast<curl_off_t>(resume_offset));
+    curl_easy_setopt(
+        curl, CURLOPT_INFILESIZE_LARGE,
+        static_cast<curl_off_t>(resume_offset < cur_task->size
+                                    ? (cur_task->size - resume_offset)
+                                    : 0));
+    curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR);
+
+    const CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
+      if (cur_task->rcm.has_value() && cur_task->rcm->code != EC::Success) {
+        return *cur_task->rcm;
+      }
+      SignalTaskIoAbort_(*pd);
+      return Err(EC::Terminate, "ftp.upload", dst, "FTP upload aborted");
+    }
+    if (res != CURLE_OK) {
+      const ECM rcm = {EC::FTPUploadFailed,
+                       AMStr::fmt("Upload failed: {}", curl_easy_strerror(res)),
+                       RawError{RawErrorSource::Curl, static_cast<int>(res)}};
+      cur_task->rcm = rcm;
+      SignalTaskIoAbort_(*pd);
+      return rcm;
+    }
+    return OK;
+  }
+
   // Download with ProgressData (legacy - for AMSFTPWorker)
   static void FTPDownloadSet(AMFTPIOCore *client, const std::string &src,
                              curl_write_callback write_callback,
@@ -1583,6 +1714,56 @@ private:
               RawError{RawErrorSource::Curl, static_cast<int>(res)}};
       SignalTaskIoAbort_(*pd);
     }
+  }
+
+  static ECM FTPDownloadToLocalFileSet(AMFTPIOCore *client,
+                                       const std::string &src,
+                                       RuntimeProgress *pd,
+                                       UnionFileHandle *local_handle) {
+    if (!client || !pd || !local_handle) {
+      return Err(EC::InvalidArg, "ftp.download", src,
+                 "FTP download local context is invalid");
+    }
+    FTPDirectLocalContext ctx = {pd, local_handle};
+    std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
+
+    TransferTask *cur_task = pd->GetCurrentTask();
+    if (!cur_task) {
+      SignalTaskIoAbort_(*pd);
+      return Err(EC::InvalidHandle, "ftp.download", src, "Current task is null");
+    }
+    const size_t resume_offset = cur_task->transferred;
+    ECM ecm = client->SetupPath(src, false);
+    if (ecm.code != EC::Success) {
+      cur_task->rcm = ecm;
+      SignalTaskIoAbort_(*pd);
+      return ecm;
+    }
+
+    CURL *curl = client->GetCURL();
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, FTPToLocalFileWk);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
+    curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
+                     static_cast<curl_off_t>(resume_offset));
+
+    const CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
+      if (cur_task->rcm.has_value() && cur_task->rcm->code != EC::Success) {
+        return *cur_task->rcm;
+      }
+      SignalTaskIoAbort_(*pd);
+      return Err(EC::Terminate, "ftp.download", src, "FTP download aborted");
+    }
+    if (res != CURLE_OK) {
+      const ECM rcm = {EC::FTPDownloadFailed,
+                       AMStr::fmt("Download failed: {}",
+                                  curl_easy_strerror(res)),
+                       RawError{RawErrorSource::Curl, static_cast<int>(res)}};
+      cur_task->rcm = rcm;
+      SignalTaskIoAbort_(*pd);
+      return rcm;
+    }
+    return OK;
   }
 };
 } // namespace
@@ -1673,15 +1854,17 @@ ECM ExecuteSequentialDirectTransfer(const ClientHandle &src_client,
 
   const auto src_protocol = src_client->ConfigPort().GetProtocol();
   const auto dst_protocol = dst_client->ConfigPort().GetProtocol();
-  const bool local_to_sftp =
+  const bool local_to_remote =
       src_protocol == ClientProtocol::LOCAL &&
-      dst_protocol == ClientProtocol::SFTP;
-  const bool sftp_to_local =
-      src_protocol == ClientProtocol::SFTP &&
+      (dst_protocol == ClientProtocol::SFTP ||
+       dst_protocol == ClientProtocol::FTP);
+  const bool remote_to_local =
+      (src_protocol == ClientProtocol::SFTP ||
+       src_protocol == ClientProtocol::FTP) &&
       dst_protocol == ClientProtocol::LOCAL;
-  if (!local_to_sftp && !sftp_to_local) {
+  if (!local_to_remote && !remote_to_local) {
     return Err(EC::OperationUnsupported, "transfer.direct", task->src,
-               "Direct transfer currently supports LOCAL <-> SFTP only");
+               "Direct transfer currently supports LOCAL <-> FTP/SFTP only");
   }
 
   auto *src_sftp =
@@ -1692,13 +1875,64 @@ ECM ExecuteSequentialDirectTransfer(const ClientHandle &src_client,
       dst_protocol == ClientProtocol::SFTP
           ? dynamic_cast<AMSFTPIOCore *>(&dst_client->IOPort())
           : nullptr;
+  auto *src_ftp =
+      src_protocol == ClientProtocol::FTP
+          ? dynamic_cast<AMFTPIOCore *>(&src_client->IOPort())
+          : nullptr;
+  auto *dst_ftp =
+      dst_protocol == ClientProtocol::FTP
+          ? dynamic_cast<AMFTPIOCore *>(&dst_client->IOPort())
+          : nullptr;
   if (src_protocol == ClientProtocol::SFTP && src_sftp == nullptr) {
     return Err(EC::InvalidHandle, "transfer.direct", task->src,
                "SFTP source IO port implementation mismatch");
   }
   if (dst_protocol == ClientProtocol::SFTP && dst_sftp == nullptr) {
+      return Err(EC::InvalidHandle, "transfer.direct", task->dst,
+                 "SFTP destination IO port implementation mismatch");
+  }
+  if (src_protocol == ClientProtocol::FTP && src_ftp == nullptr) {
+    return Err(EC::InvalidHandle, "transfer.direct", task->src,
+               "FTP source IO port implementation mismatch");
+  }
+  if (dst_protocol == ClientProtocol::FTP && dst_ftp == nullptr) {
     return Err(EC::InvalidHandle, "transfer.direct", task->dst,
-               "SFTP destination IO port implementation mismatch");
+               "FTP destination IO port implementation mismatch");
+  }
+
+  const bool resume = task->transferred > 0;
+  if (src_protocol == ClientProtocol::FTP || dst_protocol == ClientProtocol::FTP) {
+    UnionFileHandle local_handle = {};
+    ECM rcm = OK;
+    if (src_protocol == ClientProtocol::LOCAL) {
+      rcm = local_handle.Init(task->src, task->size, nullptr, false, true, true,
+                              &progress);
+      if (!(rcm)) {
+        return rcm;
+      }
+      if (resume) {
+        rcm = local_handle.Seek(task->transferred);
+        if (!(rcm)) {
+          return rcm;
+        }
+      }
+      return TransferEndpointRouter::FTPUploadLocalFileSet(
+          dst_ftp, task->dst, &progress, &local_handle);
+    }
+
+    rcm = local_handle.Init(task->dst, task->size, nullptr, true, true, !resume,
+                            &progress);
+    if (!(rcm)) {
+      return rcm;
+    }
+    if (resume) {
+      rcm = local_handle.Seek(task->transferred);
+      if (!(rcm)) {
+        return rcm;
+      }
+    }
+    return TransferEndpointRouter::FTPDownloadToLocalFileSet(
+        src_ftp, task->src, &progress, &local_handle);
   }
 
   UnionFileHandle src_handle = {};
@@ -1708,7 +1942,6 @@ ECM ExecuteSequentialDirectTransfer(const ClientHandle &src_client,
     return rcm;
   }
 
-  const bool resume = task->transferred > 0;
   UnionFileHandle dst_handle = {};
   rcm = dst_handle.Init(task->dst, task->size, dst_sftp, true, true, !resume,
                         &progress);

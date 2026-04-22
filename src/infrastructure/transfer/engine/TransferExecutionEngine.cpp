@@ -196,11 +196,14 @@ ECM TransferExecutionEngine::TransferSignleFile(
   }
 
   const size_t begin_transferred = task->transferred;
-  const bool direct_local_sftp = (src_protocol == ClientProtocol::LOCAL &&
-                                  dst_protocol == ClientProtocol::SFTP) ||
-                                 (src_protocol == ClientProtocol::SFTP &&
-                                  dst_protocol == ClientProtocol::LOCAL);
-  if (direct_local_sftp) {
+  const bool direct_local_remote =
+      (src_protocol == ClientProtocol::LOCAL &&
+       (dst_protocol == ClientProtocol::SFTP ||
+        dst_protocol == ClientProtocol::FTP)) ||
+      ((src_protocol == ClientProtocol::SFTP ||
+        src_protocol == ClientProtocol::FTP) &&
+       dst_protocol == ClientProtocol::LOCAL);
+  if (direct_local_remote) {
     const size_t chunk_size = ResolveTaskBufferSize_(task_info);
     const ECM direct_rcm = detail::ExecuteSequentialDirectTransfer(
         src_client, dst_client, task_info, pd, chunk_size);
