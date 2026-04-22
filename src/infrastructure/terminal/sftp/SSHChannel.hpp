@@ -141,12 +141,14 @@ class RealtimeSSHChannelPort final : public AMT::IChannelPort {
 public:
   RealtimeSSHChannelPort(
       ClientHandle owner_client, std::string channel_name,
-      AMT::BufferExceedCallback buffer_exceed_callback = {})
+      AMT::BufferExceedCallback buffer_exceed_callback = {},
+      AMT::TerminalManagerArg terminal_manager_arg = {})
       : binding_(detail::ResolveChannelBinding_(std::move(owner_client))),
         identity_(detail::ResolveTerminalKey_(binding_.owner_client),
                   AMStr::Strip(channel_name)),
         cache_(identity_.terminal_key, identity_.channel_name,
-               std::move(buffer_exceed_callback)) {}
+               std::move(buffer_exceed_callback),
+               std::move(terminal_manager_arg)) {}
 
   ~RealtimeSSHChannelPort() override {
     RequestStop_();

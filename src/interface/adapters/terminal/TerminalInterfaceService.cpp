@@ -1433,8 +1433,10 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
 
   if (bind_result.data.soft_limit_hit) {
-    prompt_io_manager_.Print(
-        "⚠ Terminal output cache reached soft limit (32MB)");
+    const size_t threshold_bytes = bind_result.data.soft_limit_threshold_bytes;
+    prompt_io_manager_.Print(AMStr::fmt(
+        "⚠ Terminal output cache reached soft limit ({})",
+        AMStr::FormatSize(threshold_bytes)));
   }
 
   if (refresh_prompt_on_enter &&

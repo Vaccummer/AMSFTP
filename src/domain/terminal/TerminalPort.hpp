@@ -54,6 +54,7 @@ public:
 
 [[nodiscard]] ECMData<TerminalHandle>
 CreateTerminalPort(const ClientHandle &client,
-                   BufferExceedCallback buffer_exceed_callback = {});
+                   BufferExceedCallback buffer_exceed_callback = {},
+                   const TerminalManagerArg &terminal_manager_arg = {});
 
 } // namespace AMDomain::terminal

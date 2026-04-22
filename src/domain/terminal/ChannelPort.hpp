@@ -26,6 +26,8 @@ struct OutputBlock {
 struct ChannelCacheReplayResult {
   size_t replayed_bytes = 0;
   size_t fallback_bytes = 0;
+  size_t soft_limit_threshold_bytes = 0;
+  size_t hard_limit_threshold_bytes = 0;
   bool in_alternate_screen = false;
   bool soft_limit_hit = false;
   bool hard_limit_hit = false;

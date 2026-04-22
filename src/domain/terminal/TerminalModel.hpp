@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include "domain/client/ClientModel.hpp"
 #include <cstddef>
 #include <map>
@@ -11,6 +12,29 @@ class IChannelPort;
 using ClientStatus = AMDomain::client::ClientStatus;
 constexpr const char *kDefaultTerminalChannelName = "default";
 constexpr int kTerminalRemoveCloseTimeoutMs = 1500;
+
+struct ChannelCacheThresholdBytes {
+  size_t warning = 32U * 1024U * 1024U;
+  size_t terminate = 128U * 1024U * 1024U;
+};
+
+/**
+ * @brief Settings payload for `Options.TerminalManager`.
+ */
+struct TerminalManagerArg {
+  ChannelCacheThresholdBytes channel_cache_threshold_bytes = {};
+};
+
+inline void NormalizeTerminalManagerArg(TerminalManagerArg *arg) {
+  if (!arg) {
+    return;
+  }
+  arg->channel_cache_threshold_bytes.warning =
+      std::max<size_t>(1U, arg->channel_cache_threshold_bytes.warning);
+  arg->channel_cache_threshold_bytes.terminate =
+      std::max(arg->channel_cache_threshold_bytes.warning,
+               arg->channel_cache_threshold_bytes.terminate);
+}
 
 struct ChannelOpenArgs {
   std::string channel_name = "";
