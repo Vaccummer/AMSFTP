@@ -54,16 +54,10 @@ void DedupTasks_(std::vector<TransferTask> *tasks) {
   if (!tasks || tasks->empty()) {
     return;
   }
-  std::unordered_set<std::string> seen = {};
-  std::vector<TransferTask> dedup = {};
-  dedup.reserve(tasks->size());
-  for (const auto &task : *tasks) {
-    const std::string key = BuildTaskKey_(task);
-    if (seen.insert(key).second) {
-      dedup.push_back(task);
-    }
-  }
-  tasks->swap(dedup);
+  *tasks =
+      AMStr::DedupVectorKeepOrder(*tasks, [](const TransferTask &task) {
+        return BuildTaskKey_(task);
+      });
 }
 
 std::vector<std::string>

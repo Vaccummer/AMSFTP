@@ -13,6 +13,8 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace AMStr {
@@ -307,17 +309,27 @@ std::string FormatSize(int64_t size);
 bool GetEnv(std::string_view key, std::string *target);
 std::optional<std::string> HexToAnsi(const std::string &value);
 
-template <typename T>
-std::vector<T> UniqueTargetsKeepOrder(const std::vector<T> &targets) {
-  std::vector<T> unique;
+template <typename T, typename HashOf>
+std::vector<T> DedupVectorKeepOrder(const std::vector<T> &targets,
+                                    HashOf hash_of) {
+  using HashKey = std::decay_t<decltype(hash_of(std::declval<const T &>()))>;
+  std::vector<T> unique = {};
   unique.reserve(targets.size());
+  std::unordered_set<HashKey> seen = {};
+  seen.reserve(targets.size());
   for (const auto &target : targets) {
-    if (std::find(unique.begin(), unique.end(), target) != unique.end()) {
+    HashKey key = hash_of(target);
+    if (!seen.insert(std::move(key)).second) {
       continue;
     }
     unique.push_back(target);
   }
   return unique;
+}
+
+template <typename T>
+std::vector<T> UniqueTargetsKeepOrder(const std::vector<T> &targets) {
+  return DedupVectorKeepOrder(targets, [](const T &target) { return target; });
 }
 
 } // namespace AMStr

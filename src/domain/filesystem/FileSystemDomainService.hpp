@@ -4,7 +4,6 @@
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 namespace AMDomain::filesystem::service {
@@ -29,17 +28,9 @@ inline bool IsPathNotExistError(ErrorCode ec) {
 
 inline std::vector<PathTarget>
 DedupPathTargets(const std::vector<PathTarget> &targets) {
-  std::vector<PathTarget> deduped = {};
-  deduped.reserve(targets.size());
-  std::unordered_set<std::string> seen = {};
-  for (const auto &target : targets) {
-    const std::string key = target.nickname + "@" + target.path;
-    if (!seen.insert(key).second) {
-      continue;
-    }
-    deduped.push_back(target);
-  }
-  return deduped;
+  return AMStr::DedupVectorKeepOrder(targets, [](const PathTarget &target) {
+    return target.nickname + "@" + target.path;
+  });
 }
 
 [[maybe_unused]] [[nodiscard]] static std::string
