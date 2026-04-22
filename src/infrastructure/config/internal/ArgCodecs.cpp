@@ -21,9 +21,6 @@
 
 namespace {
 using DocumentKind = AMDomain::config::DocumentKind;
-using AMDomain::client::ClientService::AMDefaultBufferSize;
-using AMDomain::client::ClientService::AMMaxBufferSize;
-using AMDomain::client::ClientService::AMMinBufferSize;
 using namespace AMDomain::host::HostService;
 using namespace AMDomain::host::KnownHostRules;
 namespace codec_common {
@@ -97,14 +94,12 @@ inline constexpr const char *kUsernameKey = "username";
 inline constexpr const char *kPortKey = "port";
 inline constexpr const char *kPasswordKey = "password";
 inline constexpr const char *kProtocolKey = "protocol";
-inline constexpr const char *kBufferSizeKey = "buffer_size";
 inline constexpr const char *kTrashDirKey = "trash_dir";
 inline constexpr const char *kLoginDirKey = "login_dir";
 inline constexpr const char *kCwdKey = "cwd";
 inline constexpr const char *kKeyFileKey = "keyfile";
 inline constexpr const char *kCompressionKey = "compression";
 inline constexpr const char *kCmdTemplateKey = "cmd_template";
-inline constexpr const char *kCmdPrefixKey = "cmd_prefix";
 inline constexpr int kDefaultSFTPPort = 22;
 inline constexpr int kDefaultFTPPort = 21;
 inline constexpr int kDefaultHTTPPort = 80;
@@ -129,14 +124,7 @@ bool DecodeHostConfig_(const std::string &nickname, const Json &json,
   (void)AMJson::QueryKey(json, {kCompressionKey}, &cfg.request.compression);
   (void)AMJson::QueryKey(json, {kLoginDirKey}, &cfg.metadata.login_dir);
   (void)AMJson::QueryKey(json, {kCwdKey}, &cfg.metadata.cwd);
-  bool has_cmd_template = false;
-  std::string cmd_template = {};
-  has_cmd_template = AMJson::QueryKey(json, {kCmdTemplateKey}, &cmd_template);
-  if (has_cmd_template) {
-    cfg.metadata.cmd_template = cmd_template;
-  } else {
-    (void)AMJson::QueryKey(json, {kCmdPrefixKey}, &cfg.metadata.cmd_template);
-  }
+  (void)AMJson::QueryKey(json, {kCmdTemplateKey}, &cfg.metadata.cmd_template);
 
   std::string protocol_str = "sftp";
   (void)AMJson::QueryKey(json, {kProtocolKey}, &protocol_str);
@@ -157,16 +145,6 @@ bool DecodeHostConfig_(const std::string &nickname, const Json &json,
     }
   }
 
-  int64_t parsed_buffer_size = 0;
-  if (AMJson::QueryKey(json, {kBufferSizeKey}, &parsed_buffer_size) &&
-      parsed_buffer_size > 0) {
-    cfg.request.buffer_size =
-        std::min<int64_t>(std::max<int64_t>(parsed_buffer_size, 1),
-                          static_cast<int64_t>(AMMaxBufferSize));
-  } else {
-    cfg.request.buffer_size = AMDefaultBufferSize;
-  }
-
   *out = std::move(cfg);
   return true;
 }
@@ -178,7 +156,6 @@ Json EncodeHostConfig_(const AMDomain::host::HostConfig &cfg) {
   out[kPortKey] = cfg.request.port;
   out[kPasswordKey] = cfg.request.password;
   out[kProtocolKey] = AMStr::lowercase(AMStr::ToString(cfg.request.protocol));
-  out[kBufferSizeKey] = cfg.request.buffer_size;
   out[kTrashDirKey] = cfg.metadata.trash_dir;
   out[kLoginDirKey] = cfg.metadata.login_dir;
   out[kCwdKey] = cfg.metadata.cwd;
@@ -526,19 +503,15 @@ public:
     const Json options = OptionsRoot_(root);
     (void)AMJson::QueryKey(options, {"TransferManager", "max_threads"},
                            &typed->max_threads);
-    if (typed->max_threads <= 0) {
-      (void)AMJson::QueryKey(options, {"TransferManager", "max_thread_num"},
-                             &typed->max_threads);
-    }
     (void)AMJson::QueryKey(options,
                            {"TransferManager", "bar_refresh_interval_ms"},
                            &typed->bar_refresh_interval_ms);
-    (void)AMJson::QueryKey(options, {"TransferManager", "buffer_size"},
-                           &typed->buffer_size);
-    (void)AMJson::QueryKey(options, {"TransferManager", "min_buffer"},
-                           &typed->min_buffer);
-    (void)AMJson::QueryKey(options, {"TransferManager", "max_buffer"},
-                           &typed->max_buffer);
+    if (typed->bar_refresh_interval_ms <= 0) {
+      (void)AMJson::QueryKey(options, {"TransferManager", "refresh_interval_ms"},
+                             &typed->bar_refresh_interval_ms);
+    }
+    (void)AMJson::QueryKey(options, {"TransferManager", "ring_buffersize"},
+                           &typed->ring_buffersize);
     return true;
   }
 
@@ -556,9 +529,8 @@ public:
     (*root)["Options"]["TransferManager"]["max_threads"] = typed->max_threads;
     (*root)["Options"]["TransferManager"]["bar_refresh_interval_ms"] =
         typed->bar_refresh_interval_ms;
-    (*root)["Options"]["TransferManager"]["buffer_size"] = typed->buffer_size;
-    (*root)["Options"]["TransferManager"]["min_buffer"] = typed->min_buffer;
-    (*root)["Options"]["TransferManager"]["max_buffer"] = typed->max_buffer;
+    (*root)["Options"]["TransferManager"]["ring_buffersize"] =
+        typed->ring_buffersize;
     return true;
   }
 
@@ -659,13 +631,10 @@ public:
     *typed = {};
 
     const Json options = OptionsRoot_(root);
-    (void)AMJson::QueryKey(
-        options, {"TerminalManager", "channel_cache_threshold_Bytes", "warning"},
-        &typed->channel_cache_threshold_bytes.warning);
-    (void)AMJson::QueryKey(
-        options,
-        {"TerminalManager", "channel_cache_threshold_Bytes", "terminate"},
-        &typed->channel_cache_threshold_bytes.terminate);
+    (void)AMJson::QueryKey(options, {"TerminalManager", "read_timeout_ms"},
+                           &typed->read_timeout_ms);
+    (void)AMJson::QueryKey(options, {"TerminalManager", "send_timeout_ms"},
+                           &typed->send_timeout_ms);
     (void)AMJson::QueryKey(
         options, {"TerminalManager", "channel_cache_threshold_bytes", "warning"},
         &typed->channel_cache_threshold_bytes.warning);
@@ -689,9 +658,16 @@ public:
       *root = Json::object();
     }
 
-    (*root)["Options"]["TerminalManager"]["channel_cache_threshold_Bytes"]
+    (void)AMJson::DelKey(*root,
+                         {"Options", "TerminalManager",
+                          "channel_cache_threshold_Bytes"});
+    (*root)["Options"]["TerminalManager"]["read_timeout_ms"] =
+        typed.read_timeout_ms;
+    (*root)["Options"]["TerminalManager"]["send_timeout_ms"] =
+        typed.send_timeout_ms;
+    (*root)["Options"]["TerminalManager"]["channel_cache_threshold_bytes"]
            ["warning"] = typed.channel_cache_threshold_bytes.warning;
-    (*root)["Options"]["TerminalManager"]["channel_cache_threshold_Bytes"]
+    (*root)["Options"]["TerminalManager"]["channel_cache_threshold_bytes"]
            ["terminate"] = typed.channel_cache_threshold_bytes.terminate;
     return true;
   }
@@ -735,8 +711,6 @@ public:
                            &typed->auto_fillin);
     (void)AMJson::QueryKey(options, {"Completer", "complete_delay_ms"},
                            &typed->complete_delay_ms);
-    (void)AMJson::QueryKey(options, {"Completer", "async_workers"},
-                           &typed->async_workers);
     return true;
   }
 
@@ -756,7 +730,6 @@ public:
     (*root)["Options"]["Completer"]["auto_fillin"] = typed->auto_fillin;
     (*root)["Options"]["Completer"]["complete_delay_ms"] =
         typed->complete_delay_ms;
-    (*root)["Options"]["Completer"]["async_workers"] = typed->async_workers;
     return true;
   }
 
@@ -850,10 +823,6 @@ public:
                            &typed->max_cd_history);
     (void)AMJson::QueryKey(options, {"FileSystem", "wget_max_redirect"},
                            &typed->wget_max_redirect);
-    (void)AMJson::QueryKey(options, {"Terminal", "read_timeout_ms"},
-                           &typed->terminal_read_timeout_ms);
-    (void)AMJson::QueryKey(options, {"Terminal", "send_timeout_ms"},
-                           &typed->terminal_send_timeout_ms);
     return true;
   }
 
@@ -870,10 +839,6 @@ public:
     (*root)["Options"]["FileSystem"]["max_cd_history"] = typed->max_cd_history;
     (*root)["Options"]["FileSystem"]["wget_max_redirect"] =
         typed->wget_max_redirect;
-    (*root)["Options"]["Terminal"]["read_timeout_ms"] =
-        typed->terminal_read_timeout_ms;
-    (*root)["Options"]["Terminal"]["send_timeout_ms"] =
-        typed->terminal_send_timeout_ms;
     return true;
   }
 
@@ -884,7 +849,6 @@ public:
       return codec_common::Fail_(error, "null root json");
     }
     (void)AMJson::DelKey(*root, {"Options", "FileSystem"});
-    (void)AMJson::DelKey(*root, {"Options", "Terminal"});
     return true;
   }
 };
@@ -979,11 +943,8 @@ void DecodePromptProfileSettings_(const Json &json,
   (void)AMJson::QueryKey(json, {"Prompt", "marker"}, &out->prompt.marker);
   (void)AMJson::QueryKey(json, {"Prompt", "continuation_marker"},
                          &out->prompt.continuation_marker);
-  if (!AMJson::QueryKey(json, {"Prompt", "enable_multiline"},
-                        &out->prompt.enable_multiline)) {
-    (void)AMJson::QueryKey(json, {"Prompt", "enable_muiltiline"},
-                           &out->prompt.enable_multiline);
-  }
+  (void)AMJson::QueryKey(json, {"Prompt", "enable_multiline"},
+                         &out->prompt.enable_multiline);
 
   (void)AMJson::QueryKey(json, {"History", "enable"}, &out->history.enable);
   (void)AMJson::QueryKey(json, {"History", "enable_duplicates"},
@@ -1040,7 +1001,7 @@ Json EncodePromptProfileSettings_(const PromptProfileSettings &in) {
   Json out = Json::object();
   out["Prompt"]["marker"] = in.prompt.marker;
   out["Prompt"]["continuation_marker"] = in.prompt.continuation_marker;
-  out["Prompt"]["enable_muiltiline"] = in.prompt.enable_multiline;
+  out["Prompt"]["enable_multiline"] = in.prompt.enable_multiline;
 
   out["History"]["enable"] = in.history.enable;
   out["History"]["enable_duplicates"] = in.history.enable_duplicates;
@@ -1194,7 +1155,6 @@ using AMDomain::style::InternalStyle;
 using AMDomain::style::PathHighlightStyle;
 using AMDomain::style::ProgressBarStyle;
 using AMDomain::style::StyleConfigArg;
-using AMDomain::style::SystemInfoStyle;
 using AMDomain::style::TableStyle;
 using AMDomain::style::ValueQueryHighlightStyle;
 
@@ -1249,11 +1209,8 @@ void DecodeProgressBar_(const Json &json, ProgressBarStyle *out) {
   (void)AMJson::QueryKey(json, {"bar_template"}, &out->bar_template);
   (void)AMJson::QueryKey(json, {"refresh_interval_ms"},
                          &out->refresh_interval_ms);
-  if (!AMJson::QueryKey(json, {"prefix_fixed_width"},
-                        &out->prefix_fixed_width)) {
-    // backward compatibility
-    (void)AMJson::QueryKey(json, {"width_offset"}, &out->prefix_fixed_width);
-  }
+  (void)AMJson::QueryKey(json, {"prefix_fixed_width"},
+                         &out->prefix_fixed_width);
 
   const Json bar = codec_common::QueryObjectAt_(json, {"Bar"});
   (void)AMJson::QueryKey(bar, {"fill"}, &out->bar.fill);
@@ -1327,9 +1284,12 @@ void DecodeCliPrompt_(const Json &json, CLIPromptStyle *out) {
   if (!icons.is_object()) {
     icons = codec_common::QueryObjectAt_(json, {"Icons"});
   }
+  (void)AMJson::QueryKey(icons, {"default"}, &out->icons.default_icon);
   (void)AMJson::QueryKey(icons, {"windows"}, &out->icons.windows);
   (void)AMJson::QueryKey(icons, {"linux"}, &out->icons.linux);
   (void)AMJson::QueryKey(icons, {"macos"}, &out->icons.macos);
+  (void)AMJson::QueryKey(icons, {"freebsd"}, &out->icons.freebsd);
+  (void)AMJson::QueryKey(icons, {"unix"}, &out->icons.unix);
 
   Json named = codec_common::QueryObjectAt_(json, {"named_styles"});
   if (!named.is_object()) {
@@ -1352,44 +1312,22 @@ void DecodeCliPrompt_(const Json &json, CLIPromptStyle *out) {
   }
 
   Json template_json = codec_common::QueryObjectAt_(json, {"template"});
-  if (!template_json.is_object()) {
-    template_json = codec_common::QueryObjectAt_(json, {"Template"});
-  }
   (void)AMJson::QueryKey(template_json, {"core_prompt"},
                          &out->prompt_template.core_prompt);
   (void)AMJson::QueryKey(template_json, {"history_search_prompt"},
                          &out->prompt_template.history_search_prompt);
-
-  // Backward compatibility: accept misspelled "templete" section.
-  if (out->prompt_template.core_prompt.empty() ||
-      out->prompt_template.history_search_prompt.empty()) {
-    Json templete_json = codec_common::QueryObjectAt_(json, {"templete"});
-    if (!templete_json.is_object()) {
-      templete_json = codec_common::QueryObjectAt_(json, {"Templete"});
-    }
-    if (out->prompt_template.core_prompt.empty()) {
-      (void)AMJson::QueryKey(templete_json, {"core_prompt"},
-                             &out->prompt_template.core_prompt);
-    }
-    if (out->prompt_template.history_search_prompt.empty()) {
-      (void)AMJson::QueryKey(templete_json, {"history_search_prompt"},
-                             &out->prompt_template.history_search_prompt);
-    }
-  }
-
-  // Backward compatibility: accept legacy flat "format" key.
-  if (out->prompt_template.core_prompt.empty()) {
-    (void)AMJson::QueryKey(json, {"format"}, &out->prompt_template.core_prompt);
-  }
 }
 
 Json EncodeCliPrompt_(const CLIPromptStyle &in) {
   Json out = Json::object();
   out["shortcut"] = codec_common::WriteStringMap_(in.shortcut);
 
+  out["icons"]["default"] = in.icons.default_icon;
   out["icons"]["windows"] = in.icons.windows;
   out["icons"]["linux"] = in.icons.linux;
   out["icons"]["macos"] = in.icons.macos;
+  out["icons"]["freebsd"] = in.icons.freebsd;
+  out["icons"]["unix"] = in.icons.unix;
 
   out["template"]["core_prompt"] = in.prompt_template.core_prompt;
   out["template"]["history_search_prompt"] =
@@ -1404,6 +1342,7 @@ void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
 
   (void)AMJson::QueryKey(json, {"default"}, &out->default_style);
   (void)AMJson::QueryKey(json, {"type", "string"}, &out->type_string);
+  (void)AMJson::QueryKey(json, {"type", "error"}, &out->type_error);
   (void)AMJson::QueryKey(json, {"type", "number"}, &out->type_number);
   (void)AMJson::QueryKey(json, {"type", "protocol"}, &out->type_protocol);
   (void)AMJson::QueryKey(json, {"type", "username"}, &out->type_username);
@@ -1485,6 +1424,7 @@ Json EncodeCommon_(const InputHighlightStyle &in) {
   Json out = Json::object();
   out["default"] = in.default_style;
   out["type"]["string"] = in.type_string;
+  out["type"]["error"] = in.type_error;
   out["type"]["number"] = in.type_number;
   out["type"]["protocol"] = in.type_protocol;
   out["type"]["username"] = in.type_username;
@@ -1543,14 +1483,12 @@ void DecodeValueQueryHighlight_(const Json &json,
   }
   (void)AMJson::QueryKey(json, {"valid_value"}, &out->valid_value);
   (void)AMJson::QueryKey(json, {"invalid_value"}, &out->invalid_value);
-  (void)AMJson::QueryKey(json, {"prompt_style"}, &out->prompt_style);
 }
 
 Json EncodeValueQueryHighlight_(const ValueQueryHighlightStyle &in) {
   Json out = Json::object();
   out["valid_value"] = in.valid_value;
   out["invalid_value"] = in.invalid_value;
-  out["prompt_style"] = in.prompt_style;
   return out;
 }
 
@@ -1559,9 +1497,7 @@ void DecodeInternalStyle_(const Json &json, InternalStyle *out) {
     return;
   }
   (void)AMJson::QueryKey(json, {"inline_hint"}, &out->inline_hint);
-  if (!AMJson::QueryKey(json, {"default_prompt_style"}, &out->default_prompt)) {
-    (void)AMJson::QueryKey(json, {"default_prompt"}, &out->default_prompt);
-  }
+  (void)AMJson::QueryKey(json, {"default_prompt_style"}, &out->default_prompt);
 }
 
 Json EncodeInternalStyle_(const InternalStyle &in) {
@@ -1586,45 +1522,6 @@ void DecodePathHighlight_(const Json &json, PathHighlightStyle *out) {
                          &out->type_otherspecial);
   (void)AMJson::QueryKey(json, {"type", "nonexistent"},
                          &out->type_nonexistent);
-
-  std::string legacy = {};
-  if (AMJson::QueryKey(json, {"cwd"}, &legacy) && out->type_dir.empty()) {
-    out->type_dir = legacy;
-  }
-  if (AMJson::QueryKey(json, {"path_str"}, &legacy) &&
-      out->default_style.empty()) {
-    out->default_style = legacy;
-  }
-  if (AMJson::QueryKey(json, {"root"}, &legacy) && out->tree_root.empty()) {
-    out->tree_root = legacy;
-  }
-  if (AMJson::QueryKey(json, {"node_dir_name"}, &legacy) &&
-      out->tree_node.empty()) {
-    out->tree_node = legacy;
-  }
-  if (AMJson::QueryKey(json, {"filename"}, &legacy) &&
-      out->tree_leaf.empty()) {
-    out->tree_leaf = legacy;
-  }
-  if (AMJson::QueryKey(json, {"dir"}, &legacy) && out->type_dir.empty()) {
-    out->type_dir = legacy;
-  }
-  if (AMJson::QueryKey(json, {"regular"}, &legacy) &&
-      out->type_regular.empty()) {
-    out->type_regular = legacy;
-  }
-  if (AMJson::QueryKey(json, {"symlink"}, &legacy) &&
-      out->type_symlink.empty()) {
-    out->type_symlink = legacy;
-  }
-  if (AMJson::QueryKey(json, {"otherspecial"}, &legacy) &&
-      out->type_otherspecial.empty()) {
-    out->type_otherspecial = legacy;
-  }
-  if (AMJson::QueryKey(json, {"nonexistent"}, &legacy) &&
-      out->type_nonexistent.empty()) {
-    out->type_nonexistent = legacy;
-  }
   if (out->default_style.empty()) {
     out->default_style = out->type_regular;
   }
@@ -1647,25 +1544,6 @@ Json EncodePathHighlight_(const PathHighlightStyle &in) {
   out["type"]["symlink"] = in.type_symlink;
   out["type"]["otherspecial"] = in.type_otherspecial;
   out["type"]["nonexistent"] = in.type_nonexistent;
-  return out;
-}
-
-void DecodeSystemInfo_(const Json &json, SystemInfoStyle *out) {
-  if (!out || !json.is_object()) {
-    return;
-  }
-  (void)AMJson::QueryKey(json, {"info"}, &out->info);
-  (void)AMJson::QueryKey(json, {"success"}, &out->success);
-  (void)AMJson::QueryKey(json, {"error"}, &out->error);
-  (void)AMJson::QueryKey(json, {"warning"}, &out->warning);
-}
-
-Json EncodeSystemInfo_(const SystemInfoStyle &in) {
-  Json out = Json::object();
-  out["info"] = in.info;
-  out["success"] = in.success;
-  out["error"] = in.error;
-  out["warning"] = in.warning;
   return out;
 }
 
@@ -1718,8 +1596,6 @@ public:
                          &typed->style.internal_style);
     DecodePathHighlight_(codec_common::QueryObjectAt_(style, {"Path"}),
                          &typed->style.path);
-    DecodeSystemInfo_(codec_common::QueryObjectAt_(style, {"SystemInfo"}),
-                      &typed->style.system_info);
 
     AMDomain::style::service::NormalizeStyleConfigArg(typed);
     return true;
@@ -1748,7 +1624,6 @@ public:
         EncodeValueQueryHighlight_(typed->style.value_query_highlight);
     style["InternalStyle"] = EncodeInternalStyle_(typed->style.internal_style);
     style["Path"] = EncodePathHighlight_(typed->style.path);
-    style["SystemInfo"] = EncodeSystemInfo_(typed->style.system_info);
     (*root)["Style"] = std::move(style);
     return true;
   }

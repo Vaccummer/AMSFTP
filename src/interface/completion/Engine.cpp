@@ -342,14 +342,6 @@ void AMCompleteEngine::LoadConfig() {
     args_.complete_delay_ms = 0;
   }
 
-  int async_workers = static_cast<int>(completer_arg.async_workers);
-  if (async_workers < 1) {
-    async_workers = 1;
-  }
-  auto worker_count = static_cast<size_t>(async_workers);
-  const bool worker_changed = args_.complete_async_workers != worker_count;
-  args_.complete_async_workers = worker_count;
-
   std::string command_tag = "";
   std::string module_tag = "";
   if (style_service_ != nullptr) {
@@ -359,10 +351,6 @@ void AMCompleteEngine::LoadConfig() {
   }
   args_.input_tag_command = NormalizeStyleTag_(command_tag);
   args_.input_tag_module = NormalizeStyleTag_(module_tag);
-
-  if (worker_changed) {
-    RestartAsyncWorkers_();
-  }
 }
 
 /**
@@ -447,7 +435,7 @@ void AMCompleteEngine::StartAsyncWorkers_() {
   }
 
   async_stop_.store(false, std::memory_order_relaxed);
-  const size_t count = std::max<size_t>(1, args_.complete_async_workers);
+  constexpr size_t count = 1;
   async_workers_.reserve(count);
   for (size_t i = 0; i < count; ++i) {
     async_workers_.emplace_back(
@@ -477,14 +465,6 @@ void AMCompleteEngine::StopAsyncWorkers_() {
     }
   }
   async_workers_.clear();
-}
-
-/**
- * @brief Restart async worker threads after config changes.
- */
-void AMCompleteEngine::RestartAsyncWorkers_() {
-  StopAsyncWorkers_();
-  StartAsyncWorkers_();
 }
 
 /**

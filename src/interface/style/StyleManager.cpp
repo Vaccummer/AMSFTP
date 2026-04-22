@@ -14,6 +14,8 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.common.type_protocol;
   case StyleIndex::Abort:
     return &cfg.common.type_abort;
+  case StyleIndex::Error:
+    return &cfg.common.type_error;
   case StyleIndex::Common:
     return &cfg.common.default_style;
   case StyleIndex::Module:
@@ -100,8 +102,6 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.common.default_style;
   case StyleIndex::PathLike:
     return &cfg.common.default_style;
-  case StyleIndex::Error:
-    return &cfg.system_info.error;
   case StyleIndex::None:
   default:
     return nullptr;

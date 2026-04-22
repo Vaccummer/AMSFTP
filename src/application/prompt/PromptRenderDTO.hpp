@@ -16,25 +16,26 @@ namespace AMApplication::prompt {
 struct PromptRenderDTO {
   enum class Attr {
     nickname = 1,
-    client_connected = 2,
-    username = 3,
-    hostname = 4,
-    cwd = 5,
-    os_type = 6,
-    sysicon = 7,
-    task_pending = 8,
-    task_running = 9,
-    task_paused = 10,
-    task_num = 11,
-    time_now = 12,
-    time_clock = 13,
-    elapsed = 14,
-    success = 15,
-    ec_name = 16,
+    username = 2,
+    hostname = 3,
+    cwd = 4,
+    os_type = 5,
+    sysicon = 6,
+    task_pending = 7,
+    task_running = 8,
+    task_paused = 9,
+    success_task = 10,
+    failed_task = 11,
+    channel_num = 12,
+    term_num = 13,
+    time_now = 14,
+    elapsed = 15,
+    is_success = 16,
+    ec_name = 17,
+    ec_code = 18,
   };
 
   std::string nickname = "local";
-  bool client_connected = true;
   std::string username = "";
   std::string hostname = "";
   std::string cwd = "/";
@@ -43,30 +44,34 @@ struct PromptRenderDTO {
   int64_t task_pending = 0;
   int64_t task_running = 0;
   int64_t task_paused = 0;
-  int64_t task_num = 0;
+  int64_t success_task = 0;
+  int64_t failed_task = 0;
+  int64_t channel_num = 0;
+  int64_t term_num = 0;
   std::string time_now = "";
-  std::string time_clock = "";
   std::string elapsed = "";
-  bool success = true;
+  bool is_success = true;
   std::string ec_name = "";
+  int64_t ec_code = 0;
 
   static constexpr auto FieldNames = magic_enum::enum_values<Attr>();
   using MemberPtr =
       std::variant<std::string PromptRenderDTO::*, bool PromptRenderDTO::*,
                    int64_t PromptRenderDTO::*, double PromptRenderDTO::*>;
   using Value = std::variant<std::string, bool, int64_t, double>;
-  static_assert(magic_enum::enum_count<Attr>() == 16,
+  static_assert(magic_enum::enum_count<Attr>() == 18,
                 "PromptRenderDTO::members must stay aligned with Attr values");
   static constexpr std::array<MemberPtr, magic_enum::enum_count<Attr>()>
       members{
-          &PromptRenderDTO::nickname,     &PromptRenderDTO::client_connected,
-          &PromptRenderDTO::username,     &PromptRenderDTO::hostname,
-          &PromptRenderDTO::cwd,          &PromptRenderDTO::os_type,
-          &PromptRenderDTO::sysicon,      &PromptRenderDTO::task_pending,
-          &PromptRenderDTO::task_running, &PromptRenderDTO::task_paused,
-          &PromptRenderDTO::task_num,     &PromptRenderDTO::time_now,
-          &PromptRenderDTO::time_clock,   &PromptRenderDTO::elapsed,
-          &PromptRenderDTO::success,      &PromptRenderDTO::ec_name};
+          &PromptRenderDTO::nickname,     &PromptRenderDTO::username,
+          &PromptRenderDTO::hostname,     &PromptRenderDTO::cwd,
+          &PromptRenderDTO::os_type,      &PromptRenderDTO::sysicon,
+          &PromptRenderDTO::task_pending, &PromptRenderDTO::task_running,
+          &PromptRenderDTO::task_paused,  &PromptRenderDTO::success_task,
+          &PromptRenderDTO::failed_task,  &PromptRenderDTO::channel_num,
+          &PromptRenderDTO::term_num,     &PromptRenderDTO::time_now,
+          &PromptRenderDTO::elapsed,      &PromptRenderDTO::is_success,
+          &PromptRenderDTO::ec_name,      &PromptRenderDTO::ec_code};
 
   [[nodiscard]] std::vector<std::pair<Attr, Value>> GetDict() const {
     std::vector<std::pair<Attr, Value>> out;

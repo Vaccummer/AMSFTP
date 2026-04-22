@@ -23,7 +23,5 @@ using TransferTask = AMDomain::transfer::TransferTask;
 struct TransferBufferPolicy {
   size_t default_buffer_size =
       AMDomain::client::ClientService::AMDefaultBufferSize;
-  size_t min_buffer_size = AMDomain::client::ClientService::AMMinBufferSize;
-  size_t max_buffer_size = AMDomain::client::ClientService::AMMaxBufferSize;
 };
 } // namespace AMInfra::transfer

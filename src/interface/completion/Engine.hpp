@@ -107,7 +107,6 @@ struct AMCompletionArgs {
   std::string complete_order_num_style;
   std::string complete_help_style;
   int complete_delay_ms = 100;
-  size_t complete_async_workers = 2;
   std::string input_tag_command;
   std::string input_tag_module;
 };
@@ -406,11 +405,6 @@ private:
    * @brief Stop async worker threads.
    */
   void StopAsyncWorkers_();
-
-  /**
-   * @brief Restart async worker threads after config changes.
-   */
-  void RestartAsyncWorkers_();
 
   /**
    * @brief Async worker loop body.

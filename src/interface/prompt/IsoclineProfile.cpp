@@ -476,7 +476,7 @@ std::vector<std::string> IsoclineProfile::CollectHistory() const {
   }
   std::vector<std::string> records;
   records.reserve(static_cast<size_t>(count));
-  for (long i = 0; i < count; ++i) {
+  for (long i = count - 1; i >= 0; --i) {
     const char *entry = ic_history_get(i);
     if (entry != nullptr) {
       records.emplace_back(entry);

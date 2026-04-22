@@ -55,9 +55,12 @@ struct PromptTemplateStyle {
 using CLIPromptShortcutStyle = std::map<std::string, std::string>;
 
 struct CLIPromptIconsStyle {
+  std::string default_icon = "💻";
   std::string windows = "";
   std::string linux = "";
   std::string macos = "";
+  std::string freebsd = "";
+  std::string unix = "";
 };
 
 struct CLIPromptStyle {
@@ -69,6 +72,7 @@ struct CLIPromptStyle {
 struct InputHighlightStyle {
   std::string default_style = "";
   std::string type_string = "";
+  std::string type_error = "";
   std::string type_number = "";
   std::string type_protocol = "";
   std::string type_username = "";
@@ -115,7 +119,6 @@ struct InputHighlightStyle {
 struct ValueQueryHighlightStyle {
   std::string valid_value = "";
   std::string invalid_value = "";
-  std::string prompt_style = "";
 };
 
 struct InternalStyle {
@@ -135,13 +138,6 @@ struct PathHighlightStyle {
   std::string type_nonexistent = "";
 };
 
-struct SystemInfoStyle {
-  std::string info = "";
-  std::string success = "";
-  std::string error = "";
-  std::string warning = "";
-};
-
 struct StyleConfig {
   CompleteMenuStyle complete_menu = {};
   TableStyle table = {};
@@ -151,7 +147,6 @@ struct StyleConfig {
   ValueQueryHighlightStyle value_query_highlight = {};
   InternalStyle internal_style = {};
   PathHighlightStyle path = {};
-  SystemInfoStyle system_info = {};
 };
 
 struct StyleConfigArg {

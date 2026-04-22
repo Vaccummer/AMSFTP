@@ -134,15 +134,9 @@ PromptVarMap CLIPromtRender::BuildRenderVars_(
   if (auto it = vars.find("nickname"); it != vars.end()) {
     const std::string escaped = AMStr::BBCEscape(dto.nickname);
     if (!escaped.empty()) {
-      it->second = dto.client_connected
-                       ? PromptVarValue{escaped}
-                       : PromptVarValue{
-                             AMStr::fmt("[disconnected_nickname]{}[/]", escaped)};
+      it->second = PromptVarValue{escaped};
     }
   }
-
-  vars["current_nickname"] = vars["nickname"];
-  vars["current_client_connected"] = vars["client_connected"];
   return vars;
 }
 
