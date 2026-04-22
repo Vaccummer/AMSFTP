@@ -1,19 +1,41 @@
 cmake_minimum_required(VERSION 3.20)
 project(AMSFTP LANGUAGES C CXX)
 
-option(AMSFTP_ENABLE_LAYER_CHECK
-       "Enable Workflow-0 layered include dependency check target"
-       ON)
-option(AMSFTP_BUILD_TESTS "Build AMSFTP tests" ON)
-set(AMSFTP_LINK_MODE "dynamic" CACHE STRING
-    "Link mode for AMSFTP dependencies: dynamic or static")
-set_property(CACHE AMSFTP_LINK_MODE PROPERTY STRINGS dynamic static)
 
-# ========= C++ Standard =========
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
-# ========= vcpkg Packages (MSVC / x64-windows) =========
+if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(AMSFTP_BUILD_ARCH "x86_64")
+elseif (CMAKE_SIZEOF_VOID_P EQUAL 4)
+  set(AMSFTP_BUILD_ARCH "x86")
+else()
+  set(AMSFTP_BUILD_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
+    CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+  set(AMSFTP_BUILD_COMPILER "clang-cl")
+else()
+  string(TOLOWER "${CMAKE_CXX_COMPILER_ID}" AMSFTP_BUILD_COMPILER)
+endif()
+
+if (CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
+  set(AMSFTP_BUILD_LINKAGE "dynamic")
+else()
+  set(AMSFTP_BUILD_LINKAGE "static")
+endif()
+string(TOLOWER "${CMAKE_SYSTEM_NAME}" AMSFTP_BUILD_OS)
+
+set(AMSFTP_PROGRAM_NAME "AMSFTP")
+set(AMSFTP_PROGRAM_VERSION "1.0")
+
+set(AMSFTP_APP_DESCRIPTION_TEXT
+    "${AMSFTP_PROGRAM_NAME}\\nthis program is a CLI program for multi-host SFTP/FTP/HTTP file management and SSH sessions.")
+set(AMSFTP_APP_VERSION_TEXT
+    "${AMSFTP_PROGRAM_NAME} ${AMSFTP_PROGRAM_VERSION}\\ncompiler: ${AMSFTP_BUILD_COMPILER} ${CMAKE_CXX_COMPILER_VERSION}\\ntarget: ${AMSFTP_BUILD_OS}/${AMSFTP_BUILD_ARCH}\\nlinkage: ${AMSFTP_BUILD_LINKAGE}")
+
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL CONFIG REQUIRED)
@@ -23,47 +45,22 @@ find_package(libssh2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
-# ========= MSVC Runtime (/MD /MDd or /MT /MTd) =========
-if (MSVC)
-  if (AMSFTP_LINK_MODE STREQUAL "static")
-    set(CMAKE_MSVC_RUNTIME_LIBRARY
-        "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-  else()
-    set(CMAKE_MSVC_RUNTIME_LIBRARY
-        "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-  endif()
-endif()
-
-# ========= Source Files =========
 file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
-  "${PROJECT_SOURCE_DIR}/main.cpp"
   "${PROJECT_SOURCE_DIR}/src/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/*.cc"
   "${PROJECT_SOURCE_DIR}/src/*.cxx"
 )
-# Exclude legacy trees from active build.
-list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/legacy/.*\\.(cpp|cc|cxx)$")
-list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/\\.legacy/.*\\.(cpp|cc|cxx)$")
-# Exclude deprecated implementation slices from active build.
-list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/dep/.*\\.(cpp|cc|cxx)$")
-list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/.*\\.dep\\.(cpp|cc|cxx)$")
-list(APPEND AMSFTP_SOURCES
-  "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c"
-)
+list(APPEND AMSFTP_SOURCES "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c")
 set_source_files_properties(
   "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c"
-  PROPERTIES
-    COMPILE_OPTIONS "/W0"
+  PROPERTIES COMPILE_OPTIONS "/W0"
 )
 
-add_executable(amsftp app.rc ${AMSFTP_SOURCES}   )
-
+add_executable(amsftp app.rc ${AMSFTP_SOURCES})
 target_include_directories(amsftp PRIVATE
   "${PROJECT_SOURCE_DIR}/src"
   "${PROJECT_SOURCE_DIR}/src/third_party"
 )
-
-# ========= Link (all via vcpkg targets) =========
 target_link_libraries(amsftp PRIVATE
   OpenSSL::SSL
   OpenSSL::Crypto
@@ -76,161 +73,31 @@ target_link_libraries(amsftp PRIVATE
   ws2_32
   Advapi32
   CLI11::CLI11
-  
 )
 target_compile_definitions(amsftp PRIVATE
   NOMINMAX
   AMSFTP_PASSWORD_KEY="AMSFTP_Static_Key_Change_Me_2026"
+  AMSFTP_APP_DESCRIPTION="${AMSFTP_APP_DESCRIPTION_TEXT}"
+  AMSFTP_APP_VERSION="${AMSFTP_APP_VERSION_TEXT}"
 )
-# ========= Console Ctrl-C trigger tool =========
-# add_executable(ctrlc_trigger
-#   "${PROJECT_SOURCE_DIR}/src/tools/ConsoleCtrlTrigger.cpp"
-# )
+target_compile_options(amsftp PRIVATE /W4 /Zi)
+target_link_options(amsftp PRIVATE /DEBUG:FULL)
 
-# target_compile_options(ctrlc_trigger PRIVATE
-#   $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
-# )
-# # ========= Test Program =========
-# file(GLOB_RECURSE AMTEST_SOURCES CONFIGURE_DEPENDS
-#   "${PROJECT_SOURCE_DIR}/test/*.cpp"
-#   "${PROJECT_SOURCE_DIR}/test/*.cc"
-#   "${PROJECT_SOURCE_DIR}/src/*.cpp"
-#   "${PROJECT_SOURCE_DIR}/src/*.cc"
-#   "${PROJECT_SOURCE_DIR}/src/*.cxx"
-# )
-# list(APPEND AMTEST_SOURCES "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c")
-
-# add_executable(amtest ${AMTEST_SOURCES})
-
-# target_include_directories(amtest PRIVATE
-#   "${PROJECT_SOURCE_DIR}/src"
-#   "${PROJECT_SOURCE_DIR}/src/third_party"
-# )
-
-# target_link_libraries(amtest PRIVATE
-#   OpenSSL::SSL
-#   OpenSSL::Crypto
-#   ZLIB::ZLIB
-#   CURL::libcurl
-#   fmt::fmt
-#   nlohmann_json::nlohmann_json
-#   replxx::replxx
-#   libssh2::libssh2
-#   CLI11::CLI11
-#   shell32
-#   ws2_32
-#   Advapi32
-# )
-
-# ========= rust_toml_read static library (optional discovery) =========
 set(AMSFTP_RUST_TOMLREAD_DIR "${PROJECT_SOURCE_DIR}/src/foreign/tomlread")
-
 find_file(RUST_TOML_READ_STATIC_LIB
   NAMES rust_toml_read.lib
-  PATHS
-    "${AMSFTP_RUST_TOMLREAD_DIR}/target/release"
+  PATHS "${AMSFTP_RUST_TOMLREAD_DIR}/target/release"
   NO_DEFAULT_PATH
 )
-
 if (RUST_TOML_READ_STATIC_LIB)
-  target_link_libraries(amsftp PRIVATE ${RUST_TOML_READ_STATIC_LIB})
-  if (WIN32)
-    target_link_libraries(amsftp PRIVATE
-      ntdll
-      userenv
-      dbghelp
-      legacy_stdio_definitions
-    )
-  endif()
+  target_link_libraries(amsftp PRIVATE
+    ${RUST_TOML_READ_STATIC_LIB}
+    ntdll
+    userenv
+    dbghelp
+    legacy_stdio_definitions
+  )
   target_compile_definitions(amsftp PRIVATE RUST_TOML_READ_STATIC)
-  # target_link_libraries(amtest PRIVATE ${RUST_TOML_READ_STATIC_LIB})
 else()
   message(WARNING "rust_toml_read static library not found; build may fail if not linked elsewhere.")
-endif()
-
-# ========= Compile Options =========
-set(AMSFTP_USING_MSVC_FRONTEND OFF)
-if (MSVC OR
-    (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND
-     CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"))
-  set(AMSFTP_USING_MSVC_FRONTEND ON)
-endif()
-
-target_compile_options(amsftp PRIVATE
-  $<$<BOOL:${AMSFTP_USING_MSVC_FRONTEND}>:/W4>
-  $<$<AND:$<BOOL:${AMSFTP_USING_MSVC_FRONTEND}>,$<OR:$<CONFIG:Debug>,$<CONFIG:Release>>>:/Zi>
-)
-
-target_link_options(amsftp PRIVATE
-  $<$<AND:$<BOOL:${AMSFTP_USING_MSVC_FRONTEND}>,$<CONFIG:Release>>:/DEBUG:FULL>
-)
-
-# target_compile_options(amtest PRIVATE
-#   $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
-# )
-
-# ========= Architecture Guardrail (Workflow-0) =========
-if (AMSFTP_ENABLE_LAYER_CHECK)
-  find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell)
-  if (POWERSHELL_EXECUTABLE)
-    add_custom_target(check_layers
-      COMMAND "${POWERSHELL_EXECUTABLE}"
-              -NoProfile
-              -ExecutionPolicy Bypass
-              -File "${PROJECT_SOURCE_DIR}/tools/check_layers.ps1"
-              -RepoRoot "${PROJECT_SOURCE_DIR}"
-      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-      COMMENT "Run layered include dependency checks (Workflow-0 guardrail)"
-      VERBATIM
-    )
-
-    add_custom_target(check_wf7_cutover
-      COMMAND "${POWERSHELL_EXECUTABLE}"
-              -NoProfile
-              -ExecutionPolicy Bypass
-              -File "${PROJECT_SOURCE_DIR}/tools/check_wf7_cutover.ps1"
-              -RepoRoot "${PROJECT_SOURCE_DIR}"
-      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-      COMMENT "Run WF-7 bridged-header cutover regression check (default phase)"
-      VERBATIM
-    )
-
-    add_custom_target(check_wf7_cutover_strict
-      COMMAND "${POWERSHELL_EXECUTABLE}"
-              -NoProfile
-              -ExecutionPolicy Bypass
-              -File "${PROJECT_SOURCE_DIR}/tools/check_wf7_cutover.ps1"
-              -RepoRoot "${PROJECT_SOURCE_DIR}"
-              -IncludeSingletonCompat
-      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-      COMMENT "Run WF-7 strict cutover check including singleton-compat headers"
-      VERBATIM
-    )
-
-    add_custom_target(check_wf7_cutover_manager
-      COMMAND "${POWERSHELL_EXECUTABLE}"
-              -NoProfile
-              -ExecutionPolicy Bypass
-              -File "${PROJECT_SOURCE_DIR}/tools/check_wf7_cutover.ps1"
-              -RepoRoot "${PROJECT_SOURCE_DIR}"
-              -IncludeManagerCompat
-      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-      COMMENT "Run WF-7 manager-compat cutover check (fail on AMManager/* includes)"
-      VERBATIM
-    )
-
-    add_custom_target(report_legacy_includes
-      COMMAND "${POWERSHELL_EXECUTABLE}"
-              -NoProfile
-              -ExecutionPolicy Bypass
-              -File "${PROJECT_SOURCE_DIR}/tools/report_legacy_includes.ps1"
-              -RepoRoot "${PROJECT_SOURCE_DIR}"
-      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-      COMMENT "Report legacy include usage counts (Workflow-7 metric)"
-      VERBATIM
-    )
-  else()
-    message(WARNING
-      "PowerShell executable not found; check_layers/check_wf7_cutover/check_wf7_cutover_strict/check_wf7_cutover_manager/report_legacy_includes targets are unavailable.")
-  endif()
 endif()

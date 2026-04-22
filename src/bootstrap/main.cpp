@@ -5,6 +5,17 @@
 #include <filesystem>
 #include <iostream>
 
+#ifndef AMSFTP_APP_DESCRIPTION
+#define AMSFTP_APP_DESCRIPTION                                                 \
+  "mycli\nthis program is a CLI program for multi-host SFTP/FTP/HTTP file " \
+  "management and SSH sessions."
+#endif
+
+#ifndef AMSFTP_APP_VERSION
+#define AMSFTP_APP_VERSION                                                   \
+  "mycli 1.4.2\ncompiler: unknown\ntarget: unknown/unknown\nlinkage: static"
+#endif
+
 namespace {
 namespace fs = std::filesystem;
 }
@@ -16,11 +27,8 @@ int main(int argc, char **argv) {
   try {
     const std::string app_name =
         argc > 0 ? fs::path(argv[0]).filename().string() : "amsftp.exe";
-    const std::string app_description =
-        "AMSFTP CLI\nVaccummer@https://github.com/Vaccummer/AMSFTP\nA CLI "
-        "programm for multi-hosts SFTP/FTP/HTTP file management and SSH "
-        "session.";
-    const std::string app_version = "dev";
+    const std::string app_description = AMSFTP_APP_DESCRIPTION;
+    const std::string app_version = AMSFTP_APP_VERSION;
     auto root_result = AMBootstrap::ResolveRootDir();
     if (!root_result.rcm) {
       AMBootstrap::PrintBootstrapWarn(root_result.rcm.msg());
