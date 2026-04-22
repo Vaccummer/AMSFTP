@@ -17,10 +17,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL CONFIG REQUIRED)
-find_package(fmt CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Lua REQUIRED)
-find_package(replxx CONFIG REQUIRED)
 find_package(libssh2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
@@ -58,7 +56,7 @@ set_source_files_properties(
     COMPILE_OPTIONS "/W0"
 )
 
-add_executable(amsftp ${AMSFTP_SOURCES})
+add_executable(amsftp app.rc ${AMSFTP_SOURCES}   )
 
 target_include_directories(amsftp PRIVATE
   "${PROJECT_SOURCE_DIR}/src"
@@ -71,10 +69,8 @@ target_link_libraries(amsftp PRIVATE
   OpenSSL::Crypto
   ZLIB::ZLIB
   CURL::libcurl
-  fmt::fmt
   nlohmann_json::nlohmann_json
   ${LUA_LIBRARIES}
-  replxx::replxx
   libssh2::libssh2
   shell32
   ws2_32
@@ -126,45 +122,30 @@ target_compile_definitions(amsftp PRIVATE
 #   Advapi32
 # )
 
-# ========= Rust cfgffi library (optional discovery) =========
-find_library(CFGFFI_LIB NAMES cfgffi
+# ========= rust_toml_read static library (optional discovery) =========
+set(AMSFTP_RUST_TOMLREAD_DIR "${PROJECT_SOURCE_DIR}/src/foreign/tomlread")
+
+find_file(RUST_TOML_READ_STATIC_LIB
+  NAMES rust_toml_read.lib
   PATHS
-    "${PROJECT_SOURCE_DIR}/tomlread/target/release"
-    "${PROJECT_SOURCE_DIR}/tomlread/target/debug"
-  NO_DEFAULT_PATH
-)
-if (NOT CFGFFI_LIB)
-  # Rust cdylib on Windows commonly emits import library as cfgffi.dll.lib.
-  find_file(CFGFFI_LIB NAMES cfgffi.dll.lib cfgffi.lib
-    PATHS
-      "${PROJECT_SOURCE_DIR}/tomlread/target/release"
-      "${PROJECT_SOURCE_DIR}/tomlread/target/debug"
-    NO_DEFAULT_PATH
-  )
-endif()
-find_file(CFGFFI_DLL NAMES cfgffi.dll
-  PATHS
-    "${PROJECT_SOURCE_DIR}/tomlread/target/release"
-    "${PROJECT_SOURCE_DIR}/tomlread/target/debug"
+    "${AMSFTP_RUST_TOMLREAD_DIR}/target/release"
   NO_DEFAULT_PATH
 )
 
-if (CFGFFI_LIB)
-  target_link_libraries(amsftp PRIVATE ${CFGFFI_LIB})
-  if (CFGFFI_DLL)
-    add_custom_command(TARGET amsftp POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${CFGFFI_DLL}"
-              "$<TARGET_FILE_DIR:amsftp>/cfgffi.dll"
-      COMMENT "Copy cfgffi.dll to runtime output directory"
-      VERBATIM
+if (RUST_TOML_READ_STATIC_LIB)
+  target_link_libraries(amsftp PRIVATE ${RUST_TOML_READ_STATIC_LIB})
+  if (WIN32)
+    target_link_libraries(amsftp PRIVATE
+      ntdll
+      userenv
+      dbghelp
+      legacy_stdio_definitions
     )
-  else()
-    message(WARNING "cfgffi library found but cfgffi.dll not found; runtime may fail to start.")
   endif()
-  # target_link_libraries(amtest PRIVATE ${CFGFFI_LIB})
+  target_compile_definitions(amsftp PRIVATE RUST_TOML_READ_STATIC)
+  # target_link_libraries(amtest PRIVATE ${RUST_TOML_READ_STATIC_LIB})
 else()
-  message(WARNING "cfgffi library not found; build may fail if not linked elsewhere.")
+  message(WARNING "rust_toml_read static library not found; build may fail if not linked elsewhere.")
 endif()
 
 # ========= Compile Options =========
