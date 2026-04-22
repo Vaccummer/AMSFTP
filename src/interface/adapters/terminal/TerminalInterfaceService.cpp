@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -151,6 +152,27 @@ JoinChannelSummary_(const std::vector<std::string> &channels) {
     out += channels[i];
   }
   return out;
+}
+
+[[nodiscard]] ECM TimeoutSecondsToMs_(double timeout_s, const char *operation,
+                                      int *out_timeout_ms) {
+  if (out_timeout_ms == nullptr) {
+    return Err(EC::InvalidArg, operation, "timeout", "Timeout output is null");
+  }
+  if (!std::isfinite(timeout_s) || timeout_s <= 0.0) {
+    return Err(EC::InvalidArg, operation, "timeout",
+               "Timeout must be greater than 0 seconds");
+  }
+  const double timeout_ms = timeout_s * 1000.0;
+  if (timeout_ms > static_cast<double>(std::numeric_limits<int>::max())) {
+    return Err(EC::InvalidArg, operation, "timeout", "Timeout is too large");
+  }
+  *out_timeout_ms = std::max(1, static_cast<int>(std::llround(timeout_ms)));
+  return OK;
+}
+
+[[nodiscard]] ECM MergeStatus_(const ECM &current, const ECM &next) {
+  return (next) ? current : next;
 }
 
 [[nodiscard]] ECMData<std::string>
@@ -1755,6 +1777,84 @@ ECM TerminalInterfaceService::RemoveTerminal(
   return status;
 }
 
+ECM TerminalInterfaceService::ClearTerminals(
+    const TerminalClearArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  constexpr const char *kOp = "term.clear";
+  int timeout_ms = 0;
+  ECM timeout_rcm = TimeoutSecondsToMs_(arg.timeout_s, kOp, &timeout_ms);
+  if (!(timeout_rcm)) {
+    prompt_io_manager_.ErrorFormat(timeout_rcm);
+    return timeout_rcm;
+  }
+
+  const auto base_control = ResolveControl_(default_interrupt_flag_, control_opt);
+  const auto names = terminal_service_.ListTerminalNames();
+  if (names.empty()) {
+    prompt_io_manager_.FmtPrint(
+        "term clear: checked=0 removed=0 kept=0 timeout={}s",
+        arg.timeout_s);
+    return OK;
+  }
+
+  ECM status = OK;
+  size_t checked_count = 0U;
+  size_t removed_count = 0U;
+  size_t kept_count = 0U;
+  for (const auto &name : names) {
+    if (base_control.IsInterrupted()) {
+      return Err(EC::Terminate, kOp, name, "Interrupted by user");
+    }
+
+    ++checked_count;
+    auto terminal_result = terminal_service_.GetTerminalByNickname(name, true);
+    const ControlComponent check_control(base_control.ControlToken(),
+                                         timeout_ms);
+    bool healthy = false;
+    ECM check_rcm = terminal_result.rcm;
+    AMDomain::client::ClientStatus session_status =
+        AMDomain::client::ClientStatus::NotInitialized;
+    if ((terminal_result.rcm) && terminal_result.data) {
+      auto session_result =
+          terminal_result.data->CheckSession({}, check_control);
+      check_rcm = session_result.rcm;
+      session_status = session_result.data.status;
+      healthy = (session_result.rcm) &&
+                session_status == AMDomain::client::ClientStatus::OK &&
+                session_result.data.is_supported;
+    }
+
+    if (healthy) {
+      ++kept_count;
+      prompt_io_manager_.FmtPrint("✅ Terminal kept: {} ({})", name,
+                                  AMStr::ToString(session_status));
+      continue;
+    }
+
+    const ControlComponent remove_control(base_control.ControlToken(),
+                                          timeout_ms);
+    const ECM remove_rcm =
+        terminal_service_.RemoveTerminal(name, remove_control);
+    if (!(remove_rcm)) {
+      status = MergeStatus_(status, remove_rcm);
+      prompt_io_manager_.FmtPrint("❌ Terminal remove failed: {} {} {}", name,
+                                  AMStr::ToString(remove_rcm.code),
+                                  remove_rcm.msg());
+      continue;
+    }
+
+    ++removed_count;
+    prompt_io_manager_.FmtPrint("🧹 Terminal removed: {} {} {}", name,
+                                AMStr::ToString(check_rcm.code),
+                                check_rcm.msg());
+  }
+
+  prompt_io_manager_.FmtPrint(
+      "term clear: checked={} removed={} kept={} timeout={}s", checked_count,
+      removed_count, kept_count, arg.timeout_s);
+  return status;
+}
+
 ECM TerminalInterfaceService::AddChannel(
     const ChannelAddArg &arg,
     const std::optional<ControlComponent> &control_opt) const {
@@ -1977,6 +2077,153 @@ ECM TerminalInterfaceService::RenameChannel(
                               src_target.nickname, src_channel,
                               dst_target.nickname, dst_channel);
   return OK;
+}
+
+ECM TerminalInterfaceService::ClearChannels(
+    const ChannelClearArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  constexpr const char *kOp = "channel.clear";
+  int timeout_ms = 0;
+  ECM timeout_rcm = TimeoutSecondsToMs_(arg.timeout_s, kOp, &timeout_ms);
+  if (!(timeout_rcm)) {
+    prompt_io_manager_.ErrorFormat(timeout_rcm);
+    terminal_service_.TraceRuntimeEvent(timeout_rcm, "<channel>", kOp,
+                                        "invalid timeout");
+    return timeout_rcm;
+  }
+
+  const auto base_control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string nickname =
+      AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(arg.nickname));
+  if (nickname.empty()) {
+    nickname = AMDomain::host::HostService::NormalizeNickname(
+        AMStr::Strip(client_service_.CurrentNickname()));
+  }
+  if (AMDomain::host::HostService::IsLocalNickname(nickname)) {
+    nickname = "local";
+  }
+
+  auto terminal_result =
+      terminal_service_.GetTerminalByNickname(nickname, false);
+  if (!(terminal_result.rcm) || !terminal_result.data) {
+    const ECM rcm = terminal_result.rcm
+                        ? Err(EC::ClientNotFound, kOp, nickname,
+                              "Terminal not found")
+                        : terminal_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    terminal_service_.TraceRuntimeEvent(rcm, nickname,
+                                        "terminal.channel.clear.resolve",
+                                        "terminal unavailable");
+    return rcm;
+  }
+
+  auto list_result = terminal_result.data->ListChannels({}, base_control);
+  if (!(list_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(list_result.rcm);
+    terminal_service_.TraceRuntimeEvent(list_result.rcm, nickname,
+                                        "terminal.channel.clear.list",
+                                        "failed to list channels");
+    return list_result.rcm;
+  }
+
+  terminal_service_.TraceRuntimeEvent(
+      OK, nickname, "terminal.channel.clear.start",
+      AMStr::fmt("channels={} timeout_ms={}",
+                 list_result.data.channels.size(), timeout_ms));
+
+  const AMTerminalTools::TerminalViewportInfo geometry =
+      AMTerminalTools::GetTerminalViewportInfo();
+  ECM status = OK;
+  size_t checked_count = 0U;
+  size_t removed_count = 0U;
+  size_t kept_count = 0U;
+  for (const auto &[channel_name, channel_port] : list_result.data.channels) {
+    if (base_control.IsInterrupted()) {
+      return Err(EC::Terminate, kOp, channel_name, "Interrupted by user");
+    }
+
+    ++checked_count;
+    ECM check_rcm = OK;
+    bool healthy = false;
+    if (!channel_port) {
+      check_rcm = Err(EC::InvalidHandle, kOp, channel_name,
+                      "Channel handle is null");
+    } else {
+      const auto before_state = channel_port->GetState();
+      if (before_state.closed) {
+        check_rcm = before_state.last_error
+                        ? Err(EC::NoConnection, kOp, channel_name,
+                              "Channel is closed")
+                        : before_state.last_error;
+      } else {
+        const ControlComponent check_control(base_control.ControlToken(),
+                                             timeout_ms);
+        AMDomain::terminal::ChannelResizeArgs resize_args = {};
+        resize_args.cols = std::max(1, geometry.cols);
+        resize_args.rows = std::max(1, geometry.rows);
+        resize_args.width = std::max(0, geometry.width);
+        resize_args.height = std::max(0, geometry.height);
+        auto resize_result = channel_port->Resize(resize_args, check_control);
+        const auto after_state = channel_port->GetState();
+        check_rcm = resize_result.rcm;
+        healthy = (resize_result.rcm) && !after_state.closed;
+        if (!healthy && (check_rcm)) {
+          check_rcm = after_state.last_error
+                          ? Err(EC::NoConnection, kOp, channel_name,
+                                "Channel is closed")
+                          : after_state.last_error;
+        }
+      }
+    }
+
+    if (healthy) {
+      ++kept_count;
+      prompt_io_manager_.FmtPrint("✅ Channel kept: {}@{}", nickname,
+                                  channel_name);
+      continue;
+    }
+
+    const ControlComponent remove_control(base_control.ControlToken(),
+                                          timeout_ms);
+    auto close_result =
+        terminal_result.data->CloseChannel({channel_name, true}, remove_control);
+    ECM remove_rcm = close_result.rcm;
+    if ((remove_rcm)) {
+      remove_rcm =
+          terminal_service_.DropChannelPort(nickname, channel_name,
+                                            remove_control);
+    }
+    if (!(remove_rcm)) {
+      status = MergeStatus_(status, remove_rcm);
+      prompt_io_manager_.FmtPrint("❌ Channel remove failed: {}@{} {} {}",
+                                  nickname, channel_name,
+                                  AMStr::ToString(remove_rcm.code),
+                                  remove_rcm.msg());
+      terminal_service_.TraceRuntimeEvent(
+          remove_rcm, nickname, "terminal.channel.clear.remove",
+          AMStr::fmt("channel={} check={} check_error={}", channel_name,
+                     AMStr::ToString(check_rcm.code), check_rcm.msg()));
+      continue;
+    }
+
+    ++removed_count;
+    prompt_io_manager_.FmtPrint("🧹 Channel removed: {}@{} {} {}", nickname,
+                                channel_name, AMStr::ToString(check_rcm.code),
+                                check_rcm.msg());
+    terminal_service_.TraceRuntimeEvent(
+        OK, nickname, "terminal.channel.clear.remove",
+        AMStr::fmt("channel={} check={} check_error={}", channel_name,
+                   AMStr::ToString(check_rcm.code), check_rcm.msg()));
+  }
+
+  prompt_io_manager_.FmtPrint(
+      "channel clear: terminal={} checked={} removed={} kept={} timeout={}s",
+      nickname, checked_count, removed_count, kept_count, arg.timeout_s);
+  terminal_service_.TraceRuntimeEvent(
+      status, nickname, "terminal.channel.clear.summary",
+      AMStr::fmt("checked={} removed={} kept={} timeout_ms={}", checked_count,
+                 removed_count, kept_count, timeout_ms));
+  return status;
 }
 
 } // namespace AMInterface::terminal

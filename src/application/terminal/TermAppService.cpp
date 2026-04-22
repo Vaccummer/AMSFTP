@@ -1,5 +1,6 @@
 #include "application/terminal/TermAppService.hpp"
 
+#include "application/log/LoggerAppService.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/terminal/TerminalModel.hpp"
 #include "foundation/tools/string.hpp"
@@ -22,6 +23,35 @@ using AMDomain::terminal::kTerminalRemoveCloseTimeoutMs;
 }
 
 } // namespace
+
+void TermAppService::TraceRuntimeEvent(const ECM &rcm,
+                                       const std::string &target,
+                                       const std::string &action,
+                                       const std::string &message) const {
+  if (logger_ == nullptr) {
+    return;
+  }
+
+  auto level = (rcm) ? AMDomain::log::TraceLevel::Info
+                     : AMDomain::log::TraceLevel::Error;
+  if (rcm.code == EC::Terminate || rcm.code == EC::OperationTimeout) {
+    level = AMDomain::log::TraceLevel::Warning;
+  }
+
+  std::string detail = message;
+  if (!(rcm)) {
+    if (!detail.empty()) {
+      detail += "; ";
+    }
+    detail += AMStr::fmt("result={} error={}", AMStr::ToString(rcm.code),
+                         rcm.msg());
+  }
+
+  const std::string trace_target =
+      target.empty() ? std::string("<terminal>") : target;
+  (void)logger_->Trace(AMDomain::log::LoggerType::Program, level, rcm.code, "",
+                       trace_target, action, detail);
+}
 
 TermAppService::~TermAppService() {
   std::vector<std::string> keys = {};

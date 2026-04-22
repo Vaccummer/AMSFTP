@@ -35,6 +35,19 @@ struct CheckArgs : BaseArgStruct {
 };
 
 /**
+ * @brief CLI argument container for client clear.
+ */
+struct ClearClientsArgs : BaseArgStruct {
+  AMInterface::client::ClearClientsRequest request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    return managers.interfaces.client_interface_service->ClearClients(request);
+  }
+  void reset() override { request = {}; }
+};
+
+/**
  * @brief CLI argument container for ch.
  */
 struct ChangeClientArgs : BaseArgStruct {

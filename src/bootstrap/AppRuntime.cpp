@@ -217,7 +217,9 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   state->client_service->SetPrivateKeys(snapshots.host_config_arg.private_keys);
 
   state->terminal_service =
-      std::make_unique<AMApplication::terminal::TermAppService>();
+      std::make_unique<AMApplication::terminal::TermAppService>(
+          AMDomain::terminal::BufferExceedCallback{},
+          state->log_manager.get());
 
   state->filesystem_service =
       std::make_unique<AMApplication::filesystem::FilesystemAppService>(

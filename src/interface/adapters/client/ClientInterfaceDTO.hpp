@@ -39,6 +39,10 @@ struct CheckClientsRequest {
   bool detail = false;
 };
 
+struct ClearClientsRequest {
+  double timeout_s = 1.8;
+};
+
 struct ListPoolClientsRequest {
   std::vector<std::string> nicknames = {};
   bool check = false;
