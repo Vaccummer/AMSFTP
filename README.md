@@ -4,7 +4,7 @@
 
 AMSFTP is a C++20 command-line tool for multi-host file and terminal workflows. It combines local, SFTP, FTP, and HTTP download operations in one CLI, with support for saved host profiles, asynchronous transfer tasks, interactive shell sessions, and prompt completion.
 
-## Project Overview
+## 🚀 Project Overview
 
 AMSFTP is designed for users who want one command-line entry point for both file operations and terminal access across multiple environments.
 
@@ -25,7 +25,7 @@ Before startup, AMSFTP requires the `AMSFTP_ROOT` environment variable. On first
 - `config/history.toml`
 - `config/bak/`
 
-## Build
+## 🛠️ Build
 
 ### Prerequisites
 
@@ -51,7 +51,9 @@ If your local `vcpkg` path differs from the one in [CMakePresets.json](/d:/CodeL
 
 ### Build Steps
 
-1. Build the Rust TOML helper library:
+1. Build the Rust TOML helper library in `release` mode.
+
+`CMakeLists.txt` currently searches `rust_toml_read.lib` only in `src/foreign/tomlread/target/release`, so this step should stay as `--release` even if you plan to build AMSFTP with a debug preset.
 
 ```powershell
 Set-Location .\src\foreign\tomlread
@@ -71,7 +73,13 @@ cmake --preset win-clang-debug
 cmake --build --preset win-clang-debug --target amsftp
 ```
 
-The generated binary is:
+`CMakePresets.json` sets:
+
+```text
+binaryDir = ${sourceDir}/build/${presetName}
+```
+
+So with the `win-clang-debug` preset, the generated binary is:
 
 ```text
 build/win-clang-debug/amsftp.exe
@@ -84,7 +92,7 @@ Other available presets are:
 - `win-clang-release`
 - `win-clang-static-release`
 
-## Usage
+## 💡 Usage
 
 ### Initial Setup
 
@@ -94,73 +102,72 @@ Set `AMSFTP_ROOT` to a writable directory before running the program:
 $env:AMSFTP_ROOT = "D:\Data\amsftp"
 ```
 
-Then check the top-level help:
-
-```powershell
-.\build\win-clang-debug\amsftp.exe --help
-```
-
-You can also inspect a specific command group:
-
-```powershell
-.\build\win-clang-debug\amsftp.exe host --help
-.\build\win-clang-debug\amsftp.exe task --help
-```
-
-### Common Workflows
-
-Create or inspect saved hosts:
-
-```powershell
-.\build\win-clang-debug\amsftp.exe host add dev
-.\build\win-clang-debug\amsftp.exe host ls -d
-.\build\win-clang-debug\amsftp.exe profile edit dev
-```
-
-Connect to local, SFTP, or FTP targets:
-
-```powershell
-.\build\win-clang-debug\amsftp.exe local
-.\build\win-clang-debug\amsftp.exe sftp dev user@example.com -P 22
-.\build\win-clang-debug\amsftp.exe ftp ftpbox user@example.com -P 21
-.\build\win-clang-debug\amsftp.exe connect dev
-```
-
-Run filesystem commands:
-
-```powershell
-.\build\win-clang-debug\amsftp.exe ls
-.\build\win-clang-debug\amsftp.exe stat dev@/var/log/syslog
-.\build\win-clang-debug\amsftp.exe find dev@/var/log "*.log"
-.\build\win-clang-debug\amsftp.exe cp @D:\tmp\a.txt dev@/tmp/
-.\build\win-clang-debug\amsftp.exe wget https://example.com/file.zip @D:\tmp\file.zip
-```
-
-Open terminal sessions:
-
-```powershell
-.\build\win-clang-debug\amsftp.exe ssh dev@main
-.\build\win-clang-debug\amsftp.exe term ls
-.\build\win-clang-debug\amsftp.exe channel ls dev
-```
-
-Manage asynchronous transfer tasks:
-
-```powershell
-.\build\win-clang-debug\amsftp.exe task ls -c
-.\build\win-clang-debug\amsftp.exe task inspect 12 -s -e
-.\build\win-clang-debug\amsftp.exe task pause 12
-.\build\win-clang-debug\amsftp.exe task resume 12
-.\build\win-clang-debug\amsftp.exe task terminate 12
-```
-
-Enter interactive mode:
+Then start AMSFTP. For example:
 
 ```powershell
 .\build\win-clang-debug\amsftp.exe bash
 ```
 
-Inside interactive mode, AMSFTP keeps the current client/session context and provides command completion and highlighting.
+If you only want to inspect help first:
+
+```powershell
+.\build\win-clang-debug\amsftp.exe --help
+```
+
+### Common Workflows Inside AMSFTP
+
+Create or inspect saved hosts:
+
+```text
+host add dev
+host ls -d
+profile edit dev
+```
+
+Connect to local, SFTP, or FTP targets:
+
+```text
+local
+sftp dev user@example.com -P 22
+ftp ftpbox user@example.com -P 21
+connect dev
+```
+
+Run filesystem commands:
+
+```text
+ls
+stat dev@/var/log/syslog
+find dev@/var/log "*.log"
+cp @D:\tmp\a.txt dev@/tmp/
+wget https://example.com/file.zip @D:\tmp\file.zip
+```
+
+Open terminal sessions:
+
+```text
+ssh dev@main
+term ls
+channel ls dev
+```
+
+Manage asynchronous transfer tasks:
+
+```text
+task ls -c
+task inspect 12 -s -e
+task pause 12
+task resume 12
+task terminate 12
+```
+
+Save config changes:
+
+```text
+config save
+```
+
+In interactive mode, AMSFTP keeps the current client or session context and provides completion and highlighting. Typing `bash` from a non-interactive start enters this workflow.
 
 ### Path Target Syntax
 
@@ -170,11 +177,3 @@ Many file commands accept a `nickname@path` style target:
 - `@D:\tmp\a.txt`: use the local client
 - `/tmp/a.txt`: use the current client
 - `@`: refer to the local current directory
-
-### Save Config Changes
-
-After editing hosts, profiles, or settings, persist changes with:
-
-```powershell
-.\build\win-clang-debug\amsftp.exe config save
-```
