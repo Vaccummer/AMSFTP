@@ -5,6 +5,11 @@
 #include "foundation/core/Enum.hpp"
 #include <functional>
 #include <optional>
+#include <string>
+
+namespace AMApplication::log {
+class LoggerAppService;
+}
 
 namespace AMApplication::filesystem {
 using PathTarget = AMDomain::filesystem::PathTarget;
@@ -17,7 +22,8 @@ using AMDomain::filesystem::SearchType;
 
 class FilesystemAppService final : public FilesystemAppBaseService {
 public:
-  FilesystemAppService(FilesystemArg arg, ClientAppService *client_service);
+  FilesystemAppService(FilesystemArg arg, ClientAppService *client_service,
+                       AMApplication::log::LoggerAppService *logger = nullptr);
   ~FilesystemAppService() override = default;
 
   [[nodiscard]] static ECMData<std::string>
@@ -95,5 +101,14 @@ private:
   [[nodiscard]] ECMData<ResolvedPath>
   ResolvePath_(const PathTarget &target, const ControlComponent &control,
                ClientHandle preferred_client = nullptr);
+  void TraceFs_(const ECM &rcm, const PathTarget &target,
+                const std::string &action,
+                const std::string &message = {}) const;
+  void TraceFs_(const ECM &rcm, const std::string &target,
+                const std::string &action,
+                const std::string &message = {}) const;
+
+private:
+  AMApplication::log::LoggerAppService *logger_ = nullptr;
 };
 } // namespace AMApplication::filesystem

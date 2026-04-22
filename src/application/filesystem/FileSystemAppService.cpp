@@ -1,6 +1,7 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/filesystem/FilesystemAppBaseService.hpp"
 #include "application/filesystem/detail/FilesystemMatchTools.hpp"
+#include "application/log/ProgramTrace.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
@@ -142,11 +143,40 @@ std::vector<PathInfo> CompactMatchedPaths_(const std::vector<PathInfo> &raw) {
   return compacted;
 }
 
-FilesystemAppService::FilesystemAppService(FilesystemArg arg,
-                                           ClientAppService *client_service)
-    : FilesystemAppBaseService(std::move(arg), client_service) {}
+FilesystemAppService::FilesystemAppService(
+    FilesystemArg arg, ClientAppService *client_service,
+    AMApplication::log::LoggerAppService *logger)
+    : FilesystemAppBaseService(std::move(arg), client_service),
+      logger_(logger) {}
 
 void FilesystemAppService::ClearCache() { ClearBaseIOCache(); }
+
+void FilesystemAppService::TraceFs_(const ECM &rcm, const PathTarget &target,
+                                    const std::string &action,
+                                    const std::string &message) const {
+  const std::string display =
+      AMStr::fmt("{}@{}",
+                 target.nickname.empty() ? std::string("local")
+                                         : target.nickname,
+                 target.path.empty() ? std::string(".") : target.path);
+  TraceFs_(rcm, display, action, message);
+}
+
+void FilesystemAppService::TraceFs_(const ECM &rcm, const std::string &target,
+                                    const std::string &action,
+                                    const std::string &message) const {
+  std::string detail = message;
+  if (!(rcm)) {
+    if (!detail.empty()) {
+      detail += "; ";
+    }
+    detail += AMStr::fmt("result={} error={}", AMStr::ToString(rcm.code),
+                         rcm.msg());
+  }
+  AMApplication::log::ProgramTrace(
+      logger_, rcm, target.empty() ? std::string("<path>") : target, action,
+      detail);
+}
 
 ECMData<ClientHandle>
 FilesystemAppService::GetClient(const std::string &nickname,
@@ -432,10 +462,12 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
                                     bool from_history) {
   auto resolved_result = ResolvePath_(path, control);
   if (!resolved_result.rcm || !resolved_result.data.client) {
-    return (resolved_result.rcm)
-               ? Err(EC::InvalidHandle, "filesystem", "",
-                     "Resolved client is null")
-               : resolved_result.rcm;
+    const ECM rcm =
+        (resolved_result.rcm) ? Err(EC::InvalidHandle, "filesystem", "",
+                                    "Resolved client is null")
+                              : resolved_result.rcm;
+    TraceFs_(rcm, path, "filesystem.cd", "resolve failed");
+    return rcm;
   }
   const ResolvedPath &resolved = resolved_result.data;
   ClientHandle client = resolved.client;
@@ -449,10 +481,14 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
   const std::string abs_target = resolved.abs_path;
   auto stat_result = client->IOPort().stat({abs_target, false}, control);
   if (!stat_result.rcm) {
+    TraceFs_(stat_result.rcm, resolved.target, "filesystem.cd", "stat failed");
     return stat_result.rcm;
   }
   if (stat_result.data.info.type != PathType::DIR) {
-    return {EC::NotADirectory, "ChangeDir", abs_target, "Not a directory"};
+    const ECM rcm = {EC::NotADirectory, "ChangeDir", abs_target,
+                     "Not a directory"};
+    TraceFs_(rcm, resolved.target, "filesystem.cd");
+    return rcm;
   }
   metadata.cwd = AMPath::NormalizeJoinedPath(
       AMDomain::filesystem::service::NormalizePath(stat_result.data.info.path),
@@ -460,6 +496,8 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
   const ECM set_meta_rcm =
       ClientAppService::SetClientMetadata(client, metadata);
   if (!set_meta_rcm) {
+    TraceFs_(set_meta_rcm, resolved.target, "filesystem.cd",
+             "failed to update metadata");
     return set_meta_rcm;
   }
 
@@ -480,6 +518,8 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
     }
     history.store(std::move(list));
   }
+  TraceFs_(OK, resolved.target, "filesystem.cd",
+           AMStr::fmt("from={} to={}", prev_cwd, metadata.cwd));
   return OK;
 }
 
@@ -565,7 +605,9 @@ ECM FilesystemAppService::Mkdirs(const PathTarget &path,
 
   const auto &resolved = resolved_result.data;
   ClientHandle client = resolved.client;
-  return client->IOPort().mkdirs({resolved.abs_path}, control);
+  ECM rcm = client->IOPort().mkdirs({resolved.abs_path}, control).rcm;
+  TraceFs_(rcm, resolved.target, "filesystem.mkdirs");
+  return rcm;
 }
 
 ECMData<double> FilesystemAppService::TestRTT(const std::string &nickname,
@@ -712,6 +754,9 @@ ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
        overwrite},
       control);
   if (!(rename_result.rcm)) {
+    TraceFs_(rename_result.rcm, resolved_src.target, "filesystem.rename",
+             AMStr::fmt("dst={}@{}", resolved_dst.target.nickname,
+                        resolved_dst.abs_path));
     return rename_result.rcm;
   }
 
@@ -725,6 +770,10 @@ ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
   if (!dst_parent_path.empty()) {
     ClearBaseIOCacheByPath(resolved_dst.target.nickname, dst_parent_path);
   }
+  TraceFs_(OK, resolved_src.target, "filesystem.rename",
+           AMStr::fmt("dst={}@{} overwrite={}",
+                      resolved_dst.target.nickname, resolved_dst.abs_path,
+                      overwrite ? "true" : "false"));
   return OK;
 }
 
@@ -850,6 +899,10 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
     status = Err(EC::InvalidArg, "filesystem", "", "No valid file target");
   }
   plan.rcm = status;
+  TraceFs_(status, "<rmfile>", "filesystem.rmfile.prepare",
+           AMStr::fmt("targets={} valid={} precheck_errors={}",
+                      targets.size(), plan.validated_targets.size(),
+                      plan.precheck_errors.size()));
   return {std::move(plan), status};
 }
 
@@ -922,6 +975,9 @@ FilesystemAppService::ExecuteRmfile(
       ClearBaseIOCacheByPath(resolved.target.nickname, parent);
     }
   }
+  TraceFs_(status, "<rmfile>", "filesystem.rmfile.execute",
+           AMStr::fmt("targets={} errors={}", plan.validated_targets.size(),
+                      errors.size()));
   return {std::move(errors), status};
 }
 
@@ -1001,6 +1057,8 @@ ECMData<std::vector<std::pair<PathTarget, ECM>>> FilesystemAppService::Rmdir(
       ClearBaseIOCacheByPath(resolved.target.nickname, parent);
     }
   }
+  TraceFs_(status, "<rmdir>", "filesystem.rmdir",
+           AMStr::fmt("targets={} errors={}", targets.size(), errors.size()));
   return {std::move(errors), status};
 }
 
@@ -1186,6 +1244,10 @@ FilesystemAppService::PreparePermanentRemove(std::vector<PathTarget> targets,
             "No valid target for permanent remove");
   }
   plan.rcm = status;
+  TraceFs_(status, "<rm>", "filesystem.rm.prepare",
+           AMStr::fmt("targets={} ordered={} precheck_errors={}",
+                      targets.size(), plan.ordered_delete_paths.size(),
+                      plan.precheck_errors.size()));
   return {std::move(plan), status};
 }
 
@@ -1263,6 +1325,9 @@ FilesystemAppService::ExecutePermanentRemove(
     }
   }
 
+  TraceFs_(status, "<rm>", "filesystem.rm.execute",
+           AMStr::fmt("ordered={} errors={}", plan.ordered_delete_paths.size(),
+                      errors.size()));
   return {std::move(errors), status};
 }
 
@@ -1441,6 +1506,9 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
     }
   }
 
+  TraceFs_(status, "<saferm>", "filesystem.saferm",
+           AMStr::fmt("targets={} compacted={} errors={}", targets.size(),
+                      compacted_targets.size(), errors.size()));
   return {std::move(errors), status};
 }
 

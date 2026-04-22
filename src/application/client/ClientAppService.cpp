@@ -1,4 +1,5 @@
 #include "application/client/ClientAppService.hpp"
+#include "application/log/ProgramTrace.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/string.hpp"
@@ -269,9 +270,10 @@ ECM AcquireTerminalLease_(const ClientHandle &client) {
 } // namespace
 
 ClientAppService::ClientAppService(HostAppService *host_config_manager,
-                                   ClientServiceArg arg)
+                                   ClientServiceArg arg,
+                                   AMApplication::log::LoggerAppService *logger)
     : ClientAppServiceBase(std::move(arg)),
-      host_config_manager_(host_config_manager) {}
+      host_config_manager_(host_config_manager), logger_(logger) {}
 
 ClientAppService::~ClientAppService() = default;
 
@@ -378,11 +380,15 @@ ClientAppService::CreateClient(const HostConfig &config,
       config.request, callbacks.known_host, callbacks.trace, callbacks.auth,
       private_keys);
   if (!(create_rcm)) {
+    TraceClient_(create_rcm, config.request.nickname, "client.create",
+                 "failed to create client port");
     return {nullptr, create_rcm};
   }
   if (!client) {
-    return {nullptr, Err(EC::InvalidHandle, "create_client", "",
-                         "CreateClient returned null client")};
+    const ECM rcm = Err(EC::InvalidHandle, "create_client", "",
+                        "CreateClient returned null client");
+    TraceClient_(rcm, config.request.nickname, "client.create");
+    return {nullptr, rcm};
   }
   ApplyCallbacksToClient_(client, callbacks);
 
@@ -397,9 +403,13 @@ ClientAppService::CreateClient(const HostConfig &config,
                            connect_result.rcm);
   }
   if (!connect_result.rcm) {
+    TraceClient_(connect_result.rcm, config.request.nickname, "client.connect",
+                 silent ? "silent=true" : "silent=false");
     return {nullptr, connect_result.rcm};
   }
   (void)client->MetaDataPort().StoreTypedValue(config.metadata, true);
+  TraceClient_(connect_result.rcm, config.request.nickname, "client.connect",
+               silent ? "silent=true" : "silent=false");
   return {client, connect_result.rcm};
 }
 
@@ -442,20 +452,28 @@ ClientAppService::EnsureClient(const std::string &nickname,
 
   auto create_result = CreateClient(config_result.data, control, silent);
   if (!(create_result.rcm) || !create_result.data) {
+    TraceClient_(create_result.rcm, nickname, "client.ensure",
+                 "create on demand failed");
     return create_result;
   }
 
   ECM add_rcm = AddClient(create_result.data, false);
   if ((add_rcm)) {
+    TraceClient_(add_rcm, create_result.data->ConfigPort().GetNickname(),
+                 "client.ensure", "created and added");
     return {create_result.data, OK};
   }
   if (add_rcm.code == EC::TargetAlreadyExists) {
     auto existing =
         GetClient(create_result.data->ConfigPort().GetNickname(), true);
     if ((existing.rcm) && existing.data) {
+      TraceClient_(existing.rcm, create_result.data->ConfigPort().GetNickname(),
+                   "client.ensure", "using existing client after add race");
       return existing;
     }
   }
+  TraceClient_(add_rcm, create_result.data->ConfigPort().GetNickname(),
+               "client.ensure", "add created client failed");
   return {create_result.data, add_rcm};
 }
 
@@ -468,6 +486,8 @@ ClientAppService::AcquireTransferClient(const std::string &nickname,
   for (int attempt = 0; attempt <= safe_retry_times; ++attempt) {
     public_result = GetPublicClient(nickname);
     if ((public_result.rcm) && public_result.data) {
+      TraceClient_(public_result.rcm, nickname, "client.transfer.acquire",
+                   AMStr::fmt("reused public client attempt={}", attempt));
       return public_result;
     }
     if (public_result.rcm.code != EC::PathUsingByOthers ||
@@ -482,19 +502,27 @@ ClientAppService::AcquireTransferClient(const std::string &nickname,
 
   auto create_result = CreateClient(nickname, ControlComponent{});
   if (!(create_result.rcm) || !create_result.data) {
+    TraceClient_(create_result.rcm, nickname, "client.transfer.acquire",
+                 "failed to create transfer client");
     return create_result;
   }
 
   const ECM lease_rcm = TryLeaseClient(create_result.data);
   if (!(lease_rcm)) {
+    TraceClient_(lease_rcm, nickname, "client.transfer.acquire",
+                 "failed to lease transfer client");
     return {nullptr, lease_rcm};
   }
 
   const ECM add_rcm = AddPublicClient(create_result.data);
   if (!(add_rcm)) {
     (void)TryReturnClient(create_result.data);
+    TraceClient_(add_rcm, nickname, "client.transfer.acquire",
+                 "failed to add public transfer client");
     return {nullptr, add_rcm};
   }
+  TraceClient_(add_rcm, nickname, "client.transfer.acquire",
+               "created public transfer client");
   return {create_result.data, OK};
 }
 
@@ -511,21 +539,31 @@ ClientAppService::ChangeClient(const std::string &nickname,
 
   auto client_result = EnsureClient(nickname, control, false, silent);
   if (!(client_result.rcm) || !client_result.data) {
+    TraceClient_(client_result.rcm, nickname, "client.change",
+                 "failed to resolve target client");
     return client_result;
   }
   SetCurrentClient(client_result.data);
+  TraceClient_(OK, client_result.data->ConfigPort().GetNickname(),
+               "client.change", AMStr::fmt("previous={}", current_nickname));
   return {client_result.data, OK};
 }
 
 ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
   if (!client) {
-    return {EC::InvalidHandle, "add_client", "", "Client handle is null"};
+    const ECM rcm = {EC::InvalidHandle, "add_client", "",
+                     "Client handle is null"};
+    TraceClient_(rcm, "", "client.add");
+    return rcm;
   }
 
   ApplyCallbacksToClient_(client, GetMaintainerCallbacks());
   const std::string nickname = client->ConfigPort().GetNickname();
   if (nickname.empty()) {
-    return {EC::InvalidArg, "add_client", "", "Client nickname is empty"};
+    const ECM rcm = {EC::InvalidArg, "add_client", "",
+                     "Client nickname is empty"};
+    TraceClient_(rcm, "", "client.add");
+    return rcm;
   }
 
   if (IsLocalNickname(nickname)) {
@@ -538,20 +576,29 @@ ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
     } else if (update_current) {
       SetCurrentClient(GetLocalClient());
     }
+    TraceClient_(OK, nickname, "client.add",
+                 AMStr::fmt("local overwrite={}", overwrite ? "true" : "false"));
     return OK;
   }
 
   if (!maintainer_) {
-    return {EC::InvalidHandle, "add_client", nickname,
-            "Client maintainer is not initialized"};
+    const ECM rcm = {EC::InvalidHandle, "add_client", nickname,
+                     "Client maintainer is not initialized"};
+    TraceClient_(rcm, nickname, "client.add");
+    return rcm;
   }
   const bool added = maintainer_->AddClient(client, overwrite);
   if (!added) {
-    return {EC::TargetAlreadyExists, "add_client", nickname,
-            "Client already exists"};
+    const ECM rcm = {EC::TargetAlreadyExists, "add_client", nickname,
+                     "Client already exists"};
+    TraceClient_(rcm, nickname, "client.add",
+                 AMStr::fmt("overwrite={}", overwrite ? "true" : "false"));
+    return rcm;
   }
 
   (void)SetCurrentClientIfEmpty_(client);
+  TraceClient_(OK, nickname, "client.add",
+               AMStr::fmt("overwrite={}", overwrite ? "true" : "false"));
   return OK;
 }
 
@@ -594,11 +641,16 @@ ECM ClientAppService::RemoveClient(const std::string &nickname) {
   const std::string key = nickname;
 
   if (!maintainer_) {
-    return {EC::InvalidHandle, "remove_client", key,
-            "Client maintainer is not initialized"};
+    const ECM rcm = {EC::InvalidHandle, "remove_client", key,
+                     "Client maintainer is not initialized"};
+    TraceClient_(rcm, key, "client.remove");
+    return rcm;
   }
   if (!maintainer_->RemoveClient(key)) {
-    return {EC::ClientNotFound, "remove_client", key, "Client not found"};
+    const ECM rcm = {EC::ClientNotFound, "remove_client", key,
+                     "Client not found"};
+    TraceClient_(rcm, key, "client.remove");
+    return rcm;
   }
 
   ErasePublicBucket_(key);
@@ -608,6 +660,7 @@ ECM ClientAppService::RemoveClient(const std::string &nickname) {
       SetCurrentClient(GetLocalClient());
     }
   }
+  TraceClient_(OK, key, "client.remove", "removed managed client");
   return OK;
 }
 
@@ -985,6 +1038,34 @@ ControlComponent ClientAppService::BuildCheckControl_(int timeout_ms) const {
   return GetControlComponent(std::nullopt, resolved_timeout_ms);
 }
 
+void ClientAppService::TraceClient_(AMDomain::client::TraceLevel level, EC code,
+                                    const std::string &nickname,
+                                    const std::string &action,
+                                    const std::string &message) const {
+  AMApplication::log::ProgramTrace(logger_, level, code,
+                                   nickname.empty() ? std::string("<client>")
+                                                    : nickname,
+                                   action, message);
+}
+
+void ClientAppService::TraceClient_(const ECM &rcm,
+                                    const std::string &nickname,
+                                    const std::string &action,
+                                    const std::string &message) const {
+  std::string detail = message;
+  if (!(rcm)) {
+    if (!detail.empty()) {
+      detail += "; ";
+    }
+    detail += AMStr::fmt("result={} error={}", AMStr::ToString(rcm.code),
+                         rcm.msg());
+  }
+  AMApplication::log::ProgramTrace(logger_, rcm,
+                                   nickname.empty() ? std::string("<client>")
+                                                    : nickname,
+                                   action, detail);
+}
+
 ECMData<CheckResult>
 ClientAppService::CheckClientInternal_(const ClientHandle &client,
                                        bool reconnect, bool update,
@@ -994,22 +1075,32 @@ ClientAppService::CheckClientInternal_(const ClientHandle &client,
     result.data.status = ClientStatus::NullHandle;
     result.rcm = {EC::InvalidHandle, "check_client", "<client>",
                   "Client handle is null"};
+    TraceClient_(result.rcm, "", "client.check");
     return result;
   }
   (void)update;
 
   const auto cached = client->ConfigPort().GetState();
   if (cached.data.status != ClientStatus::OK || !(cached.rcm)) {
+    TraceClient_(cached.rcm, client->ConfigPort().GetNickname(),
+                 "client.check",
+                 AMStr::fmt("cached_status={}", static_cast<int>(cached.data.status)));
     return cached;
   }
 
   auto state = client->IOPort().Check({}, control);
   if ((state.rcm) || !reconnect) {
+    TraceClient_(state.rcm, client->ConfigPort().GetNickname(),
+                 "client.check",
+                 AMStr::fmt("reconnect={}", reconnect ? "true" : "false"));
     return state;
   }
 
   client->IOPort().Connect(AMDomain::filesystem::ConnectArgs{true}, control);
-  return client->ConfigPort().GetState();
+  auto reconnected = client->ConfigPort().GetState();
+  TraceClient_(reconnected.rcm, client->ConfigPort().GetNickname(),
+               "client.check.reconnect");
+  return reconnected;
 }
 
 } // namespace AMApplication::client

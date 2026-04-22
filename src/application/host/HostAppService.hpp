@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+namespace AMApplication::log {
+class LoggerAppService;
+}
+
 namespace AMApplication::host {
 using AMDomain::host::HostConfig;
 using AMDomain::host::HostConfigArg;
@@ -18,7 +22,9 @@ using HostConfigMap = std::map<std::string, HostConfig>;
  */
 class HostAppService : public AMDomain::config::IConfigSyncPort {
 public:
-  explicit HostAppService() : IConfigSyncPort(typeid(HostConfigArg)) {}
+  explicit HostAppService(AMApplication::log::LoggerAppService *logger =
+                              nullptr)
+      : IConfigSyncPort(typeid(HostConfigArg)), logger_(logger) {}
   ~HostAppService() override = default;
 
   /**
@@ -66,6 +72,12 @@ public:
   mutable AMAtomic<HostConfigMap> host_configs_ = {};
   mutable AMAtomic<HostConfig> local_config_ = {};
   mutable AMAtomic<std::vector<std::string>> private_keys_ = {};
+
+private:
+  void TraceHost_(const ECM &rcm, const std::string &nickname,
+                  const std::string &action,
+                  const std::string &message = {}) const;
+  AMApplication::log::LoggerAppService *logger_ = nullptr;
 };
 
 /**
@@ -73,8 +85,9 @@ public:
  */
 class KnownHostsAppService : public AMDomain::config::IConfigSyncPort {
 public:
-  explicit KnownHostsAppService()
-      : IConfigSyncPort(typeid(KnownHostEntryArg)) {}
+  explicit KnownHostsAppService(AMApplication::log::LoggerAppService *logger =
+                                    nullptr)
+      : IConfigSyncPort(typeid(KnownHostEntryArg)), logger_(logger) {}
   ~KnownHostsAppService() override = default;
 
   /**
@@ -91,6 +104,10 @@ public:
   ECM UpsertKnownHost(const KnownHostQuery &query, bool overwrite = true);
 
 private:
+  void TraceKnownHost_(const ECM &rcm, const KnownHostQuery &query,
+                       const std::string &action,
+                       const std::string &message = {}) const;
+  AMApplication::log::LoggerAppService *logger_ = nullptr;
   mutable AMAtomic<KnownHostMap> known_hosts_ = {};
 };
 

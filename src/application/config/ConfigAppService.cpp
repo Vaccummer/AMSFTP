@@ -1,6 +1,8 @@
 #include "application/config/ConfigAppService.hpp"
+#include "application/log/ProgramTrace.hpp"
 #include "domain/config/ConfigDomainService.hpp"
 #include "foundation/tools/path.hpp"
+#include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 
 #include <array>
@@ -26,6 +28,10 @@ namespace AMApplication::config {
  */
 ConfigAppService::ConfigAppService(ConfigStoreInitArg init_arg)
     : init_arg_(std::move(init_arg)) {}
+
+void ConfigAppService::SetLogger(AMApplication::log::LoggerAppService *logger) {
+  logger_ = logger;
+}
 
 /**
  * @brief Build one owned config store from init arg.
@@ -67,10 +73,16 @@ ConfigStoreInitArg ConfigAppService::GetInitArg() const {
 ECM ConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
                            bool force) {
   if (!store_) {
-    return {EC::ConfigNotInitialized, "config.load", "",
-            "config store is not bound"};
+    const ECM rcm = {EC::ConfigNotInitialized, "config.load", "",
+                     "config store is not bound"};
+    TraceConfig_(rcm, kind.has_value() ? AMStr::ToString(*kind) : "<all>",
+                 "config.load");
+    return rcm;
   }
-  return store_->Load(kind, force);
+  const ECM rcm = store_->Load(kind, force);
+  TraceConfig_(rcm, kind.has_value() ? AMStr::ToString(*kind) : "<all>",
+               "config.load", AMStr::fmt("force={}", force ? "true" : "false"));
+  return rcm;
 }
 
 /**
@@ -79,10 +91,17 @@ ECM ConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
 ECM ConfigAppService::Dump(AMDomain::config::DocumentKind kind,
                            const std::string &dst_path, bool async) {
   if (!store_) {
-    return {EC::ConfigNotInitialized, "config.dump", "",
-            "config store is not bound"};
+    const ECM rcm = {EC::ConfigNotInitialized, "config.dump", "",
+                     "config store is not bound"};
+    TraceConfig_(rcm, AMStr::ToString(kind), "config.dump");
+    return rcm;
   }
-  return store_->Dump(kind, std::filesystem::path(dst_path), async);
+  const ECM rcm = store_->Dump(kind, std::filesystem::path(dst_path), async);
+  TraceConfig_(rcm, AMStr::ToString(kind), "config.dump",
+               AMStr::fmt("async={} dst={}", async ? "true" : "false",
+                          dst_path.empty() ? std::string("<default>")
+                                           : dst_path));
+  return rcm;
 }
 
 /**
@@ -131,8 +150,10 @@ bool ConfigAppService::IsDirty(AMDomain::config::DocumentKind kind) const {
  */
 ECM ConfigAppService::BackupIfNeeded() {
   if (!store_) {
-    return {EC::ConfigNotInitialized, "config.backup", "",
-            "config store is not bound"};
+    const ECM rcm = {EC::ConfigNotInitialized, "config.backup", "",
+                     "config store is not bound"};
+    TraceConfig_(rcm, "<policy>", "config.backup");
+    return rcm;
   }
 
   const BackupContext context = BuildBackupContext_();
@@ -142,17 +163,23 @@ ECM ConfigAppService::BackupIfNeeded() {
   }
   if (!IsBackupDue_(context)) {
     if (context.normalized_changed) {
-      return Dump(DocumentKind::Settings, "", true);
+      const ECM dump_rcm = Dump(DocumentKind::Settings, "", true);
+      TraceConfig_(dump_rcm, "<policy>", "config.backup",
+                   "normalized backup policy only");
+      return dump_rcm;
     }
+    TraceConfig_(OK, "<policy>", "config.backup", "backup not due");
     return OK;
   }
   const std::vector<ECM> rcms =
       BackupWithContext_(ListOwnedDocumentKinds_(), context);
   for (const ECM &rcm : rcms) {
     if (!(rcm)) {
+      TraceConfig_(rcm, "<policy>", "config.backup", "backup failed");
       return rcm;
     }
   }
+  TraceConfig_(OK, "<policy>", "config.backup", "backup completed");
   return OK;
 }
 
@@ -206,15 +233,19 @@ ECM ConfigAppService::UnregisterSyncPort(SyncParticipantId participant_id) {
 
 ECM ConfigAppService::FlushDirtyParticipants() {
   if (!store_) {
-    return Err{EC::ConfigNotInitialized, "config.flush_dirty", "",
-               "config store is not bound"};
+    const ECM rcm = Err{EC::ConfigNotInitialized, "config.flush_dirty", "",
+                        "config store is not bound"};
+    TraceConfig_(rcm, "<participants>", "config.flush_dirty");
+    return rcm;
   }
 
   std::vector<SyncParticipant> participants = {};
   {
     if (sync_flush_running_.exchange(true, std::memory_order_acq_rel)) {
-      return Err{EC::BadOperationOrder, "config.flush_dirty", "",
-                 "sync flush already running"};
+      const ECM rcm = Err{EC::BadOperationOrder, "config.flush_dirty", "",
+                          "sync flush already running"};
+      TraceConfig_(rcm, "<participants>", "config.flush_dirty");
+      return rcm;
     }
     auto sync_participants = sync_participants_.lock();
     participants = sync_participants.load();
@@ -255,6 +286,8 @@ ECM ConfigAppService::FlushDirtyParticipants() {
     participant.port->ClearConfigDirty();
   }
 
+  TraceConfig_(first_error, "<participants>", "config.flush_dirty",
+               AMStr::fmt("participants={}", participants.size()));
   return first_error;
 }
 
@@ -309,6 +342,22 @@ bool ConfigAppService::IsBackupDue_(const BackupContext &context) const {
     return false;
   }
   return true;
+}
+
+void ConfigAppService::TraceConfig_(const ECM &rcm, const std::string &target,
+                                    const std::string &action,
+                                    const std::string &message) const {
+  std::string detail = message;
+  if (!(rcm)) {
+    if (!detail.empty()) {
+      detail += "; ";
+    }
+    detail += AMStr::fmt("result={} error={}", AMStr::ToString(rcm.code),
+                         rcm.msg());
+  }
+  AMApplication::log::ProgramTrace(
+      logger_, rcm, target.empty() ? std::string("<config>") : target, action,
+      detail);
 }
 
 std::vector<DocumentKind> ConfigAppService::ListOwnedDocumentKinds_() const {
