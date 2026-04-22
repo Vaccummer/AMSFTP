@@ -199,6 +199,15 @@ void BindClientCommands(CommandNode *root, CliArgsPool &args) {
       });
 
   client_node->AddFunction(
+      "clear", "Check and remove unhealthy clients", args,
+      &CliArgsPool::client, &CliClientArgs::clear,
+      [&args](CommandNode &node) {
+        node.AddOption("-t", "--timeout",
+                       args.client.clear.request.timeout_s, 1, 1, Sem::None,
+                       "Per-client check timeout in seconds");
+      });
+
+  client_node->AddFunction(
       "rm", "Disconnect clients", args, &CliArgsPool::client,
       &CliClientArgs::disconnect, [&args](CommandNode &node) {
         node.AddOption("nicknames", args.client.disconnect.request.nicknames, 1,
@@ -612,6 +621,15 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                          static_cast<size_t>(-1), "Target nicknames", true);
           node.AddPositionalRule(0, Sem::TerminalName, true);
         });
+
+    term_module_node->AddFunction(
+        "clear", "Check and remove unhealthy terminals", args,
+        &CliArgsPool::term, &CliTermArgs::clear,
+        [&args](CommandNode &node) {
+          node.AddOption("-t", "--timeout",
+                         args.term.clear.request.timeout_s, 1, 1, Sem::None,
+                         "Per-terminal check timeout in seconds");
+        });
   }
 
   CommandNode *channel_module_node =
@@ -653,6 +671,18 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                          "Destination: [termname]@channel", true);
           node.AddPositionalRule(0, Sem::ChannelTargetExisting, false);
           node.AddPositionalRule(1, Sem::ChannelTargetNew, false);
+        });
+
+    channel_module_node->AddFunction(
+        "clear", "Check and remove unhealthy channels", args,
+        &CliArgsPool::channel, &CliChannelArgs::clear,
+        [&args](CommandNode &node) {
+          node.AddOption("nickname", args.channel.clear.request.nickname, 0, 1,
+                         "Terminal nickname (optional, default current)");
+          node.AddOption("-t", "--timeout",
+                         args.channel.clear.request.timeout_s, 1, 1,
+                         Sem::None, "Per-channel check timeout in seconds");
+          node.AddPositionalRule(0, Sem::TerminalName, false);
         });
   }
 

@@ -66,6 +66,9 @@ public:
   ECM CheckClients(
       const CheckClientsRequest &request,
       const std::optional<ControlComponent> &component = std::nullopt);
+  ECM ClearClients(
+      const ClearClientsRequest &request,
+      const std::optional<ControlComponent> &component = std::nullopt);
   ECM PoolLs(const ListPoolClientsRequest &request,
              const std::optional<ControlComponent> &component = std::nullopt);
   ECM PoolCheck(

@@ -67,6 +67,7 @@ struct CliTermArgs {
   TermAddArgs add = {};
   TermListArgs ls = {};
   TermRemoveArgs rm = {};
+  TermClearArgs clear = {};
 };
 
 struct CliChannelArgs {
@@ -74,11 +75,13 @@ struct CliChannelArgs {
   ChannelListArgs ls = {};
   ChannelRemoveArgs rm = {};
   ChannelRenameArgs rn = {};
+  ChannelClearArgs clear = {};
 };
 
 struct CliClientArgs {
   ClientsArgs ls = {};
   CheckArgs check = {};
+  ClearClientsArgs clear = {};
   ChangeClientArgs change = {};
   DisconnectArgs disconnect = {};
 };

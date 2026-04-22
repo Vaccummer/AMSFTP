@@ -678,6 +678,17 @@ struct TermRemoveArgs : BaseArgStruct {
   void reset() override { request = {}; }
 };
 
+struct TermClearArgs : BaseArgStruct {
+  AMInterface::terminal::TerminalClearArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    return managers.interfaces.terminal_interface_service->ClearTerminals(
+        request);
+  }
+  void reset() override { request = {}; }
+};
+
 struct ChannelAddArgs : BaseArgStruct {
   AMInterface::terminal::ChannelAddArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
@@ -722,6 +733,18 @@ struct ChannelRenameArgs : BaseArgStruct {
     arg.src = AMStr::Strip(arg.src);
     arg.dst = AMStr::Strip(arg.dst);
     return managers.interfaces.terminal_interface_service->RenameChannel(arg);
+  }
+  void reset() override { request = {}; }
+};
+
+struct ChannelClearArgs : BaseArgStruct {
+  AMInterface::terminal::ChannelClearArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    arg.nickname = AMStr::Strip(arg.nickname);
+    return managers.interfaces.terminal_interface_service->ClearChannels(arg);
   }
   void reset() override { request = {}; }
 };

@@ -11,6 +11,10 @@
 #include <utility>
 #include <vector>
 
+namespace AMApplication::log {
+class LoggerAppService;
+}
+
 namespace AMApplication::terminal {
 using ClientHandle = AMDomain::client::ClientHandle;
 using TerminalHandle = AMDomain::terminal::TerminalHandle;
@@ -19,8 +23,10 @@ using ChannelPortHandle = AMDomain::terminal::ChannelPortHandle;
 class TermAppService final : public NonCopyableNonMovable {
 public:
   explicit TermAppService(
-      AMDomain::terminal::BufferExceedCallback buffer_exceed_callback = {})
-      : buffer_exceed_callback_(std::move(buffer_exceed_callback)) {}
+      AMDomain::terminal::BufferExceedCallback buffer_exceed_callback = {},
+      AMApplication::log::LoggerAppService *logger = nullptr)
+      : buffer_exceed_callback_(std::move(buffer_exceed_callback)),
+        logger_(logger) {}
   ~TermAppService() override;
 
   [[nodiscard]] ECMData<TerminalHandle>
@@ -54,6 +60,10 @@ public:
   ECM DropTerminalChannelPorts(const std::string &terminal_nickname,
                                const ControlComponent &control = {});
 
+  void TraceRuntimeEvent(const ECM &rcm, const std::string &target,
+                         const std::string &action,
+                         const std::string &message = {}) const;
+
 private:
   [[nodiscard]] static std::string BuildTerminalKey_(const ClientHandle &client,
                                                      const char *action);
@@ -71,6 +81,7 @@ private:
   mutable std::mutex mutex_ = {};
   std::map<std::string, TerminalHandle> terminals_ = {};
   AMDomain::terminal::BufferExceedCallback buffer_exceed_callback_ = {};
+  AMApplication::log::LoggerAppService *logger_ = nullptr;
 };
 
 } // namespace AMApplication::terminal

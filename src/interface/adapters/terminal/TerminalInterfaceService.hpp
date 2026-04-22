@@ -48,6 +48,10 @@ public:
       const TerminalRemoveArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
+  ECM ClearTerminals(
+      const TerminalClearArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
   ECM AddChannel(
       const ChannelAddArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
@@ -62,6 +66,10 @@ public:
 
   ECM RenameChannel(
       const ChannelRenameArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
+  ECM ClearChannels(
+      const ChannelClearArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
 private:
