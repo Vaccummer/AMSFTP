@@ -1,5 +1,6 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "foundation/tools/path.hpp"
+#include "foundation/tools/string.hpp"
 
 #include <cstdint>
 #include <deque>
@@ -59,10 +60,12 @@ ECMData<int64_t> FilesystemAppService::GetSize(
 
   auto resolved_result = ResolvePath_(path, control);
   if (!(resolved_result.rcm) || !resolved_result.data.client) {
-    return {total_size, (resolved_result.rcm) ? Err(EC::InvalidHandle,
-                                                    "getsize.resolve", "",
-                                                    "Resolved client is null")
-                                              : resolved_result.rcm};
+    const ECM rcm =
+        (resolved_result.rcm) ? Err(EC::InvalidHandle, "getsize.resolve", "",
+                                    "Resolved client is null")
+                              : resolved_result.rcm;
+    TraceFs_(rcm, path, "filesystem.getsize", "resolve failed");
+    return {total_size, rcm};
   }
   const auto &resolved = resolved_result.data;
 
@@ -110,6 +113,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
   if (auto stop_rcm =
           BuildGetSizeStopECM_(control, "getsize.start", resolved.abs_path);
       stop_rcm.has_value()) {
+    TraceFs_(*stop_rcm, path, "filesystem.getsize", "stopped before start");
     return {total_size, *stop_rcm};
   }
 
@@ -118,8 +122,10 @@ ECMData<int64_t> FilesystemAppService::GetSize(
   if (!(root_stat.rcm)) {
     const ECM cb_rcm = notify_error(resolved.abs_path, root_stat.rcm);
     if (!(cb_rcm)) {
+      TraceFs_(cb_rcm, path, "filesystem.getsize", "error callback failed");
       return {total_size, cb_rcm};
     }
+    TraceFs_(last_error, path, "filesystem.getsize", "root stat failed");
     return {total_size, last_error};
   }
 
@@ -127,8 +133,12 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     total_size = static_cast<int64_t>(root_stat.data.size);
     const ECM cb_rcm = notify_progress(resolved.abs_path);
     if (!(cb_rcm)) {
+      TraceFs_(cb_rcm, path, "filesystem.getsize",
+               AMStr::fmt("partial_size={}", total_size));
       return {total_size, cb_rcm};
     }
+    TraceFs_(last_error, path, "filesystem.getsize",
+             AMStr::fmt("size={}", total_size));
     return {total_size, last_error};
   }
 
@@ -145,6 +155,8 @@ ECMData<int64_t> FilesystemAppService::GetSize(
                                              pending_dirs.front());
         stop_rcm.has_value()) {
       UpdateLastError_(&last_error, *stop_rcm);
+      TraceFs_(last_error, path, "filesystem.getsize",
+               AMStr::fmt("partial_size={}", total_size));
       return {total_size, last_error};
     }
 
@@ -155,6 +167,8 @@ ECMData<int64_t> FilesystemAppService::GetSize(
             BuildGetSizeStopECM_(control, "getsize.listdir", current_dir);
         stop_rcm.has_value()) {
       UpdateLastError_(&last_error, *stop_rcm);
+      TraceFs_(last_error, path, "filesystem.getsize",
+               AMStr::fmt("partial_size={}", total_size));
       return {total_size, last_error};
     }
 
@@ -174,6 +188,8 @@ ECMData<int64_t> FilesystemAppService::GetSize(
               entry_path.empty() ? current_dir : entry_path);
           stop_rcm.has_value()) {
         UpdateLastError_(&last_error, *stop_rcm);
+        TraceFs_(last_error, path, "filesystem.getsize",
+                 AMStr::fmt("partial_size={}", total_size));
         return {total_size, last_error};
       }
 
@@ -200,6 +216,8 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     }
   }
 
+  TraceFs_(last_error, path, "filesystem.getsize",
+           AMStr::fmt("size={}", total_size));
   return {total_size, last_error};
 }
 

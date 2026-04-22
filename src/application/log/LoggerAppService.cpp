@@ -293,8 +293,7 @@ LoggerAppService::BuildLogLine_(const AMDomain::log::TraceInfo &info) {
   }
 
   std::ostringstream line;
-  line << time_str << " [" << AMStr::ToString(info.source) << "]"
-       << " [" << AMStr::ToString(info.level) << "]";
+  line << time_str << " [" << AMStr::ToString(info.level) << "]";
   if (!info.nickname.empty()) {
     line << " [nick:" << info.nickname << "]";
   }

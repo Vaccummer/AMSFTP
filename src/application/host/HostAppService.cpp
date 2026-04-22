@@ -1,4 +1,5 @@
 #include "application/host/HostAppService.hpp"
+#include "application/log/ProgramTrace.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/string.hpp"
 
@@ -18,6 +19,22 @@ using AMDomain::host::HostService::ValidateConfig;
 using AMDomain::host::HostService::ValidateNickname;
 
 } // namespace
+
+void HostAppService::TraceHost_(const ECM &rcm, const std::string &nickname,
+                                const std::string &action,
+                                const std::string &message) const {
+  std::string detail = message;
+  if (!(rcm)) {
+    if (!detail.empty()) {
+      detail += "; ";
+    }
+    detail += AMStr::fmt("result={} error={}", AMStr::ToString(rcm.code),
+                         rcm.msg());
+  }
+  AMApplication::log::ProgramTrace(
+      logger_, rcm, nickname.empty() ? std::string("<host>") : nickname, action,
+      detail);
+}
 
 ECM HostAppService::Init(const HostConfigArg &host_config_arg) {
   HostConfigMap host_configs = {};
@@ -58,6 +75,9 @@ ECM HostAppService::Init(const HostConfigArg &host_config_arg) {
     auto guard = private_keys_.lock();
     guard.store(host_config_arg.private_keys);
   }
+  TraceHost_(OK, "<all>", "host.init",
+             AMStr::fmt("hosts={} private_keys={}", host_configs.size(),
+                        host_config_arg.private_keys.size()));
   return OK;
 }
 
@@ -182,6 +202,8 @@ ECM HostAppService::AddHost(const HostConfig &entry, bool overwrite) {
 
   ECM validate_rcm = ValidateConfig(normalized);
   if (!(validate_rcm)) {
+    TraceHost_(validate_rcm, normalized.request.nickname, "host.add",
+               "validation failed");
     return validate_rcm;
   }
 
@@ -191,34 +213,45 @@ ECM HostAppService::AddHost(const HostConfig &entry, bool overwrite) {
     local_config->request.nickname = "local";
     local_config->request.protocol = ClientProtocol::LOCAL;
     MarkConfigDirty();
+    TraceHost_(OK, "local", "host.add", "updated local config");
     return OK;
   }
 
   auto host_configs = host_configs_.lock();
   auto it = host_configs->find(normalized.request.nickname);
   if (it != host_configs->end() && !overwrite) {
-    return Err(
+    const ECM rcm = Err(
         EC::KeyAlreadyExists, "host.add", "",
         AMStr::fmt("host already exists: {}", normalized.request.nickname));
+    TraceHost_(rcm, normalized.request.nickname, "host.add");
+    return rcm;
   }
   (*host_configs)[normalized.request.nickname] = std::move(normalized);
   MarkConfigDirty();
+  TraceHost_(OK, normalized.request.nickname, "host.add",
+             AMStr::fmt("overwrite={}", overwrite ? "true" : "false"));
   return OK;
 }
 
 ECM HostAppService::DelHost(const std::string &nickname) {
   const std::string key = NormalizeNickname(nickname);
   if (IsLocalNickname(key)) {
-    return Err(EC::InvalidArg, "host.del", "", "local host cannot be removed");
+    const ECM rcm =
+        Err(EC::InvalidArg, "host.del", "", "local host cannot be removed");
+    TraceHost_(rcm, key, "host.del");
+    return rcm;
   }
   auto host_configs = host_configs_.lock();
   auto it = host_configs->find(key);
   if (it == host_configs->end()) {
-    return Err(EC::HostConfigNotFound, "host.del", "",
-               AMStr::fmt("host not found: {}", key));
+    const ECM rcm = Err(EC::HostConfigNotFound, "host.del", "",
+                        AMStr::fmt("host not found: {}", key));
+    TraceHost_(rcm, key, "host.del");
+    return rcm;
   }
   host_configs->erase(it);
   MarkConfigDirty();
+  TraceHost_(OK, key, "host.del", "removed host config");
   return OK;
 }
 
@@ -229,6 +262,9 @@ std::vector<std::string> HostAppService::PrivateKeys() const {
 ECM KnownHostsAppService::Init(const KnownHostMap &known_hosts) {
   auto guard = known_hosts_.lock();
   guard.store(known_hosts);
+  AMApplication::log::ProgramTrace(
+      logger_, AMDomain::client::TraceLevel::Info, EC::Success, "<all>",
+      "known_hosts.init", AMStr::fmt("entries={}", known_hosts.size()));
   return OK;
 }
 
@@ -252,16 +288,21 @@ ECM KnownHostsAppService::FlushTo(AMDomain::config::IConfigStorePort *store) {
 ECM KnownHostsAppService::FindKnownHost(KnownHostQuery &query) const {
   ECM validate_rcm = AMDomain::host::KnownHostRules::ValidateConfig(query);
   if (!(validate_rcm)) {
+    TraceKnownHost_(validate_rcm, query, "known_hosts.find",
+                    "validation failed");
     return validate_rcm;
   }
   const auto key = AMDomain::host::KnownHostRules::BuildKnownHostKey(query);
   const auto known_hosts = known_hosts_.lock();
   auto it = known_hosts->find(key);
   if (it == known_hosts->end()) {
-    return Err(EC::HostConfigNotFound, "known_hosts.find", "",
-               "known host entry not found");
+    const ECM rcm = Err(EC::HostConfigNotFound, "known_hosts.find", "",
+                        "known host entry not found");
+    TraceKnownHost_(rcm, query, "known_hosts.find");
+    return rcm;
   }
   query = it->second;
+  TraceKnownHost_(OK, query, "known_hosts.find", "matched known host");
   return OK;
 }
 
@@ -269,17 +310,43 @@ ECM KnownHostsAppService::UpsertKnownHost(const KnownHostQuery &query,
                                           bool overwrite) {
   ECM validate_rcm = AMDomain::host::KnownHostRules::ValidateConfig(query);
   if (!(validate_rcm)) {
+    TraceKnownHost_(validate_rcm, query, "known_hosts.upsert",
+                    "validation failed");
     return validate_rcm;
   }
   const auto key = AMDomain::host::KnownHostRules::BuildKnownHostKey(query);
   auto known_hosts = known_hosts_.lock();
   if (!overwrite && known_hosts->contains(key)) {
-    return Err(EC::KeyAlreadyExists, "known_hosts.upsert", "",
-               "known host entry already exists");
+    const ECM rcm = Err(EC::KeyAlreadyExists, "known_hosts.upsert", "",
+                        "known host entry already exists");
+    TraceKnownHost_(rcm, query, "known_hosts.upsert");
+    return rcm;
   }
   (*known_hosts)[key] = query;
   MarkConfigDirty();
+  TraceKnownHost_(OK, query, "known_hosts.upsert",
+                  AMStr::fmt("overwrite={}", overwrite ? "true" : "false"));
   return OK;
+}
+
+void KnownHostsAppService::TraceKnownHost_(
+    const ECM &rcm, const KnownHostQuery &query, const std::string &action,
+    const std::string &message) const {
+  std::string target = query.nickname;
+  if (!query.hostname.empty()) {
+    target = AMStr::fmt("{}@{}:{}", query.username, query.hostname, query.port);
+  }
+  std::string detail = message;
+  if (!(rcm)) {
+    if (!detail.empty()) {
+      detail += "; ";
+    }
+    detail += AMStr::fmt("result={} error={}", AMStr::ToString(rcm.code),
+                         rcm.msg());
+  }
+  AMApplication::log::ProgramTrace(
+      logger_, rcm, target.empty() ? std::string("<known-host>") : target,
+      action, detail);
 }
 
 } // namespace AMApplication::host

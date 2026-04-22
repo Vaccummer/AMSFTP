@@ -37,6 +37,10 @@ namespace AMDomain::style {
 struct StyleConfigArg;
 }
 
+namespace AMApplication::log {
+class LoggerAppService;
+}
+
 namespace AMApplication::config {
 using AMDomain::config::ConfigBackupSet;
 using AMDomain::config::ConfigStoreInitArg;
@@ -66,6 +70,8 @@ public:
    * @brief Construct one app service with store init payload.
    */
   explicit ConfigAppService(ConfigStoreInitArg init_arg = {});
+
+  void SetLogger(AMApplication::log::LoggerAppService *logger);
 
   /**
    * @brief Build one owned config store from init arg.
@@ -240,11 +246,15 @@ private:
   [[nodiscard]] std::filesystem::path
   ResolveBackupPath_(const BackupTargets &targets,
                      AMDomain::config::DocumentKind kind) const;
+  void TraceConfig_(const ECM &rcm, const std::string &target,
+                    const std::string &action,
+                    const std::string &message = {}) const;
 
   mutable AMAtomic<ConfigStoreInitArg> init_arg_ = {};
   mutable AMAtomic<ConfigBackupSet> backup_set_ = {};
   std::unique_ptr<IConfigStorePort> store_ = nullptr;
   DumpErrorCallback dump_error_cb_;
+  AMApplication::log::LoggerAppService *logger_ = nullptr;
   mutable AMAtomic<std::vector<SyncParticipant>> sync_participants_ = {};
   std::atomic<uint64_t> next_sync_participant_id_{1};
   std::atomic<bool> sync_flush_running_{false};

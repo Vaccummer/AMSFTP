@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+namespace AMApplication::log {
+class LoggerAppService;
+}
+
 namespace AMApplication::client {
 using AMApplication::host::HostAppService;
 using AMDomain::client::ClientHandle;
@@ -37,7 +41,9 @@ public:
   };
 
   explicit ClientAppService(HostAppService *host_config_manager,
-                            ClientServiceArg arg = ClientServiceArg());
+                            ClientServiceArg arg = ClientServiceArg(),
+                            AMApplication::log::LoggerAppService *logger =
+                                nullptr);
   ~ClientAppService() override;
 
   ECM Init(ClientHandle local_client);
@@ -136,11 +142,18 @@ private:
   SnapshotCreateContext_(bool for_public_pool) const;
   [[nodiscard]] ConnectHooks SnapshotConnectHooks_() const;
   [[nodiscard]] ControlComponent BuildCheckControl_(int timeout_ms = 0) const;
+  void TraceClient_(AMDomain::client::TraceLevel level, EC code,
+                    const std::string &nickname, const std::string &action,
+                    const std::string &message = {}) const;
+  void TraceClient_(const ECM &rcm, const std::string &nickname,
+                    const std::string &action,
+                    const std::string &message = {}) const;
 
 private:
   std::unique_ptr<AMDomain::client::IClientMaintainerPort> maintainer_ =
       nullptr;
   HostAppService *host_config_manager_ = nullptr;
+  AMApplication::log::LoggerAppService *logger_ = nullptr;
   mutable std::mutex connect_hooks_mutex_ = {};
   ConnectHooks connect_hooks_ = {};
 };
