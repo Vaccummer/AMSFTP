@@ -246,14 +246,6 @@ ECM FilesystemAppBaseService::Init() {
     return Err(EC::InvalidArg, "filesystem.init", "",
                "max_cd_history must be greater than 0");
   }
-  if (arg.terminal_read_timeout_ms == 0 || arg.terminal_read_timeout_ms < -1) {
-    return Err(EC::InvalidArg, "filesystem.init", "",
-               "terminal_read_timeout_ms must be -1 or > 0");
-  }
-  if (arg.terminal_send_timeout_ms < -1) {
-    return Err(EC::InvalidArg, "filesystem.init", "",
-               "terminal_send_timeout_ms must be -1 or >= 0");
-  }
   return OK;
 }
 

@@ -11,7 +11,7 @@
 
 namespace AMInfra::config {
 /**
- * @brief cfgffi-backed config store implementation for application service.
+ * @brief RustTomlRead-backed config store implementation for application service.
  */
 class AMTomlConfigStore final : public AMDomain::config::IConfigStorePort {
 public:

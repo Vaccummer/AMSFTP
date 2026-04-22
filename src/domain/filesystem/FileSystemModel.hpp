@@ -9,8 +9,6 @@ using ClientHandle = AMDomain::client::ClientHandle;
 struct FilesystemArg {
   int max_cd_history = 1;
   int wget_max_redirect = 5;
-  int terminal_read_timeout_ms = -1;
-  int terminal_send_timeout_ms = 0;
 };
 
 struct PathTarget {

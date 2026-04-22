@@ -142,9 +142,8 @@ struct ConRequest {
     username = 7,
     port = 9,
     password = 11,
-    buffer_size = 13,
-    keyfile = 17,
-    compression = 19,
+    keyfile = 13,
+    compression = 15,
   };
 
   ClientNickname nickname = "";
@@ -154,7 +153,6 @@ struct ConRequest {
   int64_t port = 22;
   std::string password = "";
   std::string keyfile = "";
-  int64_t buffer_size = 0;
   bool compression = false;
   ConRequest() = default;
   static constexpr auto FieldNames = magic_enum::enum_values<Attr>();
@@ -162,23 +160,21 @@ struct ConRequest {
       std::variant<std::string ConRequest::*, ClientProtocol ConRequest::*,
                    int64_t ConRequest::*, bool ConRequest::*>;
   using Value = std::variant<std::string, ClientProtocol, int64_t, bool>;
-  static_assert(magic_enum::enum_count<Attr>() == 9,
+  static_assert(magic_enum::enum_count<Attr>() == 8,
                 "ConRequest::members must stay aligned with Attr values");
   static constexpr std::array<MemberPtr, magic_enum::enum_count<Attr>()>
       members{&ConRequest::protocol,    &ConRequest::nickname,
               &ConRequest::hostname,    &ConRequest::username,
               &ConRequest::port,        &ConRequest::password,
-              &ConRequest::buffer_size, &ConRequest::keyfile,
-              &ConRequest::compression};
+              &ConRequest::keyfile,     &ConRequest::compression};
 
   ConRequest(ClientProtocol protocol, std::string nickname,
              std::string hostname, std::string username, int port = 22,
              std::string password = "", std::string keyfile = "",
-             bool compression = false, int64_t buffer_size = 0)
+             bool compression = false)
       : nickname(std::move(nickname)), protocol(protocol),
         hostname(std::move(hostname)), username(std::move(username)), port(port),
         password(std::move(password)), keyfile(std::move(keyfile)),
-        buffer_size(buffer_size),
         compression(compression) {}
 
   [[nodiscard]] std::vector<std::pair<Attr, Value>> GetDict() const {
@@ -206,9 +202,6 @@ struct ConRequest {
     out.reserve(dict.size());
 
     for (const auto &entry : dict) {
-      if (entry.first == Attr::buffer_size) {
-        continue;
-      }
       const std::string key = std::string(magic_enum::enum_name(entry.first));
       const std::string value = std::visit(
           [&](const auto &item) -> std::string {
