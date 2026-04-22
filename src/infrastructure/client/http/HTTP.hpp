@@ -11,11 +11,11 @@
 #include <string>
 
 namespace AMInfra::client::HTTP {
-inline constexpr const char kTransientHttpNickname[] = "__wget_http__";
-inline constexpr const char kHttpProxyMetaKey[] = "http.proxy";
-inline constexpr const char kHttpMaxRedirectTimesMetaKey[] =
+inline constexpr const char *kTransientHttpNickname = "__wget_http__";
+inline constexpr const char *kHttpProxyMetaKey = "http.proxy";
+inline constexpr const char *kHttpMaxRedirectTimesMetaKey =
     "http.max_redirect_times";
-inline constexpr const char kHttpBearTokenMetaKey[] = "http.bear_token";
+inline constexpr const char *kHttpBearTokenMetaKey = "http.bear_token";
 namespace {
 using ClientStatus = AMDomain::client::ClientStatus;
 using ConRequest = AMDomain::host::ConRequest;
@@ -99,6 +99,25 @@ BuildStopRCM_(const ControlComponent &control, const std::string &action,
     return stop_rcm;
   }
   return control.BuildRequestECM(action, target);
+}
+
+struct CurlInterruptContext {
+  const ControlComponent *control = nullptr;
+  std::string action = {};
+  std::string target = {};
+};
+
+inline static int CurlXferInfoWk_(void *clientp,
+                                  [[maybe_unused]] curl_off_t dltotal,
+                                  [[maybe_unused]] curl_off_t dlnow,
+                                  [[maybe_unused]] curl_off_t ultotal,
+                                  [[maybe_unused]] curl_off_t ulnow) {
+  auto *ctx = static_cast<CurlInterruptContext *>(clientp);
+  if (ctx == nullptr || ctx->control == nullptr) {
+    return 0;
+  }
+  return BuildStopRCM_(*ctx->control, ctx->action, ctx->target).has_value() ? 1
+                                                                            : 0;
 }
 
 inline static ECM MapHttpResponse_(long http_code, const std::string &action,
@@ -411,7 +430,15 @@ public:
       }
     } guard{curl, nullptr, nullptr, false};
 
+    CurlInterruptContext interrupt_ctx{
+        .control = &control,
+        .action = action,
+        .target = target,
+    };
     configure(curl, &guard.headers);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlXferInfoWk_);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &interrupt_ctx);
     guard.multi = curl_multi_init();
     if (!guard.multi) {
       return {CURLE_FAILED_INIT,
@@ -422,6 +449,15 @@ public:
       return {CURLE_FAILED_INIT, BuildCurlMultiError_(add_rcm, action, target)};
     }
     guard.attached = true;
+
+#if LIBCURL_VERSION_NUM >= 0x074400
+    const AMDomain::client::InterruptWakeupSafeGuard wakeup_guard(
+        control.InterruptRaw(), [multi = guard.multi]() {
+          if (multi != nullptr) {
+            (void)curl_multi_wakeup(multi);
+          }
+        });
+#endif
 
     int running = 0;
     CURLMcode multi_rcm = curl_multi_perform(guard.multi, &running);
@@ -459,6 +495,12 @@ public:
       if (msg->msg == CURLMSG_DONE) {
         curl_rcm = msg->data.result;
         break;
+      }
+    }
+    if (curl_rcm == CURLE_ABORTED_BY_CALLBACK) {
+      if (auto stop_rcm = BuildStopRCM_(control, action, target);
+          stop_rcm.has_value()) {
+        return {curl_rcm, std::move(*stop_rcm)};
       }
     }
     if (curl_rcm == CURLE_OK) {

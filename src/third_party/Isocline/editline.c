@@ -1358,9 +1358,8 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
     const bool had_hint = (sbuf_len(eb.hint) > 0);
     editor_clear_hint(&eb);
 
-    // if the user tries to move into a hint with left-cursor or end, we
-    // complete it first
-    if ((c == KEY_RIGHT || c == KEY_END) && had_hint) {
+    // Keep End as "accept hint", but let RightArrow remain pure cursor motion.
+    if (c == KEY_END && had_hint) {
       edit_complete_longest_prefix(env, &eb);
       c = KEY_NONE;
     }

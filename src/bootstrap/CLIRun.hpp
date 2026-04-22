@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bootstrap/AppRuntime.hpp"
+#include "foundation/tools/string.hpp"
 #include "interface/cli/CLIBind.hpp"
 #include "interface/cli/CliParseFlow.hpp"
 #include "interface/cli/InteractiveLoop.hpp"
@@ -25,13 +26,21 @@ inline int RunCLI(AppRuntime &runtime, int argc, char **argv) {
           .style_service = style_service,
           .validate_unknown_command = (style_service != nullptr),
           .require_command = true,
-          .show_all_help_when_no_command = true,
+          .show_all_help_when_no_command = false,
       },
       argc, argv);
 
   if (!parse_outcome.ShouldDispatch()) {
     if (!parse_outcome.message.empty()) {
-      AMInterface::prompt::PromptIOManager::StaticPrint(parse_outcome.message);
+      if (parse_outcome.action == AMInterface::cli::CliParseAction::ParseFailed) {
+        const std::string name = std::string(AMStr::ToString(parse_outcome.rcm.code));
+        const std::string msg = parse_outcome.rcm.msg();
+        AMInterface::prompt::PromptIOManager::StaticPrint(
+            msg.empty() ? AMStr::fmt("❌ {}", name)
+                        : AMStr::fmt("❌ {}: {}", name, msg));
+      } else {
+        AMInterface::prompt::PromptIOManager::StaticPrint(parse_outcome.message);
+      }
     }
     return parse_outcome.exit_code != 0
                ? parse_outcome.exit_code
