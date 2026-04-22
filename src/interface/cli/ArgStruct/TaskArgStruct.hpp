@@ -160,4 +160,19 @@ struct TaskControlArgs : BaseArgStruct {
   }
 };
 
+/**
+ * @brief CLI argument container for task remove.
+ */
+struct TaskRemoveArgs : BaseArgStruct {
+  std::vector<AMDomain::transfer::TaskID> ids = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    AMInterface::transfer::TransferTaskRemoveArg arg = {};
+    arg.ids = ids;
+    return managers.interfaces.transfer_service->TaskRemove(arg);
+  }
+  void reset() override { ids.clear(); }
+};
+
 } // namespace AMInterface::cli

@@ -1,6 +1,7 @@
 #pragma once
 #define _WINSOCKAPI_
 
+#include "foundation/tools/prompt_ui.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
@@ -46,6 +47,8 @@ public:
     std::string filename = {};
     int64_t transferred = -1;
     int64_t total = -1;
+    double speed_bps = -1.0;
+    int64_t elapsed_ms = -1;
   };
 
   explicit BaseProgressBar(AMProgressBarStyle style = {})
@@ -139,8 +142,13 @@ public:
               ? std::clamp<int64_t>(args.transferred, 0, total_size_)
               : std::max<int64_t>(0, args.transferred);
     }
-    UpdateSpeedLocked_();
-    return BuildLineLocked_(args);
+    const bool use_external_speed = args.speed_bps >= 0.0;
+    if (!use_external_speed) {
+      UpdateSpeedLocked_();
+    }
+    return BuildLineLocked_(
+        args, use_external_speed ? args.speed_bps : speed_bps_,
+        args.elapsed_ms);
   }
 
   std::string RenderFinal(const std::string &prefix, int64_t transferred) {
@@ -154,24 +162,24 @@ public:
     args.filename = prefix;
     args.total = total_size_;
     args.transferred = current_size_;
-    return BuildLineLocked_(args);
+    return BuildLineLocked_(args, speed_bps_, -1);
   }
 
 private:
-  std::string BuildBarPartLocked_() const {
+  std::string BuildBarPartLocked_(size_t bar_width) const {
     size_t filled = 0;
     if (total_size_ > 0) {
       const double ratio =
           static_cast<double>(current_size_) /
           static_cast<double>(std::max<int64_t>(1, total_size_));
       filled = static_cast<size_t>(
-          std::clamp<double>(ratio * static_cast<double>(style_.bar_width), 0.0,
-                             static_cast<double>(style_.bar_width)));
+          std::clamp<double>(ratio * static_cast<double>(bar_width), 0.0,
+                             static_cast<double>(bar_width)));
     }
 
     std::string inner = {};
-    if (filled >= style_.bar_width) {
-      for (size_t i = 0; i < style_.bar_width; ++i) {
+    if (filled >= bar_width) {
+      for (size_t i = 0; i < bar_width; ++i) {
         inner += style_.fill;
       }
     } else {
@@ -180,8 +188,8 @@ private:
       }
       inner += style_.lead;
       const size_t used = filled + 1;
-      if (used < style_.bar_width) {
-        for (size_t i = 0; i < (style_.bar_width - used); ++i) {
+      if (used < bar_width) {
+        for (size_t i = 0; i < (bar_width - used); ++i) {
           inner += style_.remaining;
         }
       }
@@ -217,28 +225,29 @@ private:
     last_update_size_ = current_size_;
   }
 
-  std::string BuildLineLocked_(const RenderArgs &args) const {
+  std::string BuildLineLocked_(const RenderArgs &args, double speed_bps,
+                               int64_t elapsed_ms) const {
     const double percent = (total_size_ <= 0)
                                ? 0.0
                                : (static_cast<double>(current_size_) /
                                   static_cast<double>(total_size_)) *
                                      100.0;
-    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::steady_clock::now() - start_time_);
+    const auto elapsed =
+        (elapsed_ms >= 0)
+            ? std::chrono::seconds(std::max<int64_t>(0, elapsed_ms / 1000))
+            : std::chrono::duration_cast<std::chrono::seconds>(
+                  std::chrono::steady_clock::now() - start_time_);
     const int64_t elapsed_sec = std::max<int64_t>(0, elapsed.count());
-    const double speed_bps = speed_bps_;
     const int64_t remaining_bytes =
         (total_size_ > current_size_) ? (total_size_ - current_size_) : 0;
     const int64_t remain_sec =
         (speed_bps > 0.0) ? static_cast<int64_t>(remaining_bytes / speed_bps)
                           : 0;
-    const std::string bar_part = BuildBarPartLocked_();
-
-    const std::vector<std::pair<std::string, std::string>> vars = {
+    std::vector<std::pair<std::string, std::string>> vars = {
         {"src_host", args.src_host},
         {"dst_host", args.dst_host},
         {"filename", args.filename},
-        {"progressbar", bar_part},
+        {"progressbar", ""},
         {"percentage", FormatPercent_(percent)},
         {"elapsed", FormatTimeMMSS_(elapsed_sec)},
         {"remaining", FormatTimeMMSS_(remain_sec)},
@@ -248,9 +257,19 @@ private:
 
     const std::string raw_prefix =
         ResolveTemplate_(style_.prefix_template, vars);
+    const std::string prefix = BuildPrefixFieldLocked_(raw_prefix);
+    const std::string fixed_bar_text =
+        EscapeLiteralBrackets_(ResolveTemplate_(style_.bar_template, vars));
+    const size_t dynamic_bar_width =
+        ResolveBarWidthLocked(prefix, fixed_bar_text);
+    for (auto &entry : vars) {
+      if (entry.first == "progressbar") {
+        entry.second = BuildBarPartLocked_(dynamic_bar_width);
+        break;
+      }
+    }
     const std::string bar_text =
         EscapeLiteralBrackets_(ResolveTemplate_(style_.bar_template, vars));
-    const std::string prefix = BuildPrefixFieldLocked_(raw_prefix);
     if (prefix.empty()) {
       return bar_text;
     }
@@ -258,8 +277,29 @@ private:
   }
 
   std::string BuildPrefixFieldLocked_(const std::string &prefix) const {
-    return AMStr::PadRightAscii(
-        prefix, style_.prefix_fixed_width > 0 ? style_.prefix_fixed_width : 0);
+    const size_t target_width =
+        static_cast<size_t>(std::max<int>(0, style_.prefix_fixed_width));
+    if (target_width == 0) {
+      return prefix;
+    }
+    const size_t current_width = MeasureDisplayWidth_(prefix);
+    if (current_width >= target_width) {
+      return prefix;
+    }
+    return prefix + std::string(target_width - current_width, ' ');
+  }
+
+  size_t ResolveBarWidthLocked(const std::string &prefix,
+                               const std::string &fixed_bar_text) const {
+    const int terminal_cols =
+        std::max(1, AMTerminalTools::GetTerminalViewportInfo().cols);
+    const size_t reserved_width =
+        MeasureDisplayWidth_(prefix) + MeasureDisplayWidth_(fixed_bar_text);
+    const size_t terminal_width = static_cast<size_t>(terminal_cols);
+    if (terminal_width <= reserved_width) {
+      return 1;
+    }
+    return std::max<size_t>(1, terminal_width - reserved_width);
   }
 
   static std::string ResolveTemplate_(
@@ -295,6 +335,12 @@ private:
       out.push_back(c);
     }
     return out;
+  }
+
+  static size_t MeasureDisplayWidth_(const std::string &text) {
+    const std::string plain = AMPromptUI::NormalizeMeasureLine(
+        AMPromptUI::StripStyleForMeasure(text));
+    return AMStr::DisplayWidthUtf8(plain);
   }
 
   /**

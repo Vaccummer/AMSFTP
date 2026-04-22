@@ -187,8 +187,7 @@ ECM TransferExecutionEngine::TransferSignleFile(
           task_info->Size.cur_task_transferred.load(std::memory_order_relaxed);
       if (current_offset > 0 &&
           !task_info->Set.keep_start_time.load(std::memory_order_relaxed)) {
-        task_info->Size.transferred.fetch_sub(current_offset,
-                                              std::memory_order_relaxed);
+        task_info->SubTransferredSize(current_offset);
       }
       task->transferred = 0;
       task_info->Size.cur_task_transferred.store(0, std::memory_order_relaxed);
@@ -511,8 +510,7 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
                                                  std::memory_order_relaxed);
       if (resume_offset > 0 &&
           !task_info->Set.keep_start_time.load(std::memory_order_relaxed)) {
-        task_info->Size.transferred.fetch_add(resume_offset,
-                                              std::memory_order_relaxed);
+        task_info->AddTransferredSize(resume_offset);
       }
 
       pd.io_abort.store(false, std::memory_order_relaxed);
@@ -529,6 +527,7 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
         break;
       }
       task.IsFinished = true;
+      task_info->Size.finished_filenum.fetch_add(1, std::memory_order_relaxed);
       if (!task.rcm.has_value() || task.rcm->code == EC::Success) {
         task_info->Size.success_filenum.fetch_add(1, std::memory_order_relaxed);
       } else {

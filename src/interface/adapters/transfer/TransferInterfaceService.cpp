@@ -18,6 +18,7 @@
 #include <memory>
 #include <semaphore>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -31,6 +32,7 @@ using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 
 constexpr int kTaskPollIntervalMs = 1000;
 constexpr int kMinTaskRefreshIntervalMs = 1000;
+constexpr int64_t kDefaultTaskSpeedWindowMs = 7000;
 
 std::string NormalizeNickname_(const std::string &nickname) {
   return AMDomain::host::HostService::NormalizeNickname(nickname);
@@ -54,10 +56,8 @@ void DedupTasks_(std::vector<TransferTask> *tasks) {
   if (!tasks || tasks->empty()) {
     return;
   }
-  *tasks =
-      AMStr::DedupVectorKeepOrder(*tasks, [](const TransferTask &task) {
-        return BuildTaskKey_(task);
-      });
+  *tasks = AMStr::DedupVectorKeepOrder(
+      *tasks, [](const TransferTask &task) { return BuildTaskKey_(task); });
 }
 
 std::vector<std::string>
@@ -112,6 +112,8 @@ int ResolveTransferProgressRefreshMs_(
   return std::max(kMinTaskRefreshIntervalMs, refresh_ms);
 }
 
+int64_t ResolveElapsedMs_(const std::shared_ptr<TaskInfo> &task_info);
+
 std::string
 BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
   if (!task_info) {
@@ -138,7 +140,8 @@ BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
 }
 
 BaseProgressBar::RenderArgs
-BuildTransferProgressRenderArgs_(const std::shared_ptr<TaskInfo> &task_info) {
+BuildTransferProgressRenderArgs_(const std::shared_ptr<TaskInfo> &task_info,
+                                 int64_t speed_window_ms) {
   BaseProgressBar::RenderArgs args = {};
   if (!task_info) {
     args.filename = "Task";
@@ -147,6 +150,8 @@ BuildTransferProgressRenderArgs_(const std::shared_ptr<TaskInfo> &task_info) {
   auto cur_task = task_info->GetCurrentTaskSnapshot();
   if (!cur_task.has_value()) {
     args.filename = AMStr::fmt("Task {}", task_info->id);
+    args.elapsed_ms = ResolveElapsedMs_(task_info);
+    args.speed_bps = task_info->GetSpeedBytesPerSecond(speed_window_ms);
     return args;
   }
   args.src_host = DisplayHost_(cur_task->src_host);
@@ -162,6 +167,8 @@ BuildTransferProgressRenderArgs_(const std::shared_ptr<TaskInfo> &task_info) {
   } else {
     args.filename = cur_task->dst.empty() ? cur_task->src : cur_task->dst;
   }
+  args.elapsed_ms = ResolveElapsedMs_(task_info);
+  args.speed_bps = task_info->GetSpeedBytesPerSecond(speed_window_ms);
   return args;
 }
 
@@ -235,6 +242,40 @@ std::string FormatElapsedMs_(int64_t elapsed_ms) {
   return AMStr::fmt("{}:{}", p2(mins), p2(secs));
 }
 
+int64_t ResolveTaskSpeedWindowMs_(
+    const AMInterface::style::AMStyleService *style_service) {
+  if (style_service == nullptr) {
+    return kDefaultTaskSpeedWindowMs;
+  }
+  return std::max<int64_t>(
+      1, style_service->GetInitArg().style.progress_bar.speed.speed_window_ms);
+}
+
+std::string FormatTaskSpeed_(const std::shared_ptr<TaskInfo> &task_info,
+                             int64_t speed_window_ms) {
+  if (!task_info) {
+    return AMStr::PadLeftAscii("-", 7);
+  }
+  const double speed_bps = task_info->GetSpeedBytesPerSecond(speed_window_ms);
+  if (speed_bps <= 0.0) {
+    return AMStr::PadLeftAscii("-", 7);
+  }
+  return AMStr::FormatSpeed(speed_bps, 3, 1, 7, true);
+}
+
+std::string BuildTaskResultCell_(const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info ||
+      task_info->GetStatus() != AMDomain::transfer::TaskStatus::Finished) {
+    return "-";
+  }
+
+  const ECM result = task_info->GetResult();
+  if (result.code == EC::Success) {
+    return "✅";
+  }
+  return AMStr::fmt("❌ {}", AMStr::ToString(result.code));
+}
+
 int ResolveTaskProgressPercent_(const std::shared_ptr<TaskInfo> &task_info) {
   if (!task_info) {
     return 0;
@@ -251,10 +292,20 @@ int ResolveTaskProgressPercent_(const std::shared_ptr<TaskInfo> &task_info) {
 
 struct TaskTableRow_ {
   TaskID id = 0;
-  std::string status = {};
-  std::string progress = {};
+  std::string state = {};
+  std::string percentage = {};
+  std::string size = {};
+  std::string speed = {};
+  std::string files_num = {};
+  std::string result = {};
+};
+
+struct TaskRemovePreviewEntry_ {
+  TaskID id = 0;
+  std::string result = {};
   std::string size = {};
   std::string elapse = {};
+  std::string summary = {};
 };
 
 struct TaskInspectSetSnapshot_ {
@@ -296,11 +347,12 @@ struct TaskInspectSnapshot_ {
 
   size_t total = 0;
   size_t transferred = 0;
-  size_t success_files = 0;
+  size_t finished_files = 0;
   size_t total_files = 0;
   size_t current_task_index = 0;
   size_t current_task_transferred = 0;
   int progress_percent = 0;
+  double speed_bps = 0.0;
 
   bool interrupted = false;
   bool timeout = false;
@@ -396,7 +448,8 @@ InspectStateView_ BuildInspectStateView_(const TaskInspectSnapshot_ &snapshot) {
   }
 }
 
-TaskTableRow_ BuildTaskTableRow_(const std::shared_ptr<TaskInfo> &task_info) {
+TaskTableRow_ BuildTaskTableRow_(const std::shared_ptr<TaskInfo> &task_info,
+                                 int64_t speed_window_ms) {
   TaskTableRow_ row = {};
   if (!task_info) {
     return row;
@@ -404,60 +457,190 @@ TaskTableRow_ BuildTaskTableRow_(const std::shared_ptr<TaskInfo> &task_info) {
   const size_t transferred =
       task_info->Size.transferred.load(std::memory_order_relaxed);
   const size_t total = task_info->Size.total.load(std::memory_order_relaxed);
+  const size_t finished_files =
+      task_info->Size.finished_filenum.load(std::memory_order_relaxed);
+  const size_t total_files =
+      task_info->Size.filenum.load(std::memory_order_relaxed);
   row.id = task_info->id;
-  row.status = TaskStatusTextLocal_(task_info->GetStatus());
-  row.progress = AMStr::fmt("{}%", ResolveTaskProgressPercent_(task_info));
+  row.state = TaskStatusTextLocal_(task_info->GetStatus());
+  row.percentage = AMStr::fmt("{}%", ResolveTaskProgressPercent_(task_info));
   row.size = AMStr::fmt("{}/{}", AMStr::FormatSize(transferred),
                         AMStr::FormatSize(total));
-  row.elapse = FormatElapsedMs_(ResolveElapsedMs_(task_info));
+  row.speed = FormatTaskSpeed_(task_info, speed_window_ms);
+  row.files_num = AMStr::fmt("{}/{}", finished_files, total_files);
+  row.result = BuildTaskResultCell_(task_info);
   return row;
+}
+
+std::string
+BuildTaskRemoveSummary_(const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info) {
+    return "<unknown>";
+  }
+
+  const auto current_task = task_info->GetCurrentTaskSnapshot();
+  if (current_task.has_value()) {
+    const std::string src_name = AMUrl::IsHttpUrl(current_task->src)
+                                     ? AMUrl::Basename(current_task->src)
+                                     : AMPath::basename(current_task->src);
+    const std::string dst_name = AMPath::basename(current_task->dst);
+    const std::string src_label =
+        src_name.empty() ? current_task->src : src_name;
+    const std::string dst_label =
+        dst_name.empty() ? current_task->dst : dst_name;
+    return AMStr::fmt("{}@{} -> {}@{}", DisplayHost_(current_task->src_host),
+                      src_label, DisplayHost_(current_task->dst_host),
+                      dst_label);
+  }
+
+  auto sets = task_info->Set.transfer_sets;
+  if (!sets || sets->empty()) {
+    return AMStr::fmt("Task {}", task_info->id);
+  }
+
+  const auto &set = sets->front();
+  const std::string dst_name = AMPath::basename(set.dst.path);
+  const std::string dst_label = dst_name.empty() ? set.dst.path : dst_name;
+  if (set.srcs.empty()) {
+    return AMStr::fmt("{}@{}", DisplayHost_(set.dst.nickname), dst_label);
+  }
+
+  const auto &src = set.srcs.front();
+  const std::string src_name = AMPath::basename(src.path);
+  const std::string src_label = src_name.empty() ? src.path : src_name;
+  return AMStr::fmt("{}@{} -> {}@{}", DisplayHost_(src.nickname), src_label,
+                    DisplayHost_(set.dst.nickname), dst_label);
+}
+
+TaskRemovePreviewEntry_
+BuildTaskRemovePreviewEntry_(const std::shared_ptr<TaskInfo> &task_info) {
+  TaskRemovePreviewEntry_ row = {};
+  if (!task_info) {
+    return row;
+  }
+
+  const ECM result = task_info->GetResult();
+  row.id = task_info->id;
+  row.result = (result.code == EC::Success) ? "✅ Success"
+                                            : AMStr::fmt("❌ {}", result.msg());
+  row.size = BuildTaskTableRow_(task_info, kDefaultTaskSpeedWindowMs).size;
+  row.elapse = FormatElapsedMs_(ResolveElapsedMs_(task_info));
+  row.summary = BuildTaskRemoveSummary_(task_info);
+  return row;
+}
+
+void PrintTaskRemovePreview_(
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
+    const std::vector<TaskRemovePreviewEntry_> &rows) {
+  if (rows.empty()) {
+    return;
+  }
+
+  size_t id_width = 0;
+  size_t size_width = 0;
+  size_t elapse_width = 0;
+  for (const auto &row : rows) {
+    id_width =
+        std::max(id_width, AMStr::DisplayWidthUtf8(AMStr::fmt("#{}", row.id)));
+    size_width = std::max(size_width, AMStr::DisplayWidthUtf8(row.size));
+    elapse_width = std::max(elapse_width, AMStr::DisplayWidthUtf8(row.elapse));
+  }
+
+  for (const auto &row : rows) {
+    const std::string id_text = AMStr::fmt("#{}", row.id);
+    prompt_io_manager.Print(
+        AMStr::fmt("{} {} {} {} {}", AMStr::PadRightUtf8(id_text, id_width),
+                   AMStr::PadRightUtf8(row.size, size_width),
+                   AMStr::PadRightUtf8(row.elapse, elapse_width), row.summary,
+                   row.result));
+  }
+}
+
+std::string BuildTaskTableText_(const std::vector<TaskTableRow_> &rows) {
+  if (rows.empty()) {
+    return "";
+  }
+  const std::vector<std::string> headers = {"ID",    "State",   "Per",   "Size",
+                                            "Speed", "FileNum", "Result"};
+  std::vector<std::vector<std::string>> table_rows = {};
+  table_rows.reserve(rows.size());
+  for (const auto &row : rows) {
+    table_rows.push_back({AMStr::fmt("{}", row.id), row.state, row.percentage,
+                          row.size, row.speed, row.files_num, row.result});
+  }
+  return AMStr::FormatUtf8Table(headers, table_rows, "", 1, 1, 0, 0);
 }
 
 void PrintTaskTable_(AMInterface::prompt::PromptIOManager &prompt_io_manager,
                      const std::vector<TaskTableRow_> &rows) {
-  if (rows.empty()) {
+  const std::string table = BuildTaskTableText_(rows);
+  if (table.empty()) {
     return;
   }
-  constexpr size_t kColCount = 5;
-  const std::array<std::string, kColCount> headers = {
-      "ID", "STATUS", "PROGRESS", "SIZE", "ELAPSE"};
-  std::array<size_t, kColCount> widths = {headers[0].size(), headers[1].size(),
-                                          headers[2].size(), headers[3].size(),
-                                          headers[4].size()};
-  for (const auto &row : rows) {
-    widths[0] = std::max(widths[0], AMStr::fmt("{}", row.id).size());
-    widths[1] = std::max(widths[1], row.status.size());
-    widths[2] = std::max(widths[2], row.progress.size());
-    widths[3] = std::max(widths[3], row.size.size());
-    widths[4] = std::max(widths[4], row.elapse.size());
-  }
-  const size_t gap = 3;
-  const size_t total_width =
-      widths[0] + widths[1] + widths[2] + widths[3] + widths[4] + gap * 4;
+  prompt_io_manager.Print(table);
+}
 
-  const std::string header_line = AMStr::fmt(
-      "{}{}{}{}{}{}{}{}{}", AMStr::PadRightAscii(headers[0], widths[0]),
-      std::string(gap, ' '), AMStr::PadRightAscii(headers[1], widths[1]),
-      std::string(gap, ' '), AMStr::PadRightAscii(headers[2], widths[2]),
-      std::string(gap, ' '), AMStr::PadRightAscii(headers[3], widths[3]),
-      std::string(gap, ' '), AMStr::PadRightAscii(headers[4], widths[4]));
-  prompt_io_manager.Print(header_line);
-  prompt_io_manager.Print(std::string(total_width, '-'));
-  for (const auto &row : rows) {
-    prompt_io_manager.FmtPrint(
-        "{}{}{}{}{}{}{}{}{}",
-        AMStr::PadRightAscii(AMStr::fmt("{}", row.id), widths[0]),
-        std::string(gap, ' '), AMStr::PadRightAscii(row.status, widths[1]),
-        std::string(gap, ' '), AMStr::PadRightAscii(row.progress, widths[2]),
-        std::string(gap, ' '), AMStr::PadRightAscii(row.size, widths[3]),
-        std::string(gap, ' '), AMStr::PadRightAscii(row.elapse, widths[4]));
+struct TaskListSnapshot_ {
+  std::vector<TaskTableRow_> rows = {};
+  bool has_conducting = false;
+};
+
+TaskListSnapshot_ BuildTaskListSnapshot_(
+    AMApplication::transfer::TransferAppService &transfer_app_service,
+    const TransferTaskListArg &arg, int64_t speed_window_ms) {
+  TaskListSnapshot_ snapshot = {};
+  std::unordered_map<TaskID, std::shared_ptr<TaskInfo>> tasks = {};
+
+  const auto add_tasks = [&tasks](const auto &map_data) {
+    for (const auto &[id, task_info] : map_data) {
+      if (id == 0 || !task_info) {
+        continue;
+      }
+      tasks.emplace(id, task_info);
+    }
+  };
+  add_tasks(transfer_app_service.GetAllActiveTasks());
+  add_tasks(transfer_app_service.GetPausedTasks());
+  add_tasks(transfer_app_service.GetFinishedTasks());
+
+  std::vector<TaskID> ids = {};
+  ids.reserve(tasks.size());
+  for (const auto &[id, _] : tasks) {
+    ids.push_back(id);
   }
-  prompt_io_manager.Print("");
+  std::sort(ids.begin(), ids.end());
+
+  const bool has_filter =
+      arg.pending || arg.suspend || arg.finished || arg.conducting;
+  snapshot.rows.reserve(ids.size());
+  for (const auto id : ids) {
+    auto it = tasks.find(id);
+    if (it == tasks.end() || !it->second) {
+      continue;
+    }
+    const auto status = it->second->GetStatus();
+    const bool selected =
+        !has_filter ||
+        (arg.pending && status == AMDomain::transfer::TaskStatus::Pending) ||
+        (arg.suspend && status == AMDomain::transfer::TaskStatus::Paused) ||
+        (arg.finished && status == AMDomain::transfer::TaskStatus::Finished) ||
+        (arg.conducting &&
+         status == AMDomain::transfer::TaskStatus::Conducting);
+    if (!selected) {
+      continue;
+    }
+    snapshot.rows.push_back(BuildTaskTableRow_(it->second, speed_window_ms));
+    if (status == AMDomain::transfer::TaskStatus::Conducting) {
+      snapshot.has_conducting = true;
+    }
+  }
+  return snapshot;
 }
 
 TaskInspectSnapshot_
 BuildTaskInspectSnapshot_(const std::shared_ptr<TaskInfo> &task_info,
-                          bool include_sets, bool include_entries) {
+                          bool include_sets, bool include_entries,
+                          int64_t speed_window_ms) {
   TaskInspectSnapshot_ snapshot = {};
   if (!task_info) {
     return snapshot;
@@ -478,8 +661,8 @@ BuildTaskInspectSnapshot_(const std::shared_ptr<TaskInfo> &task_info,
   snapshot.total = task_info->Size.total.load(std::memory_order_relaxed);
   snapshot.transferred =
       task_info->Size.transferred.load(std::memory_order_relaxed);
-  snapshot.success_files =
-      task_info->Size.success_filenum.load(std::memory_order_relaxed);
+  snapshot.finished_files =
+      task_info->Size.finished_filenum.load(std::memory_order_relaxed);
   snapshot.total_files =
       task_info->Size.filenum.load(std::memory_order_relaxed);
   snapshot.current_task_index =
@@ -487,6 +670,7 @@ BuildTaskInspectSnapshot_(const std::shared_ptr<TaskInfo> &task_info,
   snapshot.current_task_transferred =
       task_info->Size.cur_task_transferred.load(std::memory_order_relaxed);
   snapshot.progress_percent = ResolveTaskProgressPercent_(task_info);
+  snapshot.speed_bps = task_info->GetSpeedBytesPerSecond(speed_window_ms);
 
   snapshot.interrupted = task_info->IsInterrupted();
   snapshot.timeout = task_info->Core.control.IsTimeout();
@@ -585,17 +769,13 @@ void PrintTaskInspectSummary_(
                              AMStr::FormatSize(snapshot.transferred),
                              AMStr::FormatSize(snapshot.total));
   prompt_io_manager.FmtPrint("Files        : {} / {}",
-                             std::to_string(snapshot.success_files),
+                             std::to_string(snapshot.finished_files),
                              std::to_string(snapshot.total_files));
-
-  double speed_bps = 0.0;
-  if (snapshot.elapsed_ms > 0) {
-    speed_bps = static_cast<double>(snapshot.transferred) /
-                (static_cast<double>(snapshot.elapsed_ms) / 1000.0);
-  }
   prompt_io_manager.FmtPrint(
       "Speed        : {}",
-      AMStr::Strip(AMStr::FormatSpeed(speed_bps, 3, 1, 0, false)));
+      snapshot.speed_bps > 0.0
+          ? AMStr::Strip(AMStr::FormatSpeed(snapshot.speed_bps, 3, 1, 0, false))
+          : std::string("-"));
   prompt_io_manager.FmtPrint("Status       : {}", state_view.text);
   prompt_io_manager.FmtPrint("Intent       : {}",
                              IntentTextLocal_(snapshot.intent));
@@ -1187,10 +1367,10 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     nicknames.insert(DisplayHost_(resolved_dst.data.target.nickname));
     if (warnings) {
       for (const auto &warning : build_result.data.warnings) {
-        warnings->push_back(
-            Err(warning.rcm.code, "", "",
-                AMStr::fmt("{} -> {}: {}", NormalizePath_(warning.src),
-                           NormalizePath_(warning.dst), warning.rcm.msg())));
+        warnings->emplace_back(
+            warning.rcm.code, "", "",
+            AMStr::fmt("{} -> {}: {}", NormalizePath_(warning.src),
+                       NormalizePath_(warning.dst), warning.rcm.msg()));
       }
     }
   }
@@ -1296,8 +1476,8 @@ ECM TransferInterfaceService::WaitTask_(
     return s.starts_with("Task ");
   };
   auto render_progress_line = [&]() -> std::string {
-    BaseProgressBar::RenderArgs args =
-        BuildTransferProgressRenderArgs_(task_info);
+    BaseProgressBar::RenderArgs args = BuildTransferProgressRenderArgs_(
+        task_info, ResolveTaskSpeedWindowMs_(style_service_));
     if (is_generic_task_label(args.filename) &&
         !last_render_args.filename.empty() &&
         !is_generic_task_label(last_render_args.filename)) {
@@ -1332,13 +1512,20 @@ ECM TransferInterfaceService::WaitTask_(
       }
       std::string final_prefix = last_render_args.filename;
       if (final_prefix.empty() || is_generic_task_label(final_prefix)) {
-        auto latest_args = BuildTransferProgressRenderArgs_(task_info);
+        auto latest_args = BuildTransferProgressRenderArgs_(
+            task_info, ResolveTaskSpeedWindowMs_(style_service_));
         if (!latest_args.filename.empty()) {
           final_prefix = latest_args.filename;
         }
       }
-      const std::string candidate_line =
-          progress_bar->RenderFinal(final_prefix, transferred_now);
+      BaseProgressBar::RenderArgs final_args = last_render_args;
+      final_args.filename = final_prefix;
+      final_args.total = total_now;
+      final_args.transferred = transferred_now;
+      final_args.elapsed_ms = ResolveElapsedMs_(task_info);
+      final_args.speed_bps = task_info->GetSpeedBytesPerSecond(
+          ResolveTaskSpeedWindowMs_(style_service_));
+      const std::string candidate_line = progress_bar->Render(final_args);
       if (!last_progress_line.empty() &&
           candidate_line.size() < last_progress_line.size()) {
         final_line = last_progress_line;
@@ -1371,8 +1558,8 @@ ECM TransferInterfaceService::WaitTask_(
   auto completion_wakeup = std::make_shared<CompletionWakeupState_>();
   const std::weak_ptr<CompletionWakeupState_> completion_wakeup_weak =
       completion_wakeup;
-  const size_t completion_token = task_info->RegisterCompletionWakeup(
-      [completion_wakeup_weak]() {
+  const size_t completion_token =
+      task_info->RegisterCompletionWakeup([completion_wakeup_weak]() {
         auto state = completion_wakeup_weak.lock();
         if (!state || !state->active.load(std::memory_order_acquire)) {
           return;
@@ -1391,7 +1578,8 @@ ECM TransferInterfaceService::WaitTask_(
         (void)task_info->UnregisterCompletionWakeup(token);
       }
     }
-  } scoped_completion_wakeup{completion_wakeup, task_info.get(), completion_token};
+  } scoped_completion_wakeup{completion_wakeup, task_info.get(),
+                             completion_token};
 
   const auto control_token = control.ControlToken();
   const AMDomain::client::InterruptWakeupSafeGuard interrupt_wakeup_guard(
@@ -1407,8 +1595,10 @@ ECM TransferInterfaceService::WaitTask_(
     if (show_progress) {
       return std::max(1, refresh_ms);
     }
-    if (const auto remain_ms = control.RemainingTimeMs(); remain_ms.has_value()) {
-      return static_cast<int>(std::max<size_t>(1, std::min<size_t>(*remain_ms, 2000)));
+    if (const auto remain_ms = control.RemainingTimeMs();
+        remain_ms.has_value()) {
+      return static_cast<int>(
+          std::max<size_t>(1, std::min<size_t>(*remain_ms, 2000)));
     }
     return 2000;
   };
@@ -1740,49 +1930,87 @@ ECM TransferInterfaceService::HttpGet(
 }
 
 ECM TransferInterfaceService::TaskList(const TransferTaskListArg &arg) const {
-  std::unordered_set<TaskID> seen_ids = {};
-  std::vector<TaskID> ids = {};
-  const auto add_ids = [&seen_ids, &ids](const auto &map_data) {
-    for (const auto &[id, task_info] : map_data) {
-      if (id == 0 || !task_info) {
-        continue;
-      }
-      if (seen_ids.insert(id).second) {
-        ids.push_back(id);
-      }
+  const int64_t speed_window_ms = ResolveTaskSpeedWindowMs_(style_service_);
+  auto snapshot =
+      BuildTaskListSnapshot_(transfer_app_service_, arg, speed_window_ms);
+  if (!snapshot.has_conducting) {
+    if (snapshot.rows.empty()) {
+      prompt_io_manager_.Print("No transfer task matched.");
+      return OK;
     }
-  };
-  add_ids(transfer_app_service_.GetAllActiveTasks());
-  add_ids(transfer_app_service_.GetPausedTasks());
-  add_ids(transfer_app_service_.GetFinishedTasks());
-  std::sort(ids.begin(), ids.end());
-
-  const bool has_filter =
-      arg.pending || arg.suspend || arg.finished || arg.conducting;
-  std::vector<TaskTableRow_> rows = {};
-  for (const auto &id : ids) {
-    auto task_info = FindTask_(id);
-    if (!task_info) {
-      continue;
-    }
-    const auto status = task_info->GetStatus();
-    const bool selected =
-        !has_filter ||
-        (arg.pending && status == AMDomain::transfer::TaskStatus::Pending) ||
-        (arg.suspend && status == AMDomain::transfer::TaskStatus::Paused) ||
-        (arg.finished && status == AMDomain::transfer::TaskStatus::Finished) ||
-        (arg.conducting &&
-         status == AMDomain::transfer::TaskStatus::Conducting);
-    if (!selected) {
-      continue;
-    }
-    rows.push_back(BuildTaskTableRow_(task_info));
-  }
-  if (rows.empty()) {
-    prompt_io_manager_.Print("No transfer task matched.");
+    PrintTaskTable_(prompt_io_manager_, snapshot.rows);
     return OK;
   }
-  PrintTaskTable_(prompt_io_manager_, rows);
+
+  const int refresh_ms = ResolveTransferProgressRefreshMs_(
+      style_service_, transfer_bar_refresh_interval_ms_);
+  struct ScopedRefresh_ {
+    AMInterface::prompt::PromptIOManager *prompt = nullptr;
+    bool active = false;
+    ~ScopedRefresh_() {
+      if (active && prompt != nullptr) {
+        prompt->RefreshEnd();
+      }
+    }
+  } scoped_refresh{&prompt_io_manager_, false};
+
+  struct ScopedCursor_ {
+    AMInterface::prompt::PromptIOManager *prompt = nullptr;
+    bool hidden = false;
+    ~ScopedCursor_() {
+      if (hidden && prompt != nullptr) {
+        prompt->SetCursorVisible(true);
+      }
+    }
+  } scoped_cursor{&prompt_io_manager_, false};
+
+  prompt_io_manager_.SetCursorVisible(false);
+  scoped_cursor.hidden = true;
+  prompt_io_manager_.RefreshBegin();
+  scoped_refresh.active = true;
+
+  const auto token = GetDefaultControlToken();
+  constexpr int kInterruptPollSliceMs = 20;
+  bool watch_canceled = false;
+  std::string last_frame = {};
+  while (true) {
+    snapshot =
+        BuildTaskListSnapshot_(transfer_app_service_, arg, speed_window_ms);
+    last_frame = snapshot.rows.empty()
+                     ? std::string("No transfer task matched.")
+                     : BuildTaskTableText_(snapshot.rows);
+    prompt_io_manager_.RefreshRender({last_frame});
+    if (!snapshot.has_conducting) {
+      break;
+    }
+
+    int remaining_ms = refresh_ms;
+    while (remaining_ms > 0) {
+      if (token && token->IsInterruptRequest()) {
+        watch_canceled = true;
+        break;
+      }
+      const int sleep_ms = std::min(remaining_ms, kInterruptPollSliceMs);
+      std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+      remaining_ms -= sleep_ms;
+    }
+    if (watch_canceled) {
+      break;
+    }
+  }
+
+  scoped_refresh.active = false;
+  prompt_io_manager_.RefreshEnd();
+  if (!last_frame.empty()) {
+    prompt_io_manager_.Print(last_frame);
+  }
+  if (scoped_cursor.hidden) {
+    prompt_io_manager_.SetCursorVisible(true);
+    scoped_cursor.hidden = false;
+  }
+  if (watch_canceled && token) {
+    token->ClearInterrupt();
+  }
   return OK;
 }
 
@@ -1836,7 +2064,8 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
     std::vector<TaskTableRow_> rows = {};
     rows.reserve(non_conducting_tasks.size());
     for (const auto &task_info : non_conducting_tasks) {
-      rows.push_back(BuildTaskTableRow_(task_info));
+      rows.push_back(BuildTaskTableRow_(
+          task_info, ResolveTaskSpeedWindowMs_(style_service_)));
     }
     PrintTaskTable_(prompt_io_manager_, rows);
   }
@@ -1932,7 +2161,9 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
             ++frozen_count;
             if (!item.rendered_line.has_value()) {
               BaseProgressBar::RenderArgs args =
-                  BuildTransferProgressRenderArgs_(item.task_info);
+                  BuildTransferProgressRenderArgs_(
+                      item.task_info,
+                      ResolveTaskSpeedWindowMs_(style_service_));
               args.total = static_cast<int64_t>(
                   item.task_info->Size.total.load(std::memory_order_relaxed));
               args.transferred =
@@ -1945,8 +2176,8 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
             continue;
           }
 
-          BaseProgressBar::RenderArgs args =
-              BuildTransferProgressRenderArgs_(item.task_info);
+          BaseProgressBar::RenderArgs args = BuildTransferProgressRenderArgs_(
+              item.task_info, ResolveTaskSpeedWindowMs_(style_service_));
           if (is_generic_task_label(args.filename) &&
               !item.last_render_args.filename.empty() &&
               !is_generic_task_label(item.last_render_args.filename)) {
@@ -2032,7 +2263,7 @@ ECM TransferInterfaceService::TaskPause(
 ECM TransferInterfaceService::TaskResume(
     const TransferTaskControlArg &arg) const {
   if (arg.ids.empty()) {
-    return Err(EC::InvalidArg, "", "", "task ids are required");
+    return {EC::InvalidArg, "", "", "task ids are required"};
   }
   ECM status = OK;
   for (const auto &id : arg.ids) {
@@ -2087,7 +2318,8 @@ ECM TransferInterfaceService::TaskInspect(
   const bool include_sets = arg.show_sets;
   const bool include_entries = arg.show_entries;
   const TaskInspectSnapshot_ snapshot =
-      BuildTaskInspectSnapshot_(task_info, include_sets, include_entries);
+      BuildTaskInspectSnapshot_(task_info, include_sets, include_entries,
+                                ResolveTaskSpeedWindowMs_(style_service_));
 
   PrintTaskInspectSummary_(prompt_io_manager_, snapshot);
   if (include_sets) {
@@ -2119,6 +2351,84 @@ ECM TransferInterfaceService::TaskResult(
       continue;
     }
     prompt_io_manager_.PrintTaskResult(task_info);
+  }
+  return status;
+}
+
+ECM TransferInterfaceService::TaskRemove(
+    const TransferTaskRemoveArg &arg) const {
+  constexpr const char *kOp = "task.remove";
+  if (arg.ids.empty()) {
+    return Err(EC::InvalidArg, kOp, "", "task ids are required");
+  }
+
+  std::vector<TaskID> unique_ids = {};
+  {
+    std::unordered_set<TaskID> seen_ids = {};
+    unique_ids.reserve(arg.ids.size());
+    for (const auto id : arg.ids) {
+      if (seen_ids.insert(id).second) {
+        unique_ids.push_back(id);
+      }
+    }
+  }
+
+  ECM status = OK;
+  std::vector<TaskID> remove_ids = {};
+  std::vector<TaskRemovePreviewEntry_> preview_rows = {};
+  remove_ids.reserve(unique_ids.size());
+  preview_rows.reserve(unique_ids.size());
+
+  for (const auto id : unique_ids) {
+    if (id == 0) {
+      status = Err(EC::InvalidArg, kOp, "", "task id must be > 0");
+      prompt_io_manager_.ErrorFormat(status);
+      continue;
+    }
+
+    auto task_info = FindTask_(id);
+    if (!task_info) {
+      status = Err(EC::TaskNotFound, kOp, AMStr::ToString(id),
+                   AMStr::fmt("Task not found: {}", id));
+      prompt_io_manager_.ErrorFormat(status);
+      continue;
+    }
+
+    if (task_info->GetStatus() != AMDomain::transfer::TaskStatus::Finished) {
+      status = Err(EC::OperationUnsupported, kOp, AMStr::ToString(id),
+                   AMStr::fmt("Only finished tasks can be removed: {}", id));
+      prompt_io_manager_.ErrorFormat(status);
+      continue;
+    }
+
+    remove_ids.push_back(id);
+    preview_rows.push_back(BuildTaskRemovePreviewEntry_(task_info));
+  }
+
+  if (preview_rows.empty()) {
+    return (status)
+               ? Err(EC::TaskNotFound, kOp, "", "No finished tasks to remove")
+               : status;
+  }
+
+  PrintTaskRemovePreview_(prompt_io_manager_, preview_rows);
+
+  bool canceled = false;
+  const bool confirmed = prompt_io_manager_.PromptYesNo(
+      "Are you sure to remove these finished tasks? (y/n) :", &canceled);
+  if (canceled || !confirmed) {
+    return Err(EC::ConfigCanceled, "task.remove.confirm", "",
+               "Remove finished tasks canceled");
+  }
+
+  for (const auto id : remove_ids) {
+    if (!transfer_app_service_.RemoveFinished(id)) {
+      const ECM remove_rcm =
+          Err(EC::TaskNotFound, kOp, AMStr::ToString(id),
+              AMStr::fmt("Finished task record not found: {}", id));
+      prompt_io_manager_.ErrorFormat(remove_rcm);
+      status = remove_rcm;
+    }
   }
   return status;
 }

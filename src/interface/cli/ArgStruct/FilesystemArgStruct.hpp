@@ -344,7 +344,7 @@ struct MoveArgs : BaseArgStruct {
 
     src_token = AMStr::Strip(src_token);
     if (src_token.empty()) {
-      return Err(EC::InvalidArg, "", "src", "move requires one source path");
+      return Err(EC::InvalidArg, "", "src", "mv requires one source path");
     }
 
     AMInterface::filesystem::FilesystemMoveArg arg = {};

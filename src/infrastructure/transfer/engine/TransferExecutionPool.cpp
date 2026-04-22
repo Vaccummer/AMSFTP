@@ -269,12 +269,6 @@ TransferExecutionPool::TransferExecutionPool(
     conducting_.by_thread.resize(max_threads);
     conducting_.infos.resize(max_threads);
   }
-
-  heartbeat_.interval_s.store(std::max(0, config_.manager_arg.heartbeat_interval_s),
-                              std::memory_order_relaxed);
-  heartbeat_.timeout_ms.store(std::max(1, config_.manager_arg.heartbeat_timeout_ms),
-                              std::memory_order_relaxed);
-  StartHeartbeat_();
   RecomputeDesiredThreadCount_();
 }
 
@@ -285,7 +279,6 @@ ECM TransferExecutionPool::Shutdown(int timeout_ms) {
     return OK;
   }
   control_.running.store(false, std::memory_order_relaxed);
-  StopHeartbeat_();
   CancelPendingTasksOnExit_();
   queue_.cv.notify_all();
   {
@@ -414,9 +407,7 @@ void TransferExecutionPool::EnsureWorkerCapacity_(size_t worker_count) {
     }
   }
 
-  const TransferBufferPolicy policy = {config_.manager_arg.buffer_size,
-                                       config_.manager_arg.min_buffer,
-                                       config_.manager_arg.max_buffer};
+  const TransferBufferPolicy policy = {config_.manager_arg.ring_buffersize};
   if (worker_count > workers_.engines.size()) {
     workers_.engines.reserve(worker_count);
     for (size_t idx = workers_.engines.size(); idx < worker_count; ++idx) {
@@ -438,126 +429,6 @@ void TransferExecutionPool::RecomputeDesiredThreadCount_() {
   EnsureWorkerCapacity_(desired);
   control_.desired_thread_count.store(desired, std::memory_order_relaxed);
   queue_.cv.notify_all();
-}
-
-void TransferExecutionPool::StartHeartbeat_() {
-  if (heartbeat_.interval_s.load(std::memory_order_relaxed) <= 0) {
-    heartbeat_.running.store(false, std::memory_order_relaxed);
-    return;
-  }
-  if (heartbeat_.running.exchange(true, std::memory_order_acq_rel)) {
-    return;
-  }
-  heartbeat_.thread = std::jthread(
-      [this](std::stop_token stop_token) { HeartbeatLoop_(stop_token); });
-}
-
-void TransferExecutionPool::StopHeartbeat_() {
-  heartbeat_.running.store(false, std::memory_order_release);
-  if (heartbeat_.thread.joinable()) {
-    heartbeat_.thread.request_stop();
-  }
-  heartbeat_.cv.notify_all();
-  if (heartbeat_.thread.joinable()) {
-    heartbeat_.thread.join();
-  }
-}
-
-void TransferExecutionPool::HeartbeatLoop_(std::stop_token stop_token) {
-  while (control_.running.load(std::memory_order_acquire) &&
-         heartbeat_.running.load(std::memory_order_acquire) &&
-         !stop_token.stop_requested()) {
-    const int interval_s =
-        std::max(1, heartbeat_.interval_s.load(std::memory_order_relaxed));
-    std::unique_lock<std::mutex> lock(heartbeat_.wait_mtx);
-    (void)heartbeat_.cv.wait_for(
-        lock, std::chrono::seconds(interval_s), [this, &stop_token]() {
-          if (stop_token.stop_requested()) {
-            return true;
-          }
-          return !control_.running.load(std::memory_order_acquire) ||
-                 !heartbeat_.running.load(std::memory_order_acquire);
-        });
-    lock.unlock();
-    if (!control_.running.load(std::memory_order_acquire) ||
-        !heartbeat_.running.load(std::memory_order_acquire) ||
-        stop_token.stop_requested()) {
-      break;
-    }
-    HeartbeatTick_();
-  }
-}
-
-void TransferExecutionPool::HeartbeatTick_() {
-  const int timeout_ms =
-      std::max(1, heartbeat_.timeout_ms.load(std::memory_order_relaxed));
-  const auto active_tasks = GetRegistryCopy();
-  for (const auto &[id, task_info] : active_tasks) {
-    (void)id;
-    if (!task_info) {
-      continue;
-    }
-    const auto status = task_info->GetStatus();
-    if (status != TaskStatus::Pending && status != TaskStatus::Conducting) {
-      continue;
-    }
-    if (task_info->IsPauseRequested() || task_info->IsTerminateRequested()) {
-      continue;
-    }
-
-    std::unordered_set<AMDomain::client::IClientPort *> visited = {};
-    std::vector<ClientHandle> clients = {};
-    const auto collect_client = [&visited,
-                                 &clients](const ClientHandle &client) {
-      if (!client) {
-        return;
-      }
-      if (!visited.insert(client.get()).second) {
-        return;
-      }
-      clients.push_back(client);
-    };
-
-    for (const auto &nickname : task_info->Core.nicknames) {
-      collect_client(task_info->Core.clients.GetSrcClient(nickname));
-      collect_client(task_info->Core.clients.GetDstClient(nickname));
-    }
-
-    if (clients.empty()) {
-      const auto collect_from_tasks = [&collect_client,
-                                       task_info](auto &tasks) {
-        auto task_lock = tasks.lock();
-        for (const auto &task : *task_lock) {
-          collect_client(task_info->Core.clients.GetSrcClient(task.src_host));
-          collect_client(task_info->Core.clients.GetDstClient(task.dst_host));
-        }
-      };
-      collect_from_tasks(task_info->Core.dir_tasks);
-      collect_from_tasks(task_info->Core.file_tasks);
-    }
-
-    for (const auto &client : clients) {
-      if (!client) {
-        continue;
-      }
-      const auto lease_state =
-          client->MetaDataPort().QueryNamedValue<bool>("transfer.lease");
-      if (lease_state.name_found && lease_state.type_match &&
-          lease_state.value.has_value() && lease_state.value.value()) {
-        continue;
-      }
-
-      auto check_result =
-          client->IOPort().Check({}, ControlComponent(nullptr, timeout_ms));
-      if (!(check_result.rcm)) {
-        if (!task_info->IsPauseRequested() &&
-            !task_info->IsTerminateRequested()) {
-          task_info->RequestInterrupt();
-        }
-        break;
-      }
-    }
-  }
 }
 
 size_t TransferExecutionPool::ThreadCount(size_t new_count) {
@@ -623,11 +494,15 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
 
   const bool keep_progress =
       task_info->Set.keep_start_time.load(std::memory_order_relaxed);
+  task_info->DeleteProgressData();
   if (!keep_progress) {
-    task_info->Size.transferred.store(0, std::memory_order_relaxed);
+    task_info->SetTransferredSize(0);
     task_info->Size.cur_task.store(0, std::memory_order_relaxed);
     task_info->Size.cur_task_transferred.store(0, std::memory_order_relaxed);
+    task_info->Size.finished_filenum.store(0, std::memory_order_relaxed);
     task_info->Size.success_filenum.store(0, std::memory_order_relaxed);
+  } else {
+    task_info->ResetProgressData(true);
   }
   task_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
 

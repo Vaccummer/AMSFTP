@@ -3,6 +3,7 @@
 #include "application/prompt/PromptRenderDTO.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "foundation/tools/path.hpp"
+#include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/cli/CLIBind.hpp"
 #include "interface/cli/CliParseFlow.hpp"
@@ -23,7 +24,6 @@ namespace AMInterface::cli {
 
 namespace {
 using OS_TYPE = AMDomain::client::OS_TYPE;
-using ClientStatus = AMDomain::client::ClientStatus;
 using DocumentKind = AMDomain::config::DocumentKind;
 
 /**
@@ -185,6 +185,17 @@ void PrintECM_(AMInterface::prompt::PromptIOManager &prompt, const ECM &rcm) {
   prompt.FmtPrint("❌ {}: {}", name, message);
 }
 
+void PrintParseOutcome_(AMInterface::prompt::PromptIOManager &prompt,
+                        const CliParseOutcome &outcome) {
+  if (outcome.action == CliParseAction::ParseFailed) {
+    PrintECM_(prompt, outcome.rcm);
+    return;
+  }
+  if (!outcome.message.empty()) {
+    prompt.Print(outcome.message);
+  }
+}
+
 std::string ResolvePromptOsType_(const AMDomain::client::ClientHandle &client) {
   OS_TYPE os_type = OS_TYPE::Unknown;
   if (client) {
@@ -194,16 +205,7 @@ std::string ResolvePromptOsType_(const AMDomain::client::ClientHandle &client) {
       os_type = OS_TYPE::Unknown;
     }
   }
-
-  switch (os_type) {
-  case OS_TYPE::Linux:
-    return "linux";
-  case OS_TYPE::MacOS:
-    return "macos";
-  case OS_TYPE::Windows:
-  default:
-    return "windows";
-  }
+  return AMStr::ToString(os_type);
 }
 
 std::string
@@ -211,13 +213,66 @@ ResolvePromptSysIcon_(AMInterface::style::AMStyleService &style_service,
                       const std::string &os_type) {
   const auto icons = style_service.GetInitArg().style.cli_prompt.icons;
   const std::string normalized = AMStr::lowercase(AMStr::Strip(os_type));
+  const std::string fallback =
+      icons.default_icon.empty() ? std::string("💻") : icons.default_icon;
   if (normalized == "linux") {
-    return icons.linux.empty() ? std::string("PC") : icons.linux;
+    return icons.linux.empty() ? fallback : icons.linux;
   }
-  if (normalized == "macos" || normalized == "mac") {
-    return icons.macos.empty() ? std::string("PC") : icons.macos;
+  if (normalized == "macos") {
+    return icons.macos.empty() ? fallback : icons.macos;
   }
-  return icons.windows.empty() ? std::string("PC") : icons.windows;
+  if (normalized == "freebsd") {
+    return icons.freebsd.empty() ? fallback : icons.freebsd;
+  }
+  if (normalized == "unix") {
+    return icons.unix.empty() ? fallback : icons.unix;
+  }
+  if (normalized == "windows") {
+    return icons.windows.empty() ? fallback : icons.windows;
+  }
+  return fallback;
+}
+
+std::pair<int64_t, int64_t>
+CountFinishedTransferTasks_(
+    AMApplication::transfer::TransferAppService &transfer_service) {
+  int64_t success_task = 0;
+  int64_t failed_task = 0;
+  const auto finished_tasks = transfer_service.GetFinishedTasks();
+  for (const auto &[_, task_info] : finished_tasks) {
+    if (!task_info) {
+      continue;
+    }
+    const ECM result = task_info->GetResult();
+    if (result.code == EC::Success) {
+      ++success_task;
+    } else {
+      ++failed_task;
+    }
+  }
+  return {success_task, failed_task};
+}
+
+std::pair<int64_t, int64_t>
+CountTerminalResources_(
+    AMApplication::terminal::TermAppService &terminal_service) {
+  int64_t term_num = 0;
+  int64_t channel_num = 0;
+  const auto terminal_names = terminal_service.ListTerminalNames();
+  term_num = static_cast<int64_t>(terminal_names.size());
+  for (const auto &terminal_name : terminal_names) {
+    auto terminal_result =
+        terminal_service.GetTerminalByNickname(terminal_name, true);
+    if (!(terminal_result.rcm) || !terminal_result.data) {
+      continue;
+    }
+    auto list_result = terminal_result.data->ListChannels({}, {});
+    if (!(list_result.rcm)) {
+      continue;
+    }
+    channel_num += static_cast<int64_t>(list_result.data.channels.size());
+  }
+  return {channel_num, term_num};
 }
 
 AMApplication::prompt::PromptRenderDTO
@@ -230,12 +285,6 @@ BuildPromptRenderDTO_(const CLIServices &managers, const ECM &result,
       AMStr::Strip(managers.application.client_service->CurrentNickname());
   if (dto.nickname.empty()) {
     dto.nickname = "local";
-  }
-
-  dto.client_connected = true;
-  if (client) {
-    const auto state = client->ConfigPort().GetState();
-    dto.client_connected = (state.data.status == ClientStatus::OK);
   }
 
   const auto [username, hostname] = ResolveUserHost_(client);
@@ -255,15 +304,23 @@ BuildPromptRenderDTO_(const CLIServices &managers, const ECM &result,
   dto.task_pending = static_cast<int64_t>(pending_count);
   dto.task_running = static_cast<int64_t>(running_count);
   dto.task_paused = paused_count;
-  dto.task_num = std::max<int64_t>(0, dto.task_pending) +
-                 std::max<int64_t>(0, dto.task_running);
+
+  const auto [success_task, failed_task] =
+      CountFinishedTransferTasks_(managers.application.transfer_service.Get());
+  dto.success_task = success_task;
+  dto.failed_task = failed_task;
+
+  const auto [channel_num, term_num] =
+      CountTerminalResources_(managers.application.terminal_service.Get());
+  dto.channel_num = channel_num;
+  dto.term_num = term_num;
 
   dto.time_now = FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
-  dto.time_clock = dto.time_now;
   dto.elapsed = AMStr::fmt("{}ms", std::max<int64_t>(0, elapsed_time_ms));
-  dto.success = (result.code == EC::Success);
-  dto.ec_name = dto.success ? std::string()
-                            : std::string(magic_enum::enum_name(result.code));
+  dto.is_success = (result.code == EC::Success);
+  dto.ec_name = dto.is_success ? std::string()
+                               : std::string(magic_enum::enum_name(result.code));
+  dto.ec_code = static_cast<int64_t>(result.code);
   return dto;
 }
 
@@ -359,6 +416,9 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       InteractiveEventCategory::CorePromptReturn,
       [&completion_engine]() { completion_engine.ClearCache(); });
   (void)interactive_callbacks.Register(
+      InteractiveEventCategory::CorePromptReturn,
+      [&managers]() { managers.interfaces.prompt_io_manager->SyncCurrentHistory(); });
+  (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn, [&managers]() {
         if (managers.application.config_service->IsBackupNeeded()) {
           managers.interfaces.prompt_io_manager->SyncCurrentHistory();
@@ -368,23 +428,36 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
       [&completion_engine]() { completion_engine.CancelPendingAsync(); });
-  // (void)interactive_callbacks.Register(
-  //     InteractiveEventCategory::InteractiveLoopExit, [&managers]() {
-  //       managers.interfaces.prompt_io_manager->SyncCurrentHistory();
-  //     });
+  (void)interactive_callbacks.Register(
+      InteractiveEventCategory::InteractiveLoopExit,
+      [&managers]() { managers.interfaces.prompt_io_manager->SyncCurrentHistory(); });
+  (void)interactive_callbacks.Register(
+      InteractiveEventCategory::InteractiveLoopExit, [&managers]() {
+        if (!managers.interfaces.config_interface_service.IsReady()) {
+          return;
+        }
+        const ECM save_rcm =
+            managers.interfaces.config_interface_service->SaveAll();
+        if (!(save_rcm)) {
+          PrintECM_(managers.interfaces.prompt_io_manager.Get(), save_rcm);
+        }
+      });
 
   AMInterface::prompt::CLIPromtRender core_prompt(
       managers.interfaces.style_service.Get());
   std::string last_core_prompt_render_error = "";
 
   AMApplication::prompt::PromptRenderDTO prompt_dto = {};
+  ECM last_prompt_result = OK;
+  int64_t last_prompt_elapsed_ms = 0;
 
   while (true) {
     if (ctx.task_control_token->IsInterrupted()) {
       ctx.task_control_token->ClearInterrupt();
       continue;
     }
-    prompt_dto = BuildPromptRenderDTO_(managers, OK, 0);
+    prompt_dto = BuildPromptRenderDTO_(managers, last_prompt_result,
+                                       last_prompt_elapsed_ms);
 
     // managers.interfaces.prompt_io_manager->Print("");
     const std::string prompt_text = core_prompt.Render(prompt_dto);
@@ -409,7 +482,6 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
         InteractiveEventCategory::CorePromptReturn);
 
     if (!line_opt.has_value()) {
-      prompt_dto = BuildPromptRenderDTO_(managers, OK, 0);
       continue;
     }
 
@@ -422,10 +494,11 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     if (prep.rcm.code != EC::Success) {
       PrintECM_(managers.interfaces.prompt_io_manager.Get(), prep.rcm);
       store_exit_code(static_cast<int>(prep.rcm.code));
-      prompt_dto = BuildPromptRenderDTO_(
-          managers, prep.rcm,
-          std::max<int64_t>(
-              0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
+      last_prompt_elapsed_ms =
+          std::max<int64_t>(0,
+                            AMTime::IntervalMS(dispatch_begin,
+                                               AMTime::SteadyNow()));
+      last_prompt_result = prep.rcm;
       continue;
     }
     std::vector<std::string> cli_args = std::move(prep.data);
@@ -444,26 +517,27 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
         },
         std::move(cli_args));
     if (!parse_outcome.ShouldDispatch()) {
-      if (!parse_outcome.message.empty()) {
-        managers.interfaces.prompt_io_manager->Print(parse_outcome.message);
-      }
+      PrintParseOutcome_(managers.interfaces.prompt_io_manager.Get(),
+                         parse_outcome);
       store_exit_code(parse_outcome.exit_code != 0
                           ? parse_outcome.exit_code
                           : static_cast<int>(parse_outcome.rcm.code));
-      prompt_dto = BuildPromptRenderDTO_(
-          managers, parse_outcome.rcm,
-          std::max<int64_t>(
-              0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
+      last_prompt_elapsed_ms =
+          std::max<int64_t>(0,
+                            AMTime::IntervalMS(dispatch_begin,
+                                               AMTime::SteadyNow()));
+      last_prompt_result = parse_outcome.rcm;
       continue;
     }
 
     ctx.async = false;
     ctx.enforce_interactive = true;
     DispatchCliCommands(cli_commands, managers, ctx);
-    prompt_dto = BuildPromptRenderDTO_(
-        managers, ctx.rcm,
-        std::max<int64_t>(
-            0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow())));
+    last_prompt_elapsed_ms =
+        std::max<int64_t>(0,
+                          AMTime::IntervalMS(dispatch_begin,
+                                             AMTime::SteadyNow()));
+    last_prompt_result = ctx.rcm;
 
     if (ctx.request_exit) {
       break;

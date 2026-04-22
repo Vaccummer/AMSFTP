@@ -232,10 +232,6 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   }
 
   state->transfer_manager_arg = snapshots.transfer_manager_arg;
-  state->transfer_manager_arg.heartbeat_interval_s =
-      snapshots.client_service_arg.heartbeat_interval_s;
-  state->transfer_manager_arg.heartbeat_timeout_ms =
-      snapshots.client_service_arg.heartbeat_timeout_ms;
   state->log_manager_arg = snapshots.log_manager_arg;
 
   state->log_manager = std::make_unique<AMApplication::log::LoggerAppService>();
@@ -811,10 +807,10 @@ ECM ConfigureLogManager_(AppRuntime &runtime) {
 
   const fs::path client_path =
       ResolveLogPath_(runtime.root_dir, log_manager_arg.client_log_path,
-                      fs::path("config/log/Client.log"));
+                      fs::path("./logs/client.log"));
   const fs::path program_path =
       ResolveLogPath_(runtime.root_dir, log_manager_arg.program_log_path,
-                      fs::path("config/log/Program.log"));
+                      fs::path("./logs/program.log"));
 
   const ECM client_path_rcm = client_writer->SetPath(client_path);
   if (!client_path_rcm) {
@@ -1018,30 +1014,6 @@ ECM RecordCleanupError_(const ECM &candidate, ECM *first_error,
   return candidate;
 }
 
-ECM SaveRuntimeConfig_(AppRuntime &runtime) {
-  if (runtime.managers.interfaces.config_interface_service.IsReady()) {
-    return runtime.managers.interfaces.config_interface_service->SaveAll();
-  }
-
-  if (!runtime.managers.application.config_service.IsReady()) {
-    return OK;
-  }
-
-  if (runtime.managers.interfaces.prompt_io_manager.IsReady()) {
-    runtime.managers.interfaces.prompt_io_manager->SyncCurrentHistory();
-  }
-
-  auto &config_service = runtime.managers.application.config_service.Get();
-  ECM first_error = config_service.FlushDirtyParticipants();
-  for (const auto &doc : config_service.ListDocuments()) {
-    const ECM dump_rcm = config_service.Dump(doc.kind, "", false);
-    if (!dump_rcm && first_error) {
-      first_error = dump_rcm;
-    }
-  }
-  return first_error;
-}
-
 ECM ShutdownRuntime_(AppRuntime &runtime) {
   ECM first_error = OK;
   auto trace_runtime = [&runtime](const ECM &rcm, const std::string &action,
@@ -1074,10 +1046,6 @@ ECM ShutdownRuntime_(AppRuntime &runtime) {
   if (runtime.managers.runtime.interactive_loop_runtime.IsReady()) {
     runtime.managers.runtime.interactive_loop_runtime.SetInstance(nullptr);
   }
-
-  const ECM save_rcm = SaveRuntimeConfig_(runtime);
-  trace_runtime(save_rcm, "runtime.shutdown.save_config", "<config>");
-  (void)RecordCleanupError_(save_rcm, &first_error, "save runtime config");
 
   if (runtime.managers.interfaces.terminal_interface_service.IsReady()) {
     runtime.managers.interfaces.terminal_interface_service.SetInstance(nullptr);

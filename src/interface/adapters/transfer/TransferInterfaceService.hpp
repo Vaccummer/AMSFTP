@@ -44,6 +44,7 @@ public:
   ECM TaskTerminate(const TransferTaskControlArg &arg) const;
   ECM TaskInspect(const TransferTaskInspectArg &arg) const;
   ECM TaskResult(const TransferTaskResultArg &arg) const;
+  ECM TaskRemove(const TransferTaskRemoveArg &arg) const;
   void GetTaskCounts(size_t *pending_count, size_t *conducting_count) const;
 
 private:
