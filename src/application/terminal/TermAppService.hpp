@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/client/ClientPort.hpp"
+#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/terminal/ChannelPort.hpp"
 #include "domain/terminal/TerminalPort.hpp"
 #include "foundation/core/DataClass.hpp"
@@ -17,17 +18,24 @@ class LoggerAppService;
 
 namespace AMApplication::terminal {
 using ClientHandle = AMDomain::client::ClientHandle;
+using TerminalManagerArg = AMDomain::terminal::TerminalManagerArg;
 using TerminalHandle = AMDomain::terminal::TerminalHandle;
 using ChannelPortHandle = AMDomain::terminal::ChannelPortHandle;
 
-class TermAppService final : public NonCopyableNonMovable {
+class TermAppService final : public AMDomain::config::IConfigSyncPort {
 public:
   explicit TermAppService(
+      TerminalManagerArg arg = {},
       AMDomain::terminal::BufferExceedCallback buffer_exceed_callback = {},
-      AMApplication::log::LoggerAppService *logger = nullptr)
-      : buffer_exceed_callback_(std::move(buffer_exceed_callback)),
-        logger_(logger) {}
+      AMApplication::log::LoggerAppService *logger = nullptr);
   ~TermAppService() override;
+
+  ECM Init();
+  [[nodiscard]] TerminalManagerArg GetInitArg() const;
+  void SetInitArg(TerminalManagerArg arg);
+  void SetBufferExceedCallback(
+      AMDomain::terminal::BufferExceedCallback buffer_exceed_callback);
+  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
   [[nodiscard]] ECMData<TerminalHandle>
   CreateTerminal(const ClientHandle &client, bool detach = false);
@@ -76,10 +84,14 @@ private:
 
   void DropAllTerminalChannelPortsByKey_(const std::string &terminal_key,
                                          const ControlComponent &control);
+  void TraceTerminal_(const ECM &rcm, const std::string &target,
+                      const std::string &action,
+                      const std::string &message = {}) const;
 
 private:
   mutable std::mutex mutex_ = {};
   std::map<std::string, TerminalHandle> terminals_ = {};
+  mutable AMAtomic<TerminalManagerArg> init_arg_ = {};
   AMDomain::terminal::BufferExceedCallback buffer_exceed_callback_ = {};
   AMApplication::log::LoggerAppService *logger_ = nullptr;
 };

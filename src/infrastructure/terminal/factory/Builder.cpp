@@ -5,7 +5,8 @@
 namespace AMDomain::terminal {
 ECMData<TerminalHandle>
 CreateTerminalPort(const ClientHandle &client,
-                   BufferExceedCallback buffer_exceed_callback) {
+                   BufferExceedCallback buffer_exceed_callback,
+                   const TerminalManagerArg &terminal_manager_arg) {
   if (!client) {
     return {nullptr, Err(EC::InvalidHandle, "CreateTerminalPort", "<client>",
                          "Client handle is null")};
@@ -28,7 +29,7 @@ CreateTerminalPort(const ClientHandle &client,
 
     auto terminal =
         std::make_shared<AMInfra::terminal::SFTP::SSHTerminalPort>(
-            client, buffer_exceed_callback);
+            client, buffer_exceed_callback, terminal_manager_arg);
     if (!terminal) {
       return {nullptr,
               Err(EC::InvalidHandle, "CreateTerminalPort", request.nickname,
@@ -47,7 +48,7 @@ CreateTerminalPort(const ClientHandle &client,
     }
     auto terminal =
         std::make_shared<AMInfra::client::LOCAL::terminal::LocalTerminalPort>(
-            client, buffer_exceed_callback);
+            client, buffer_exceed_callback, terminal_manager_arg);
     if (!terminal) {
       return {nullptr,
               Err(EC::InvalidHandle, "CreateTerminalPort", request.nickname,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/terminal/ChannelPort.hpp"
+#include "foundation/tools/string.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,8 +18,6 @@ namespace AMT = AMDomain::terminal;
 class ChannelCacheStore {
 
 private:
-  static constexpr size_t kSoftLimitBytes = 32U * 1024U * 1024U;
-  static constexpr size_t kHardLimitBytes = 128U * 1024U * 1024U;
   static constexpr size_t kMaxEscapeTailBytes = 16U;
 
   struct TerminalCache_ {
@@ -60,10 +59,14 @@ private:
 
 public:
   explicit ChannelCacheStore(std::string terminal_key, std::string channel_name,
-                             AMT::BufferExceedCallback buffer_exceed_callback = {})
+                             AMT::BufferExceedCallback buffer_exceed_callback = {},
+                             AMT::TerminalManagerArg terminal_manager_arg = {})
       : terminal_key_(std::move(terminal_key)),
         channel_name_(std::move(channel_name)),
-        buffer_exceed_callback_(std::move(buffer_exceed_callback)) {}
+        buffer_exceed_callback_(std::move(buffer_exceed_callback)),
+        terminal_manager_arg_(std::move(terminal_manager_arg)) {
+    AMT::NormalizeTerminalManagerArg(&terminal_manager_arg_);
+  }
 
   ~ChannelCacheStore() { (void)DetachConsumer(); }
 
@@ -83,6 +86,10 @@ public:
       ++state_.attach_epoch;
       replay_blocks = state_.cache.blocks;
       fallback_output = state_.latest_output;
+      out.data.soft_limit_threshold_bytes =
+          terminal_manager_arg_.channel_cache_threshold_bytes.warning;
+      out.data.hard_limit_threshold_bytes =
+          terminal_manager_arg_.channel_cache_threshold_bytes.terminate;
       out.data.in_alternate_screen = state_.cache.in_alternate_screen;
       out.data.soft_limit_hit = state_.soft_limit_hit;
       out.data.hard_limit_hit = state_.hard_limit_hit;
@@ -195,6 +202,10 @@ public:
   [[nodiscard]] ECMData<AMT::ChannelCacheTruncateResult>
   TruncateCache(const AMT::ChannelCacheTruncateArgs &truncate_args) {
     ECMData<AMT::ChannelCacheTruncateResult> out = {};
+    const size_t soft_limit_bytes =
+        terminal_manager_arg_.channel_cache_threshold_bytes.warning;
+    const size_t hard_limit_bytes =
+        terminal_manager_arg_.channel_cache_threshold_bytes.terminate;
 
     std::lock_guard<std::mutex> lock(mutex_);
     size_t const desired = truncate_args.desired_size;
@@ -227,10 +238,10 @@ public:
       if (state_.cache.blocks.empty()) {
         state_.cache.in_alternate_screen = false;
       }
-      if (state_.cached_bytes < kSoftLimitBytes) {
+      if (state_.cached_bytes < soft_limit_bytes) {
         state_.soft_limit_hit = false;
       }
-      if (state_.cached_bytes < kHardLimitBytes) {
+      if (state_.cached_bytes < hard_limit_bytes) {
         state_.hard_limit_hit = false;
       }
     }
@@ -244,6 +255,10 @@ public:
   WrapReadResultFromRaw(ECMData<AMT::ChannelReadResult> const &read_result) {
     ECMData<AMT::ChannelReadWrappedResult> out = {};
     out.data.channel_name = channel_name_;
+    const size_t soft_limit_bytes =
+        terminal_manager_arg_.channel_cache_threshold_bytes.warning;
+    const size_t hard_limit_bytes =
+        terminal_manager_arg_.channel_cache_threshold_bytes.terminate;
 
     if (!(read_result.rcm)) {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -289,14 +304,14 @@ public:
         }
 
         state_.cached_bytes += parsed.appended_bytes;
-        if (!state_.soft_limit_hit && state_.cached_bytes >= kSoftLimitBytes) {
+        if (!state_.soft_limit_hit && state_.cached_bytes >= soft_limit_bytes) {
           state_.soft_limit_hit = true;
           soft_limit_event = AMT::BufferExceedEvent{
               terminal_key_,
               channel_name_,
               AMT::BufferExceedThresholdKind::Soft,
               state_.cached_bytes,
-              kSoftLimitBytes,
+              soft_limit_bytes,
               state_.cache.in_alternate_screen,
               state_.last_error};
           if (state_.soft_warn_epoch != state_.attach_epoch) {
@@ -305,20 +320,21 @@ public:
           }
         }
 
-        if (!state_.hard_limit_hit && state_.cached_bytes >= kHardLimitBytes) {
+        if (!state_.hard_limit_hit && state_.cached_bytes >= hard_limit_bytes) {
           state_.hard_limit_hit = true;
           hard_limit_hit_now = true;
           state_.last_error = Err(ErrorCode::FilesystemNoSpace,
                                   "terminal.channel.cache.limit", channel_name_,
-                                  "Terminal output cache hard limit exceeded "
-                                  "(128MB); channel closed");
+                                  AMStr::fmt("Terminal output cache hard limit "
+                                             "exceeded ({}); channel closed",
+                                             AMStr::FormatSize(hard_limit_bytes)));
           state_.closed = true;
           hard_limit_event = AMT::BufferExceedEvent{
               terminal_key_,
               channel_name_,
               AMT::BufferExceedThresholdKind::Hard,
               state_.cached_bytes,
-              kHardLimitBytes,
+              hard_limit_bytes,
               state_.cache.in_alternate_screen,
               state_.last_error};
         }
@@ -367,8 +383,9 @@ public:
       out.data.hard_limit_hit = true;
       out.data.last_error = Err(
           ErrorCode::FilesystemNoSpace, "terminal.channel.cache.limit",
-          channel_name_,
-          "Terminal output cache hard limit exceeded (128MB); channel closed");
+          channel_name_, AMStr::fmt("Terminal output cache hard limit exceeded "
+                                    "({}); channel closed",
+                                    AMStr::FormatSize(hard_limit_bytes)));
       out.rcm = out.data.last_error;
       return out;
     }
@@ -551,6 +568,7 @@ private:
   std::string terminal_key_ = {};
   std::string channel_name_ = {};
   AMT::BufferExceedCallback buffer_exceed_callback_ = {};
+  AMT::TerminalManagerArg terminal_manager_arg_ = {};
 
   mutable std::mutex mutex_ = {};
   RuntimeState_ state_ = {};

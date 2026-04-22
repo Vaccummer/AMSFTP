@@ -51,6 +51,7 @@ struct ConfigSnapshots final {
   AMDomain::style::StyleConfigArg style_arg = {};
   AMDomain::transfer::TransferManagerArg transfer_manager_arg = {};
   AMDomain::log::LogManagerArg log_manager_arg = {};
+  AMDomain::terminal::TerminalManagerArg terminal_manager_arg = {};
 };
 
 struct DomainAssemblyState final {
@@ -157,6 +158,54 @@ ECM InitAndLoadConfigService_(AMApplication::config::ConfigAppService *service,
   return OK;
 }
 
+void BindTerminalBufferExceedCallback_(
+    AMApplication::terminal::TermAppService *terminal_service,
+    AMInterface::prompt::PromptIOManager *prompt_io_manager) {
+  if (terminal_service == nullptr) {
+    return;
+  }
+
+  terminal_service->SetBufferExceedCallback(
+      [terminal_service, prompt_io_manager](
+          const AMDomain::terminal::BufferExceedEvent &event) {
+        const std::string target =
+            event.terminal_key.empty()
+                ? event.channel_name
+                : AMStr::fmt("{}@{}", event.terminal_key, event.channel_name);
+        const std::string cached = AMStr::FormatSize(event.cached_bytes);
+        const std::string threshold = AMStr::FormatSize(event.threshold_bytes);
+
+        if (event.threshold_kind ==
+            AMDomain::terminal::BufferExceedThresholdKind::Soft) {
+          const ECM rcm =
+              Err(EC::ChannelWindowExceeded, "terminal.channel.cache.warning",
+                  target, AMStr::fmt("Terminal output cache reached soft "
+                                     "limit (cached={}, threshold={})",
+                                     cached, threshold));
+          terminal_service->TraceRuntimeEvent(rcm, target,
+                                              "terminal.channel.cache.warning");
+          if (prompt_io_manager != nullptr) {
+            prompt_io_manager->Print(AMStr::fmt(
+                "⚠ Terminal output cache reached soft limit: {} "
+                "(cached {}, threshold {})",
+                target, cached, threshold));
+          }
+          return;
+        }
+
+        const ECM rcm =
+            event.last_error
+                ? event.last_error
+                : Err(EC::FilesystemNoSpace, "terminal.channel.cache.limit",
+                      target,
+                      AMStr::fmt("Terminal output cache hard limit exceeded "
+                                 "(cached={}, threshold={})",
+                                 cached, threshold));
+        terminal_service->TraceRuntimeEvent(rcm, target,
+                                            "terminal.channel.cache.limit");
+      });
+}
+
 ConfigSnapshots
 ReadConfigSnapshots_(AMApplication::config::ConfigAppService *service) {
   ConfigSnapshots snapshots = {};
@@ -171,6 +220,7 @@ ReadConfigSnapshots_(AMApplication::config::ConfigAppService *service) {
   (void)service->Read(&snapshots.style_arg);
   (void)service->Read(&snapshots.transfer_manager_arg);
   (void)service->Read(&snapshots.log_manager_arg);
+  (void)service->Read(&snapshots.terminal_manager_arg);
   return snapshots;
 }
 
@@ -189,7 +239,10 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   state->log_manager_arg = snapshots.log_manager_arg;
 
   state->log_manager = std::make_unique<AMApplication::log::LoggerAppService>();
-  state->host_service = std::make_unique<AMApplication::host::HostAppService>();
+  state->config_service->SetLogger(state->log_manager.get());
+  state->host_service =
+      std::make_unique<AMApplication::host::HostAppService>(
+          state->log_manager.get());
   {
     const ECM rcm = state->host_service->Init(snapshots.host_config_arg);
     if (!rcm) {
@@ -200,7 +253,8 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   }
 
   state->known_hosts_service =
-      std::make_unique<AMApplication::host::KnownHostsAppService>();
+      std::make_unique<AMApplication::host::KnownHostsAppService>(
+          state->log_manager.get());
   {
     const ECM rcm =
         state->known_hosts_service->Init(snapshots.known_hosts_arg.entries);
@@ -213,17 +267,28 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
 
   state->client_service =
       std::make_unique<AMApplication::client::ClientAppService>(
-          state->host_service.get(), snapshots.client_service_arg);
+          state->host_service.get(), snapshots.client_service_arg,
+          state->log_manager.get());
   state->client_service->SetPrivateKeys(snapshots.host_config_arg.private_keys);
 
   state->terminal_service =
       std::make_unique<AMApplication::terminal::TermAppService>(
+          snapshots.terminal_manager_arg,
           AMDomain::terminal::BufferExceedCallback{},
           state->log_manager.get());
+  {
+    const ECM rcm = state->terminal_service->Init();
+    if (!rcm) {
+      return {rcm.code, "runtime init terminal service", "<bootstrap>",
+              rcm.error.empty() ? std::string(AMStr::ToString(rcm.code))
+                                : rcm.error};
+    }
+  }
 
   state->filesystem_service =
       std::make_unique<AMApplication::filesystem::FilesystemAppService>(
-          snapshots.filesystem_arg, state->client_service.get());
+          snapshots.filesystem_arg, state->client_service.get(),
+          state->log_manager.get());
 
   state->var_service =
       std::make_unique<AMApplication::var::VarAppService>(snapshots.var_arg);
@@ -320,6 +385,10 @@ ECM RegisterConfigSyncPorts_(ApplicationAssemblyState *state) {
     return rcm;
   }
   rcm = register_port(state->filesystem_service.get(), "FilesystemAppService");
+  if (!rcm) {
+    return rcm;
+  }
+  rcm = register_port(state->terminal_service.get(), "TermAppService");
   if (!rcm) {
     return rcm;
   }
@@ -474,6 +543,9 @@ ECM BuildInterfaceAssembly_(const ConfigSnapshots &snapshots,
     }
   }
 
+  BindTerminalBufferExceedCallback_(app_state->terminal_service.get(),
+                                    state->prompt_io_manager.get());
+
   state->config_interface_service =
       std::make_unique<AMInterface::config::ConfigInterfaceService>(
           *app_state->config_service, *app_state->host_service,
@@ -512,7 +584,7 @@ ECM BuildInterfaceAssembly_(const ConfigSnapshots &snapshots,
   app_state->transfer_service =
       std::make_unique<AMApplication::transfer::TransferAppService>(
           *domain_state->transfer_pool, *app_state->client_service,
-          *app_state->filesystem_service);
+          *app_state->filesystem_service, app_state->log_manager.get());
 
   state->transfer_service =
       std::make_unique<AMInterface::transfer::TransferInterfaceService>(
@@ -858,6 +930,22 @@ ECM BootstrapLocalClient_(AppRuntime &runtime) {
 }
 
 ECM InitializeSession_(AppRuntime &runtime) {
+  auto trace_runtime = [&runtime](const ECM &rcm, const std::string &action,
+                                  const std::string &target,
+                                  const std::string &message = {}) {
+    if (!runtime.managers.application.log_manager.IsReady()) {
+      return;
+    }
+    auto level = (rcm) ? AMDomain::client::TraceLevel::Info
+                       : AMDomain::client::TraceLevel::Error;
+    if (rcm.code == EC::Terminate || rcm.code == EC::OperationTimeout) {
+      level = AMDomain::client::TraceLevel::Warning;
+    }
+    (void)runtime.managers.application.log_manager->Trace(
+        AMDomain::log::LoggerType::Program, level, rcm.code, "", target,
+        action, message);
+  };
+
   ECM rcm = ValidateRuntime_(runtime);
   if (!rcm) {
     return rcm;
@@ -867,16 +955,23 @@ ECM InitializeSession_(AppRuntime &runtime) {
   if (!rcm) {
     return rcm;
   }
+  trace_runtime(OK, "runtime.init.log", "<logger>", "logger configured");
 
   rcm = InitSignalMonitor_(runtime);
   if (!rcm) {
+    trace_runtime(rcm, "runtime.init.signal", "<signal-monitor>",
+                  "signal monitor init failed");
     return rcm;
   }
+  trace_runtime(OK, "runtime.init.signal", "<signal-monitor>");
 
   rcm = BootstrapLocalClient_(runtime);
   if (!rcm) {
+    trace_runtime(rcm, "runtime.init.local", "local",
+                  "local client bootstrap failed");
     return rcm;
   }
+  trace_runtime(OK, "runtime.init.local", "local");
 
   return OK;
 }
@@ -949,6 +1044,21 @@ ECM SaveRuntimeConfig_(AppRuntime &runtime) {
 
 ECM ShutdownRuntime_(AppRuntime &runtime) {
   ECM first_error = OK;
+  auto trace_runtime = [&runtime](const ECM &rcm, const std::string &action,
+                                  const std::string &target,
+                                  const std::string &message = {}) {
+    if (!runtime.managers.application.log_manager.IsReady()) {
+      return;
+    }
+    auto level = (rcm) ? AMDomain::client::TraceLevel::Info
+                       : AMDomain::client::TraceLevel::Error;
+    if (rcm.code == EC::Terminate || rcm.code == EC::OperationTimeout) {
+      level = AMDomain::client::TraceLevel::Warning;
+    }
+    (void)runtime.managers.application.log_manager->Trace(
+        AMDomain::log::LoggerType::Program, level, rcm.code, "", target,
+        action, message);
+  };
 
   if (runtime.run_ctx.task_control_token) {
     runtime.run_ctx.task_control_token->RequestInterrupt();
@@ -965,22 +1075,27 @@ ECM ShutdownRuntime_(AppRuntime &runtime) {
     runtime.managers.runtime.interactive_loop_runtime.SetInstance(nullptr);
   }
 
-  (void)RecordCleanupError_(SaveRuntimeConfig_(runtime), &first_error,
-                            "save runtime config");
+  const ECM save_rcm = SaveRuntimeConfig_(runtime);
+  trace_runtime(save_rcm, "runtime.shutdown.save_config", "<config>");
+  (void)RecordCleanupError_(save_rcm, &first_error, "save runtime config");
 
   if (runtime.managers.interfaces.terminal_interface_service.IsReady()) {
     runtime.managers.interfaces.terminal_interface_service.SetInstance(nullptr);
   }
 
   if (runtime.managers.domain.transfer_pool.IsReady()) {
-    (void)RecordCleanupError_(
-        runtime.managers.domain.transfer_pool->Shutdown(3000), &first_error,
-        "shutdown transfer pool");
+    const ECM shutdown_rcm =
+        runtime.managers.domain.transfer_pool->Shutdown(3000);
+    trace_runtime(shutdown_rcm, "runtime.shutdown.transfer_pool",
+                  "<transfer-pool>");
+    (void)RecordCleanupError_(shutdown_rcm, &first_error,
+                              "shutdown transfer pool");
     runtime.managers.domain.transfer_pool.SetInstance(nullptr);
   }
 
   if (runtime.managers.domain.signal_monitor.IsReady()) {
     runtime.managers.domain.signal_monitor->Stop();
+    trace_runtime(OK, "runtime.shutdown.signal", "<signal-monitor>");
     runtime.managers.domain.signal_monitor.SetInstance(nullptr);
   }
 

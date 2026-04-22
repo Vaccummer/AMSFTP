@@ -9,6 +9,7 @@
 #include "domain/prompt/PromptDomainModel.hpp"
 #include "domain/style/StyleDomainModel.hpp"
 #include "domain/style/StyleDomainService.hpp"
+#include "domain/terminal/TerminalModel.hpp"
 #include "domain/transfer/TransferDomainModel.hpp"
 #include "domain/var/VarDomainService.hpp"
 #include "foundation/tools/json.hpp"
@@ -428,6 +429,7 @@ using AMDomain::completion::CompleterArg;
 using AMDomain::config::ConfigBackupSet;
 using AMDomain::filesystem::FilesystemArg;
 using AMDomain::log::LogManagerArg;
+using AMDomain::terminal::TerminalManagerArg;
 using AMDomain::transfer::TransferManagerArg;
 using AMDomain::var::VarSetArg;
 
@@ -634,6 +636,73 @@ public:
       return codec_common::Fail_(error, "null root json");
     }
     (void)AMJson::DelKey(*root, {"Options", "LogManager"});
+    return true;
+  }
+};
+
+class TerminalManagerArgCodec final : public AMInfra::config::IArgCodec {
+public:
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(TerminalManagerArg));
+  }
+
+  [[nodiscard]] DocumentKind Kind() const override {
+    return DocumentKind::Settings;
+  }
+
+  [[nodiscard]] bool Decode(const Json &root, void *out,
+                            std::string *error) const override {
+    if (!out) {
+      return codec_common::Fail_(error, "null output TerminalManagerArg");
+    }
+    auto *typed = static_cast<TerminalManagerArg *>(out);
+    *typed = {};
+
+    const Json options = OptionsRoot_(root);
+    (void)AMJson::QueryKey(
+        options, {"TerminalManager", "channel_cache_threshold_Bytes", "warning"},
+        &typed->channel_cache_threshold_bytes.warning);
+    (void)AMJson::QueryKey(
+        options,
+        {"TerminalManager", "channel_cache_threshold_Bytes", "terminate"},
+        &typed->channel_cache_threshold_bytes.terminate);
+    (void)AMJson::QueryKey(
+        options, {"TerminalManager", "channel_cache_threshold_bytes", "warning"},
+        &typed->channel_cache_threshold_bytes.warning);
+    (void)AMJson::QueryKey(
+        options, {"TerminalManager", "channel_cache_threshold_bytes",
+                  "terminate"},
+        &typed->channel_cache_threshold_bytes.terminate);
+    AMDomain::terminal::NormalizeTerminalManagerArg(typed);
+    return true;
+  }
+
+  [[nodiscard]] bool Encode(const void *in, Json *root,
+                            std::string *error) const override {
+    if (!in || !root) {
+      return codec_common::Fail_(error,
+                                 "null input TerminalManagerArg or root json");
+    }
+    auto typed = *static_cast<const TerminalManagerArg *>(in);
+    AMDomain::terminal::NormalizeTerminalManagerArg(&typed);
+    if (!root->is_object()) {
+      *root = Json::object();
+    }
+
+    (*root)["Options"]["TerminalManager"]["channel_cache_threshold_Bytes"]
+           ["warning"] = typed.channel_cache_threshold_bytes.warning;
+    (*root)["Options"]["TerminalManager"]["channel_cache_threshold_Bytes"]
+           ["terminate"] = typed.channel_cache_threshold_bytes.terminate;
+    return true;
+  }
+
+  [[nodiscard]] bool Erase(const void *in, Json *root,
+                           std::string *error) const override {
+    (void)in;
+    if (!root) {
+      return codec_common::Fail_(error, "null root json");
+    }
+    (void)AMJson::DelKey(*root, {"Options", "TerminalManager"});
     return true;
   }
 };
@@ -1735,6 +1804,8 @@ std::unordered_map<std::type_index, const IArgCodec *> BuildCodecMap() {
   static const settings_codec::TransferManagerArgCodec transfer_manager_codec =
       {};
   static const settings_codec::LogManagerArgCodec log_manager_codec = {};
+  static const settings_codec::TerminalManagerArgCodec terminal_manager_codec =
+      {};
   static const settings_codec::CompleterArgCodec completer_codec = {};
   static const settings_codec::ClientServiceArgCodec client_service_codec = {};
   static const settings_codec::FilesystemArgCodec filesystem_codec = {};
@@ -1751,6 +1822,7 @@ std::unordered_map<std::type_index, const IArgCodec *> BuildCodecMap() {
   map[backup_set_codec.TypeKey()] = &backup_set_codec;
   map[transfer_manager_codec.TypeKey()] = &transfer_manager_codec;
   map[log_manager_codec.TypeKey()] = &log_manager_codec;
+  map[terminal_manager_codec.TypeKey()] = &terminal_manager_codec;
   map[completer_codec.TypeKey()] = &completer_codec;
   map[client_service_codec.TypeKey()] = &client_service_codec;
   map[filesystem_codec.TypeKey()] = &filesystem_codec;
