@@ -232,8 +232,17 @@ fn line_render_width(vt: &AmsVtHandle, line: Line) -> usize {
         .map_or(0, |index| index + 1)
 }
 
-fn render_line_ansi(vt: &AmsVtHandle, line: Line) -> String {
+fn visible_line_render_width(vt: &AmsVtHandle, line: Line) -> usize {
     let width = line_render_width(vt, line);
+    let cursor = vt.term.grid().cursor.point;
+    if cursor.line != line {
+        return width;
+    }
+
+    max(width, min(vt.cols, cursor.column.0))
+}
+
+fn render_line_ansi_with_width(vt: &AmsVtHandle, line: Line, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
@@ -271,6 +280,10 @@ fn render_line_ansi(vt: &AmsVtHandle, line: Line) -> String {
         out.push_str("\x1b[0m");
     }
     out
+}
+
+fn render_line_ansi(vt: &AmsVtHandle, line: Line) -> String {
+    render_line_ansi_with_width(vt, line, line_render_width(vt, line))
 }
 
 fn line_is_wrapped(vt: &AmsVtHandle, line: Line) -> bool {
@@ -487,7 +500,9 @@ pub extern "C" fn AmsVtRenderVisibleFrameAnsiUtf8(handle: *const AmsVtHandle) ->
     let mut out = String::new();
     for index in 0..rows {
         let line = Line(index as i32);
-        out.push_str(&render_line_ansi(vt, line));
+        let width = visible_line_render_width(vt, line);
+        out.push_str(&render_line_ansi_with_width(vt, line, width));
+        out.push_str("\x1b[K");
         if index + 1 < rows && !line_is_wrapped(vt, line) {
             out.push_str("\r\n");
         }
