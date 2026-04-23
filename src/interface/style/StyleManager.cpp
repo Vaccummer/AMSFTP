@@ -102,6 +102,8 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.common.default_style;
   case StyleIndex::PathLike:
     return &cfg.common.default_style;
+  case StyleIndex::TableSkeleton:
+    return &cfg.common.type_table_skeleton;
   case StyleIndex::None:
   default:
     return nullptr;
@@ -133,6 +135,19 @@ std::string ApplyStyleTag(const std::string &tag, const std::string &text) {
     return text;
   }
   return tag + text + "[/]";
+}
+
+std::string ExtractHexColorFromStyleTag(const std::string &raw_tag) {
+  std::string tag = NormalizeStyleTag(raw_tag);
+  if (tag.size() < 3) {
+    return "";
+  }
+  std::string body = tag.substr(1, tag.size() - 2);
+  const size_t style_sep = body.find(' ');
+  if (style_sep != std::string::npos) {
+    body = body.substr(0, style_sep);
+  }
+  return AMDomain::style::service::IsHexColorString(body) ? body : "";
 }
 
 std::string ResolveInputStyleTag(const AMDomain::style::StyleConfig &cfg,
@@ -226,16 +241,10 @@ std::string AMStyleService::Format(const std::string &ori_str,
 std::string AMStyleService::FormatUtf8Table(
     const std::vector<std::string> &keys,
     const std::vector<std::vector<std::string>> &rows) const {
-  const auto cfg = GetInitArg().style.table;
-  const size_t left =
-      static_cast<size_t>(std::max<int64_t>(0, cfg.left_padding));
-  const size_t right =
-      static_cast<size_t>(std::max<int64_t>(0, cfg.right_padding));
-  const size_t top = static_cast<size_t>(std::max<int64_t>(0, cfg.top_padding));
-  const size_t bottom =
-      static_cast<size_t>(std::max<int64_t>(0, cfg.bottom_padding));
-  return AMStr::FormatUtf8Table(keys, rows, cfg.color, left, right, top,
-                                bottom);
+  const auto cfg = GetInitArg().style;
+  const std::string skeleton_color =
+      detail::ExtractHexColorFromStyleTag(cfg.common.type_table_skeleton);
+  return AMStr::FormatUtf8Table(keys, rows, skeleton_color, 1, 1, 0, 0);
 }
 
 std::unique_ptr<BaseProgressBar>

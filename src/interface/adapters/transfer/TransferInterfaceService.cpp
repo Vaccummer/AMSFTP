@@ -101,10 +101,10 @@ void ReportTransferSubStage_(
 
 int ResolveTransferProgressRefreshMs_(
     const AMInterface::style::AMStyleService *style_service,
-    int transfer_bar_refresh_interval_ms) {
+    int transfer_refresh_interval_ms) {
   int refresh_ms = kTaskPollIntervalMs;
-  if (transfer_bar_refresh_interval_ms > 0) {
-    refresh_ms = transfer_bar_refresh_interval_ms;
+  if (transfer_refresh_interval_ms > 0) {
+    refresh_ms = transfer_refresh_interval_ms;
   } else if (style_service != nullptr) {
     refresh_ms = static_cast<int>(
         style_service->GetInitArg().style.progress_bar.refresh_interval_ms);
@@ -1046,11 +1046,11 @@ TransferInterfaceService::TransferInterfaceService(
     std::function<ControlComponent(AMDomain::client::amf)>
         control_component_factory,
     AMInterface::style::AMStyleService *style_service,
-    int transfer_bar_refresh_interval_ms)
+    int transfer_refresh_interval_ms)
     : filesystem_service_(filesystem_service),
       prompt_io_manager_(prompt_io_manager),
       transfer_app_service_(transfer_service), style_service_(style_service),
-      transfer_bar_refresh_interval_ms_(transfer_bar_refresh_interval_ms) {
+      transfer_refresh_interval_ms_(transfer_refresh_interval_ms) {
   (void)control_component_factory;
 }
 
@@ -1429,7 +1429,7 @@ ECM TransferInterfaceService::WaitTask_(
 
   const bool show_progress = !task_info->Set.quiet;
   const int refresh_ms = ResolveTransferProgressRefreshMs_(
-      style_service_, transfer_bar_refresh_interval_ms_);
+      style_service_, transfer_refresh_interval_ms_);
 
   struct ScopedRefresh_ {
     AMInterface::prompt::PromptIOManager *prompt = nullptr;
@@ -1943,7 +1943,7 @@ ECM TransferInterfaceService::TaskList(const TransferTaskListArg &arg) const {
   }
 
   const int refresh_ms = ResolveTransferProgressRefreshMs_(
-      style_service_, transfer_bar_refresh_interval_ms_);
+      style_service_, transfer_refresh_interval_ms_);
   struct ScopedRefresh_ {
     AMInterface::prompt::PromptIOManager *prompt = nullptr;
     bool active = false;
@@ -2072,7 +2072,7 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
 
   if (!conducting_tasks.empty()) {
     const int refresh_ms = ResolveTransferProgressRefreshMs_(
-        style_service_, transfer_bar_refresh_interval_ms_);
+        style_service_, transfer_refresh_interval_ms_);
     struct TaskWatchItem_ {
       std::shared_ptr<TaskInfo> task_info = nullptr;
       std::unique_ptr<BaseProgressBar> bar = nullptr;

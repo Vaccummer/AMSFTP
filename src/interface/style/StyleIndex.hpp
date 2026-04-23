@@ -49,6 +49,7 @@ enum class StyleIndex : uint8_t {
   Number,
   Timestamp,
   PathLike,
+  TableSkeleton,
   Error
 };
 } // namespace AMInterface::style

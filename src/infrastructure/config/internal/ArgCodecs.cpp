@@ -503,13 +503,11 @@ public:
     const Json options = OptionsRoot_(root);
     (void)AMJson::QueryKey(options, {"TransferManager", "max_threads"},
                            &typed->max_threads);
+    (void)AMJson::QueryKey(options, {"TransferManager", "refresh_interval_ms"},
+                           &typed->refresh_interval_ms);
     (void)AMJson::QueryKey(options,
-                           {"TransferManager", "bar_refresh_interval_ms"},
-                           &typed->bar_refresh_interval_ms);
-    if (typed->bar_refresh_interval_ms <= 0) {
-      (void)AMJson::QueryKey(options, {"TransferManager", "refresh_interval_ms"},
-                             &typed->bar_refresh_interval_ms);
-    }
+                           {"TransferManager", "speed_windows_size_s"},
+                           &typed->speed_windows_size_s);
     (void)AMJson::QueryKey(options, {"TransferManager", "ring_buffersize"},
                            &typed->ring_buffersize);
     return true;
@@ -527,8 +525,10 @@ public:
     }
 
     (*root)["Options"]["TransferManager"]["max_threads"] = typed->max_threads;
-    (*root)["Options"]["TransferManager"]["bar_refresh_interval_ms"] =
-        typed->bar_refresh_interval_ms;
+    (*root)["Options"]["TransferManager"]["refresh_interval_ms"] =
+        typed->refresh_interval_ms;
+    (*root)["Options"]["TransferManager"]["speed_windows_size_s"] =
+        typed->speed_windows_size_s;
     (*root)["Options"]["TransferManager"]["ring_buffersize"] =
         typed->ring_buffersize;
     return true;
@@ -1155,7 +1155,6 @@ using AMDomain::style::InternalStyle;
 using AMDomain::style::PathHighlightStyle;
 using AMDomain::style::ProgressBarStyle;
 using AMDomain::style::StyleConfigArg;
-using AMDomain::style::TableStyle;
 using AMDomain::style::ValueQueryHighlightStyle;
 
 void DecodeCompleteMenu_(const Json &json, CompleteMenuStyle *out) {
@@ -1172,32 +1171,6 @@ Json EncodeCompleteMenu_(const CompleteMenuStyle &in) {
   out["item_select_sign"] = in.item_select_sign;
   out["order_num_style"] = in.order_num_style;
   out["help_style"] = in.help_style;
-  return out;
-}
-
-void DecodeTable_(const Json &json, TableStyle *out) {
-  if (!out || !json.is_object()) {
-    return;
-  }
-  (void)AMJson::QueryKey(json, {"color"}, &out->color);
-  (void)AMJson::QueryKey(json, {"left_padding"}, &out->left_padding);
-  (void)AMJson::QueryKey(json, {"right_padding"}, &out->right_padding);
-  (void)AMJson::QueryKey(json, {"top_padding"}, &out->top_padding);
-  (void)AMJson::QueryKey(json, {"bottom_padding"}, &out->bottom_padding);
-  (void)AMJson::QueryKey(json, {"refresh_interval_ms"},
-                         &out->refresh_interval_ms);
-  (void)AMJson::QueryKey(json, {"speed_window_size"}, &out->speed_window_size);
-}
-
-Json EncodeTable_(const TableStyle &in) {
-  Json out = Json::object();
-  out["color"] = in.color;
-  out["left_padding"] = in.left_padding;
-  out["right_padding"] = in.right_padding;
-  out["top_padding"] = in.top_padding;
-  out["bottom_padding"] = in.bottom_padding;
-  out["refresh_interval_ms"] = in.refresh_interval_ms;
-  out["speed_window_size"] = in.speed_window_size;
   return out;
 }
 
@@ -1272,14 +1245,6 @@ void DecodeCliPrompt_(const Json &json, CLIPromptStyle *out) {
     return;
   }
 
-  Json shortcut = codec_common::QueryObjectAt_(json, {"shortcut"});
-  if (!shortcut.is_object()) {
-    shortcut = codec_common::QueryObjectAt_(json, {"Shortcut"});
-  }
-  if (shortcut.is_object()) {
-    out->shortcut = codec_common::ReadStringMap_(shortcut, true);
-  }
-
   Json icons = codec_common::QueryObjectAt_(json, {"icons"});
   if (!icons.is_object()) {
     icons = codec_common::QueryObjectAt_(json, {"Icons"});
@@ -1291,26 +1256,6 @@ void DecodeCliPrompt_(const Json &json, CLIPromptStyle *out) {
   (void)AMJson::QueryKey(icons, {"freebsd"}, &out->icons.freebsd);
   (void)AMJson::QueryKey(icons, {"unix"}, &out->icons.unix);
 
-  Json named = codec_common::QueryObjectAt_(json, {"named_styles"});
-  if (!named.is_object()) {
-    named = codec_common::QueryObjectAt_(json, {"NamedStyles"});
-  }
-  if (!named.is_object()) {
-    named = codec_common::QueryObjectAt_(json, {"namedstyles"});
-  }
-  if (named.is_object()) {
-    for (auto it = named.begin(); it != named.end(); ++it) {
-      if (!it.value().is_string()) {
-        continue;
-      }
-      const std::string key = AMStr::lowercase(AMStr::Strip(it.key()));
-      if (key.empty() || out->shortcut.contains(key)) {
-        continue;
-      }
-      out->shortcut[key] = it.value().get<std::string>();
-    }
-  }
-
   Json template_json = codec_common::QueryObjectAt_(json, {"template"});
   (void)AMJson::QueryKey(template_json, {"core_prompt"},
                          &out->prompt_template.core_prompt);
@@ -1320,7 +1265,6 @@ void DecodeCliPrompt_(const Json &json, CLIPromptStyle *out) {
 
 Json EncodeCliPrompt_(const CLIPromptStyle &in) {
   Json out = Json::object();
-  out["shortcut"] = codec_common::WriteStringMap_(in.shortcut);
 
   out["icons"]["default"] = in.icons.default_icon;
   out["icons"]["windows"] = in.icons.windows;
@@ -1349,6 +1293,8 @@ void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"type", "abort"}, &out->type_abort);
   (void)AMJson::QueryKey(json, {"type", "hostname"}, &out->type_hostname);
   (void)AMJson::QueryKey(json, {"type", "shell_cmd"}, &out->type_shell_cmd);
+  (void)AMJson::QueryKey(json, {"type", "table_skeleton"},
+                         &out->type_table_skeleton);
 
   (void)AMJson::QueryKey(json, {"sign", "escaped"}, &out->sign_escaped);
   (void)AMJson::QueryKey(json, {"sign", "bang"}, &out->sign_bang);
@@ -1431,6 +1377,7 @@ Json EncodeCommon_(const InputHighlightStyle &in) {
   out["type"]["abort"] = in.type_abort;
   out["type"]["hostname"] = in.type_hostname;
   out["type"]["shell_cmd"] = in.type_shell_cmd;
+  out["type"]["table_skeleton"] = in.type_table_skeleton;
 
   out["sign"]["escaped"] = in.sign_escaped;
   out["sign"]["bang"] = in.sign_bang;
@@ -1566,15 +1513,10 @@ public:
     *typed = {};
 
     const Json style = codec_common::QueryObjectAt_(root, {"Style"});
-    Json global_shortcut = codec_common::QueryObjectAt_(style, {"shortcut"});
-    if (!global_shortcut.is_object()) {
-      global_shortcut = codec_common::QueryObjectAt_(style, {"Shortcut"});
-    }
+    Json global_shortcut = codec_common::QueryObjectAt_(style, {"Shortcut"});
 
     DecodeCompleteMenu_(codec_common::QueryObjectAt_(style, {"CompleteMenu"}),
                         &typed->style.complete_menu);
-    DecodeTable_(codec_common::QueryObjectAt_(style, {"Table"}),
-                 &typed->style.table);
     DecodeProgressBar_(codec_common::QueryObjectAt_(style, {"ProgressBar"}),
                        &typed->style.progress_bar);
     DecodeCliPrompt_(codec_common::QueryObjectAt_(style, {"CLIPrompt"}),
@@ -1614,9 +1556,8 @@ public:
 
     Json style = Json::object();
     style["CompleteMenu"] = EncodeCompleteMenu_(typed->style.complete_menu);
-    style["Table"] = EncodeTable_(typed->style.table);
     style["ProgressBar"] = EncodeProgressBar_(typed->style.progress_bar);
-    style["shortcut"] =
+    style["Shortcut"] =
         codec_common::WriteStringMap_(typed->style.cli_prompt.shortcut);
     style["CLIPrompt"] = EncodeCliPrompt_(typed->style.cli_prompt);
     style["Common"] = EncodeCommon_(typed->style.common);
