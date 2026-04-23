@@ -4,8 +4,9 @@
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/tools/string.hpp"
-#include <chrono>
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -172,7 +173,8 @@ struct TransferManagerArg {
   static constexpr size_t kMaxBufferBytes = 1024 * 1024 * 1024;
 
   int max_threads = 16;
-  int bar_refresh_interval_ms = 200;
+  int refresh_interval_ms = 200;
+  int speed_windows_size_s = 5;
   size_t ring_buffersize = AMDomain::client::ClientService::AMDefaultBufferSize;
 };
 
@@ -349,6 +351,7 @@ struct TaskSet {
   AMAtomic<std::map<size_t, std::function<void()>>> completion_wakeups =
       AMAtomic<std::map<size_t, std::function<void()>>>{};
   std::atomic<size_t> completion_wakeup_seed{1};
+  std::atomic<int64_t> speed_windows_size_s{5};
   std::atomic<int> OnWhichThread{-1};
   std::atomic<int> affinity_thread{-1};
   std::atomic<TaskAssignType> assign_type{TaskAssignType::Public};
@@ -631,7 +634,6 @@ struct TaskInfo {
   }
 
 private:
-  static constexpr int64_t kSpeedSampleRetentionMs = 60000;
   using SpeedSamples = std::deque<TaskStruct::TaskProgressData::SpeedSample>;
   using SpeedSamplesGuard = AMAtomic<SpeedSamples>::Guard;
 
@@ -641,6 +643,18 @@ private:
                              std::chrono::steady_clock::now());
   }
 
+  [[nodiscard]] size_t ResolveSpeedSampleLimit_() const {
+    const int64_t window_ms =
+        std::max<int64_t>(1, Set.speed_windows_size_s.load(
+                                 std::memory_order_relaxed)) *
+        1000;
+    const int64_t interval_ms = std::max<int64_t>(
+        1, static_cast<int64_t>(Set.callback.cb_interval_s * 1000.0));
+    return std::max<size_t>(
+        2, static_cast<size_t>((window_ms + interval_ms - 1) / interval_ms) +
+               1);
+  }
+
   void AppendSpeedSampleLocked_(
       SpeedSamplesGuard *samples, size_t transferred,
       std::chrono::steady_clock::time_point when) {
@@ -648,10 +662,8 @@ private:
       return;
     }
     (*samples)->push_back({when, transferred});
-    const auto retention =
-        std::chrono::milliseconds(kSpeedSampleRetentionMs);
-    while ((*samples)->size() > 1 &&
-           (when - (*samples)->front().when) > retention) {
+    const size_t max_samples = ResolveSpeedSampleLimit_();
+    while ((*samples)->size() > max_samples) {
       (*samples)->pop_front();
     }
   }

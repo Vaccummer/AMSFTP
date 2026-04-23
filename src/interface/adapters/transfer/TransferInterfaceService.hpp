@@ -25,7 +25,7 @@ public:
       std::function<ControlComponent(AMDomain::client::amf)>
           control_component_factory = {},
       AMInterface::style::AMStyleService *style_service = nullptr,
-      int transfer_bar_refresh_interval_ms = 0);
+      int transfer_refresh_interval_ms = 0);
   ~TransferInterfaceService() override = default;
 
   void SetDefaultControlToken(const AMDomain::client::amf &token);
@@ -87,7 +87,7 @@ private:
   AMInterface::prompt::PromptIOManager &prompt_io_manager_;
   AMApplication::transfer::TransferAppService &transfer_app_service_;
   AMInterface::style::AMStyleService *style_service_ = nullptr;
-  int transfer_bar_refresh_interval_ms_ = 0;
+  int transfer_refresh_interval_ms_ = 0;
   AMDomain::client::amf default_control_token_ = nullptr;
 };
 } // namespace AMInterface::transfer

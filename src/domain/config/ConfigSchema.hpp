@@ -108,11 +108,11 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
               "minimum": 1,
               "maximum": 1024
             },
-            "bar_refresh_interval_ms": {
+            "refresh_interval_ms": {
               "type": "integer",
               "minimum": 1
             },
-            "refresh_interval_ms": {
+            "speed_windows_size_s": {
               "type": "integer",
               "minimum": 1
             },
@@ -255,12 +255,6 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
     "Style": {
       "type": "object",
       "properties": {
-        "shortcut": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
         "Shortcut": {
           "type": "object",
           "additionalProperties": {
@@ -278,40 +272,6 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
             },
             "help_style": {
               "type": "string"
-            }
-          },
-          "additionalProperties": false
-        },
-        "Table": {
-          "type": "object",
-          "properties": {
-            "color": {
-              "type": "string",
-              "pattern": "^#[0-9A-Fa-f]{6}$"
-            },
-            "left_padding": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "right_padding": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "top_padding": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "bottom_padding": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "refresh_interval_ms": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "speed_window_size": {
-              "type": "integer",
-              "minimum": 1
             }
           },
           "additionalProperties": false
@@ -406,18 +366,6 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
         "CLIPrompt": {
           "type": "object",
           "properties": {
-            "shortcut": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "Shortcut": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
             "icons": {
               "type": "object",
               "properties": {
@@ -466,24 +414,6 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
               },
               "additionalProperties": false
             },
-            "named_styles": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "NamedStyles": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "namedstyles": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
             "template": {
               "type": "object",
               "properties": {
@@ -530,6 +460,9 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
                   "type": "string"
                 },
                 "shell_cmd": {
+                  "type": "string"
+                },
+                "table_skeleton": {
                   "type": "string"
                 }
               },
@@ -761,6 +694,15 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
                   "type": "string"
                 },
                 "nonexistent": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "find": {
+              "type": "object",
+              "properties": {
+                "pattern": {
                   "type": "string"
                 }
               },

@@ -489,6 +489,9 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
                                 std::memory_order_relaxed);
   task_info->Time.submit.store(seconds(), std::memory_order_relaxed);
   task_info->SetStatus(TaskStatus::Pending);
+  task_info->Set.speed_windows_size_s.store(
+      std::max<int>(1, config_.manager_arg.speed_windows_size_s),
+      std::memory_order_relaxed);
   task_info->CalTotalSize();
   task_info->CalFileNum();
 

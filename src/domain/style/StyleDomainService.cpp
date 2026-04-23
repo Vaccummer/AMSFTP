@@ -180,22 +180,6 @@ void NormalizeCompleteMenu(CompleteMenuStyle *style) {
   NormalizeStyleToken(&style->help_style, defaults.help_style);
 }
 
-void NormalizeTable(TableStyle *style) {
-  if (!style) {
-    return;
-  }
-  const TableStyle defaults = {};
-  style->left_padding = std::max<int64_t>(0, style->left_padding);
-  style->right_padding = std::max<int64_t>(0, style->right_padding);
-  style->top_padding = std::max<int64_t>(0, style->top_padding);
-  style->bottom_padding = std::max<int64_t>(0, style->bottom_padding);
-  style->refresh_interval_ms = std::max<int64_t>(1, style->refresh_interval_ms);
-  style->speed_window_size = std::max<int64_t>(1, style->speed_window_size);
-  if (!IsHexColorString(style->color)) {
-    style->color = defaults.color;
-  }
-}
-
 void NormalizeProgressBar(ProgressBarStyle *style) {
   if (!style) {
     return;
@@ -283,6 +267,8 @@ void NormalizeInputHighlight(InputHighlightStyle *style) {
   NormalizeStyleToken(&style->type_abort, defaults.type_abort);
   NormalizeStyleToken(&style->type_hostname, defaults.type_hostname);
   NormalizeStyleToken(&style->type_shell_cmd, defaults.type_shell_cmd);
+  NormalizeStyleToken(&style->type_table_skeleton,
+                      defaults.type_table_skeleton);
   NormalizeStyleToken(&style->sign_escaped, defaults.sign_escaped);
   NormalizeStyleToken(&style->sign_bang, defaults.sign_bang);
   NormalizeStyleToken(&style->cli_command, defaults.cli_command);
@@ -389,7 +375,6 @@ void NormalizeStyleConfig(StyleConfig *config) {
     return;
   }
   NormalizeCompleteMenu(&config->complete_menu);
-  NormalizeTable(&config->table);
   NormalizeProgressBar(&config->progress_bar);
   NormalizeCLIPrompt(&config->cli_prompt);
   NormalizeInputHighlight(&config->common);

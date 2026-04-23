@@ -11,16 +11,6 @@ struct CompleteMenuStyle {
   std::string help_style = "";
 };
 
-struct TableStyle {
-  std::string color = "#00adb5";
-  int64_t left_padding = 1;
-  int64_t right_padding = 1;
-  int64_t top_padding = 0;
-  int64_t bottom_padding = 0;
-  int64_t refresh_interval_ms = 300;
-  int64_t speed_window_size = 25;
-};
-
 struct ProgressBarStyle {
   std::string prefix_template = "{$filename}";
   std::string bar_template =
@@ -79,6 +69,7 @@ struct InputHighlightStyle {
   std::string type_abort = "";
   std::string type_hostname = "";
   std::string type_shell_cmd = "";
+  std::string type_table_skeleton = "";
   std::string sign_escaped = "";
   std::string sign_bang = "";
   std::string cli_command = "";
@@ -140,7 +131,6 @@ struct PathHighlightStyle {
 
 struct StyleConfig {
   CompleteMenuStyle complete_menu = {};
-  TableStyle table = {};
   ProgressBarStyle progress_bar = {};
   CLIPromptStyle cli_prompt = {};
   InputHighlightStyle common = {};

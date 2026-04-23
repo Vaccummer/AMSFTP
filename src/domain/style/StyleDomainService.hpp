@@ -11,7 +11,6 @@ namespace AMDomain::style::service {
 
 void NormalizeStyleToken(std::string *value, const std::string &fallback = "");
 void NormalizeCompleteMenu(CompleteMenuStyle *style);
-void NormalizeTable(TableStyle *style);
 void NormalizeProgressBar(ProgressBarStyle *style);
 void NormalizePromptTemplate(PromptTemplateStyle *style);
 void NormalizeCLIPromptShortcut(CLIPromptShortcutStyle *style);

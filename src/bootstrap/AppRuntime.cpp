@@ -588,7 +588,7 @@ ECM BuildInterfaceAssembly_(const ConfigSnapshots &snapshots,
           *state->prompt_io_manager,
           [](AMDomain::client::amf token) { return ControlComponent(token); },
           state->style_service.get(),
-          app_state->transfer_manager_arg.bar_refresh_interval_ms);
+          app_state->transfer_manager_arg.refresh_interval_ms);
   state->transfer_service->SetDefaultControlToken(task_control_token);
 
   return OK;
