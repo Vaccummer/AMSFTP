@@ -71,6 +71,13 @@ struct ChannelCacheCopyResult {
   std::string vt_visible_frame_ansi = {};
 };
 
+struct ChannelRenderFrameResult {
+  bool in_alternate_screen = false;
+  ChannelVtSnapshot vt_snapshot = {};
+  std::string vt_main_replay_ansi = {};
+  std::string vt_visible_frame_ansi = {};
+};
+
 struct ChannelCacheTruncateArgs {
   size_t desired_size = 32U * 1024U * 1024U;
   bool truncate_at_newline = true;
@@ -176,6 +183,9 @@ public:
 
   [[nodiscard]] virtual ECMData<ChannelCacheCopyResult>
   GetCacheCopy() const = 0;
+
+  [[nodiscard]] virtual ECMData<ChannelRenderFrameResult>
+  GetRenderFrame() const = 0;
 
   virtual ECM ClearCache() = 0;
 

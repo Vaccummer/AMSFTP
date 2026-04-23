@@ -265,11 +265,13 @@ fn render_line_ansi_with_width(vt: &AmsVtHandle, line: Line, width: usize) -> St
             active_style = style;
         }
 
-        out.push(if cell.flags.contains(Flags::HIDDEN) {
-            ' '
-        } else {
-            cell.c
-        });
+        out.push(
+            if cell.flags.contains(Flags::HIDDEN) || cell.c == '\t' || cell.c.is_control() {
+                ' '
+            } else {
+                cell.c
+            },
+        );
         if let Some(chars) = cell.zerowidth() {
             for ch in chars {
                 out.push(*ch);
