@@ -1,0 +1,19 @@
+[package]
+name = "amsftp_vt"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "amsftp_vt"
+crate-type = ["staticlib"]
+
+[dependencies]
+alacritty_terminal = "0.25.1"
+libc = "0.2"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+lto = true
+panic = "abort"

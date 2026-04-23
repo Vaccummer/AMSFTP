@@ -212,6 +212,7 @@ public:
     runtime_.window_width = std::max(0, init_args.width);
     runtime_.window_height = std::max(0, init_args.height);
     runtime_.term = init_args.term.empty() ? "xterm-256color" : init_args.term;
+    cache_.ResizeViewport(runtime_.window_cols, runtime_.window_rows);
 
     runtime_.eof = false;
     runtime_.exit_status = -1;
@@ -304,7 +305,11 @@ public:
   [[nodiscard]] ECMData<AMT::ChannelResizeResult>
   Resize(const AMT::ChannelResizeArgs &resize_args,
          const ControlComponent &control = {}) override {
-    return RawResize_(resize_args, control);
+    auto out = RawResize_(resize_args, control);
+    if ((out.rcm)) {
+      cache_.ResizeViewport(resize_args.cols, resize_args.rows);
+    }
+    return out;
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCloseResult>

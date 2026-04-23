@@ -84,12 +84,16 @@ target_compile_options(amsftp PRIVATE /W4 /Zi)
 target_link_options(amsftp PRIVATE /DEBUG:FULL)
 
 set(AMSFTP_RUST_TOMLREAD_DIR "${PROJECT_SOURCE_DIR}/src/foreign/tomlread")
+set(AMSFTP_RUST_VT_DIR "${PROJECT_SOURCE_DIR}/src/foreign/vt")
 find_file(RUST_TOML_READ_STATIC_LIB
   NAMES rust_toml_read.lib
   PATHS "${AMSFTP_RUST_TOMLREAD_DIR}/target/release"
   NO_DEFAULT_PATH
 )
 if (RUST_TOML_READ_STATIC_LIB)
+  target_include_directories(amsftp PRIVATE
+    "${AMSFTP_RUST_VT_DIR}/include"
+  )
   target_link_libraries(amsftp PRIVATE
     ${RUST_TOML_READ_STATIC_LIB}
     ntdll
@@ -97,7 +101,10 @@ if (RUST_TOML_READ_STATIC_LIB)
     dbghelp
     legacy_stdio_definitions
   )
-  target_compile_definitions(amsftp PRIVATE RUST_TOML_READ_STATIC)
+  target_compile_definitions(amsftp PRIVATE
+    RUST_TOML_READ_STATIC
+    AMSFTP_VT_STATIC
+  )
 else()
   message(WARNING "rust_toml_read static library not found; build may fail if not linked elsewhere.")
 endif()

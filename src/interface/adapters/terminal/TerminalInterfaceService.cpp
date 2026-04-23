@@ -584,6 +584,17 @@ private:
   return rows;
 }
 
+[[nodiscard]] size_t RenderedRowsForReplayAnsi_(std::string_view replay_ansi,
+                                                int viewport_cols) {
+  if (replay_ansi.empty()) {
+    return 0U;
+  }
+  MainScreenRenderTracker_ tracker = {};
+  tracker.Reset(std::max(1, viewport_cols), false);
+  tracker.Observe(replay_ansi);
+  return tracker.RenderedRows();
+}
+
 } // namespace
 
 class ScopedRawTerminal_ final : public NonCopyableNonMovable {
@@ -1512,8 +1523,17 @@ ECM TerminalInterfaceService::LaunchTerminal(
     if (channel_port) {
       auto cache_result = channel_port->GetCacheCopy();
       if ((cache_result.rcm)) {
-        rows = RenderedRowsForMainCacheBlocks_(cache_result.data.blocks,
-                                               viewport_cols);
+        if (!cache_result.data.vt_main_replay_ansi.empty()) {
+          rows = RenderedRowsForReplayAnsi_(cache_result.data.vt_main_replay_ansi,
+                                            viewport_cols);
+        }
+        if (cache_result.data.vt_snapshot.available) {
+          rows = std::max(rows, cache_result.data.vt_snapshot.rendered_main_rows);
+        }
+        if (rows == 0U) {
+          rows = RenderedRowsForMainCacheBlocks_(cache_result.data.blocks,
+                                                 viewport_cols);
+        }
       }
     }
     if (rows == 0U) {
