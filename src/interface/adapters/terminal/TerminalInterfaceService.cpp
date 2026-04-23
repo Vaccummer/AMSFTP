@@ -1486,12 +1486,15 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
 
   std::mutex render_mutex = {};
+  std::mutex local_input_mutex = {};
   bool physical_alt_screen_active = false;
   bool have_last_server_screen_state = false;
   bool last_server_in_alternate_screen = false;
   std::vector<std::string> last_rendered_lines = {};
   bool have_last_vt_snapshot = false;
   AMDomain::terminal::ChannelVtSnapshot last_vt_snapshot = {};
+  std::atomic<uint64_t> local_viewport_offset = 0;
+  std::string pending_local_input = {};
   auto enter_physical_alt_screen = [&]() {
     std::lock_guard<std::mutex> guard(render_mutex);
     if (physical_alt_screen_active) {
@@ -1502,23 +1505,34 @@ ECM TerminalInterfaceService::LaunchTerminal(
     physical_alt_screen_active = true;
   };
   auto leave_physical_alt_screen = [&]() {
-    std::lock_guard<std::mutex> guard(render_mutex);
-    if (!physical_alt_screen_active) {
-      return;
+    {
+      std::lock_guard<std::mutex> guard(render_mutex);
+      if (!physical_alt_screen_active) {
+        return;
+      }
+      WriteTerminalBytes_(kTerminalExitAlternateScreen_);
+      physical_alt_screen_active = false;
+      have_last_server_screen_state = false;
+      last_server_in_alternate_screen = false;
+      last_rendered_lines.clear();
+      have_last_vt_snapshot = false;
+      last_vt_snapshot = {};
     }
-    WriteTerminalBytes_(kTerminalExitAlternateScreen_);
-    physical_alt_screen_active = false;
-    have_last_server_screen_state = false;
-    last_server_in_alternate_screen = false;
-    last_rendered_lines.clear();
-    have_last_vt_snapshot = false;
-    last_vt_snapshot = {};
+    local_viewport_offset.store(0, std::memory_order_release);
+    {
+      std::lock_guard<std::mutex> input_guard(local_input_mutex);
+      pending_local_input.clear();
+    }
   };
-  auto render_current_frame = [&]() {
+  std::function<void()> render_current_frame = [&]() {
     std::string frame = {};
     AMDomain::terminal::ChannelVtSnapshot vt_snapshot = {};
+    const uint64_t viewport_offset =
+        local_viewport_offset.load(std::memory_order_acquire);
     if (channel_port) {
-      auto frame_result = channel_port->GetRenderFrame();
+      AMDomain::terminal::ChannelRenderFrameArgs render_args = {};
+      render_args.viewport_offset = viewport_offset;
+      auto frame_result = channel_port->GetRenderFrame(render_args);
       if ((frame_result.rcm)) {
         vt_snapshot = frame_result.data.vt_snapshot;
         frame = std::move(frame_result.data.vt_visible_frame_ansi);
@@ -1526,6 +1540,9 @@ ECM TerminalInterfaceService::LaunchTerminal(
           frame = std::move(frame_result.data.vt_main_replay_ansi);
         }
       }
+    }
+    if (viewport_offset != 0U) {
+      vt_snapshot.cursor_visible = false;
     }
     std::lock_guard<std::mutex> guard(render_mutex);
     if (!physical_alt_screen_active) {
@@ -1607,8 +1624,156 @@ ECM TerminalInterfaceService::LaunchTerminal(
     (void)chunk;
     render_current_frame();
   };
-
   AMDomain::terminal::ChannelForegroundBindArgs bind_args = {};
+  auto load_vt_snapshot = [&]() -> AMDomain::terminal::ChannelVtSnapshot {
+    if (!channel_port) {
+      return {};
+    }
+    auto frame_result = channel_port->GetRenderFrame();
+    if (!(frame_result.rcm)) {
+      return {};
+    }
+    return frame_result.data.vt_snapshot;
+  };
+  auto clamp_local_viewport_offset =
+      [&](uint64_t desired_offset) -> uint64_t {
+    const auto vt_snapshot = load_vt_snapshot();
+    if (!vt_snapshot.available || vt_snapshot.in_alternate_screen) {
+      return 0U;
+    }
+    const uint64_t max_offset =
+        vt_snapshot.history_lines + vt_snapshot.display_offset;
+    return std::min(desired_offset, max_offset);
+  };
+  auto apply_local_viewport_offset =
+      [&](uint64_t desired_offset) -> bool {
+    const uint64_t clamped = clamp_local_viewport_offset(desired_offset);
+    const uint64_t old_offset =
+        local_viewport_offset.exchange(clamped, std::memory_order_acq_rel);
+    if (old_offset == clamped) {
+      return false;
+    }
+    render_current_frame();
+    return true;
+  };
+  auto exit_local_scrollback = [&]() -> bool {
+    return apply_local_viewport_offset(0U);
+  };
+  auto passthrough_escape_sequence =
+      [&](std::string &passthrough, size_t length) {
+    if (length == 0U || pending_local_input.size() < length) {
+      return;
+    }
+    if (local_viewport_offset.load(std::memory_order_acquire) != 0U) {
+      (void)exit_local_scrollback();
+    }
+    passthrough.append(pending_local_input.data(), length);
+    pending_local_input.erase(0, length);
+  };
+  bind_args.input_transformer = [&](std::string_view chunk) -> std::string {
+    std::lock_guard<std::mutex> input_guard(local_input_mutex);
+    pending_local_input.append(chunk.data(), chunk.size());
+    std::string passthrough = {};
+    auto page_step = [&]() -> uint64_t {
+      const auto vt_snapshot = load_vt_snapshot();
+      return static_cast<uint64_t>(std::max(1, vt_snapshot.rows));
+    };
+
+    while (!pending_local_input.empty()) {
+      const unsigned char first =
+          static_cast<unsigned char>(pending_local_input.front());
+      if (first != 0x1bU) {
+        if (local_viewport_offset.load(std::memory_order_acquire) != 0U) {
+          (void)exit_local_scrollback();
+        }
+        passthrough.push_back(pending_local_input.front());
+        pending_local_input.erase(0, 1U);
+        continue;
+      }
+
+      if (pending_local_input.size() == 1U) {
+        break;
+      }
+
+      if (pending_local_input[1] == '[') {
+        size_t final_pos = 2U;
+        while (final_pos < pending_local_input.size()) {
+          const unsigned char ch =
+              static_cast<unsigned char>(pending_local_input[final_pos]);
+          if (ch >= 0x40U && ch <= 0x7eU) {
+            break;
+          }
+          ++final_pos;
+        }
+        if (final_pos >= pending_local_input.size()) {
+          break;
+        }
+
+        const std::string seq = pending_local_input.substr(0, final_pos + 1U);
+        if (seq == "\x1b[5~") {
+          const uint64_t current =
+              local_viewport_offset.load(std::memory_order_acquire);
+          const uint64_t step = page_step();
+          const uint64_t desired =
+              (current > std::numeric_limits<uint64_t>::max() - step)
+                  ? std::numeric_limits<uint64_t>::max()
+                  : current + step;
+          (void)apply_local_viewport_offset(desired);
+          pending_local_input.erase(0, seq.size());
+          continue;
+        }
+        if (seq == "\x1b[6~") {
+          const uint64_t current =
+              local_viewport_offset.load(std::memory_order_acquire);
+          const uint64_t step = page_step();
+          (void)apply_local_viewport_offset(
+              current > step ? current - step : 0U);
+          pending_local_input.erase(0, seq.size());
+          continue;
+        }
+        if (seq == "\x1b[H" || seq == "\x1b[1~") {
+          (void)apply_local_viewport_offset(std::numeric_limits<uint64_t>::max());
+          pending_local_input.erase(0, seq.size());
+          continue;
+        }
+        if (seq == "\x1b[F" || seq == "\x1b[4~") {
+          (void)exit_local_scrollback();
+          pending_local_input.erase(0, seq.size());
+          continue;
+        }
+
+        passthrough_escape_sequence(passthrough, seq.size());
+        continue;
+      }
+
+      if (pending_local_input[1] == 'O') {
+        if (pending_local_input.size() < 3U) {
+          break;
+        }
+        const std::string seq = pending_local_input.substr(0, 3U);
+        if (seq == "\x1bOH") {
+          (void)apply_local_viewport_offset(std::numeric_limits<uint64_t>::max());
+          pending_local_input.erase(0, seq.size());
+          continue;
+        }
+        if (seq == "\x1bOF") {
+          (void)exit_local_scrollback();
+          pending_local_input.erase(0, seq.size());
+          continue;
+        }
+
+        passthrough_escape_sequence(passthrough, seq.size());
+        continue;
+      }
+
+      if (pending_local_input.size() < 2U) {
+        break;
+      }
+      passthrough_escape_sequence(passthrough, 2U);
+    }
+    return passthrough;
+  };
+
   bind_args.processor = render_from_channel_update;
   bind_args.key_event_handle = keyboard_monitor->WaitHandle();
   bind_args.key_cache = keyboard_monitor->KeyCache();

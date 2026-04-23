@@ -232,6 +232,19 @@ fn line_render_width(vt: &AmsVtHandle, line: Line) -> usize {
         .map_or(0, |index| index + 1)
 }
 
+fn effective_display_offset(vt: &AmsVtHandle, viewport_offset: u64) -> usize {
+    let grid = vt.term.grid();
+    min(
+        grid.history_size(),
+        grid.display_offset()
+            .saturating_add(min(viewport_offset, usize::MAX as u64) as usize),
+    )
+}
+
+fn visible_viewport_line(vt: &AmsVtHandle, row: usize, viewport_offset: u64) -> Line {
+    Line(row as i32 - effective_display_offset(vt, viewport_offset) as i32)
+}
+
 fn visible_line_render_width(vt: &AmsVtHandle, line: Line) -> usize {
     let width = line_render_width(vt, line);
     let cursor = vt.term.grid().cursor.point;
@@ -320,21 +333,23 @@ fn main_replay_row_count(vt: &AmsVtHandle) -> u64 {
     last_index.map_or(0, |index| index + 1)
 }
 
-fn visible_frame_row_count(vt: &AmsVtHandle) -> usize {
+fn visible_frame_row_count_with_offset(vt: &AmsVtHandle, viewport_offset: u64) -> usize {
     if vt.rows == 0 {
         return 0;
     }
 
     let grid = vt.term.grid();
     let cursor = grid.cursor.point;
-    let mut last_line = if cursor.column.0 > 0 {
-        Some(max(0, cursor.line.0) as usize)
+    let display_offset = effective_display_offset(vt, viewport_offset) as i32;
+    let cursor_row = cursor.line.0 + display_offset;
+    let mut last_line = if cursor.column.0 > 0 && cursor_row >= 0 && cursor_row < vt.rows as i32 {
+        Some(cursor_row as usize)
     } else {
         None
     };
 
     for row in 0..vt.rows {
-        if line_render_width(vt, Line(row as i32)) > 0 {
+        if line_render_width(vt, visible_viewport_line(vt, row, viewport_offset)) > 0 {
             last_line = Some(row);
         }
     }
@@ -494,14 +509,22 @@ pub extern "C" fn AmsVtRenderMainReplayAnsiUtf8(handle: *const AmsVtHandle) -> *
 
 #[no_mangle]
 pub extern "C" fn AmsVtRenderVisibleFrameAnsiUtf8(handle: *const AmsVtHandle) -> *mut c_char {
+    AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(handle, 0)
+}
+
+#[no_mangle]
+pub extern "C" fn AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(
+    handle: *const AmsVtHandle,
+    viewport_offset: u64,
+) -> *mut c_char {
     let Some(vt) = handle_ref(handle) else {
         return ptr::null_mut();
     };
 
-    let rows = visible_frame_row_count(vt);
+    let rows = visible_frame_row_count_with_offset(vt, viewport_offset);
     let mut out = String::new();
     for index in 0..rows {
-        let line = Line(index as i32);
+        let line = visible_viewport_line(vt, index, viewport_offset);
         let width = visible_line_render_width(vt, line);
         out.push_str(&render_line_ansi_with_width(vt, line, width));
         out.push_str("\x1b[K");

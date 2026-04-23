@@ -72,6 +72,7 @@ private:
   struct VtRenderCache_ {
     bool valid = false;
     uint64_t damage_serial = 0;
+    uint64_t viewport_offset = 0;
     bool in_alternate_screen = false;
     std::string main_replay_ansi = {};
     std::string visible_frame_ansi = {};
@@ -238,12 +239,16 @@ public:
     return out;
   }
 
-  [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult> GetRenderFrame() const {
+  [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
+  GetRenderFrame(
+      const AMT::ChannelRenderFrameArgs &render_args = {}) const {
     ECMData<AMT::ChannelRenderFrameResult> out = {};
     std::lock_guard<std::mutex> lock(mutex_);
     out.data.in_alternate_screen = state_.cache.in_alternate_screen;
     out.data.vt_snapshot = BuildVtSnapshotUnlocked_();
-    auto vt_render_bundle = BuildVtRenderBundleUnlocked_(out.data.vt_snapshot);
+    auto vt_render_bundle =
+        BuildVtRenderBundleUnlocked_(out.data.vt_snapshot,
+                                     render_args.viewport_offset);
     out.data.vt_main_replay_ansi =
         std::move(vt_render_bundle.main_replay_ansi).value_or("");
     out.data.vt_visible_frame_ansi =
@@ -746,12 +751,14 @@ private:
 #endif
   }
 
-  [[nodiscard]] std::optional<std::string> RenderVtVisibleFrameRawUnlocked_() const {
+  [[nodiscard]] std::optional<std::string>
+  RenderVtVisibleFrameRawUnlocked_(uint64_t viewport_offset) const {
 #ifdef AMSFTP_VT_STATIC
     if (state_.vt == nullptr) {
       return std::nullopt;
     }
-    char *rendered = AmsVtRenderVisibleFrameAnsiUtf8(state_.vt);
+    char *rendered =
+        AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(state_.vt, viewport_offset);
     if (rendered == nullptr) {
       return std::string{};
     }
@@ -769,7 +776,8 @@ private:
   };
 
   [[nodiscard]] VtRenderBundle_
-  BuildVtRenderBundleUnlocked_(const AMT::ChannelVtSnapshot &vt_snapshot) const {
+  BuildVtRenderBundleUnlocked_(const AMT::ChannelVtSnapshot &vt_snapshot,
+                               uint64_t viewport_offset = 0) const {
     VtRenderBundle_ out = {};
 #ifdef AMSFTP_VT_STATIC
     if (!vt_snapshot.available || state_.vt == nullptr) {
@@ -779,15 +787,17 @@ private:
 
     if (!vt_render_cache_.valid ||
         vt_render_cache_.damage_serial != vt_snapshot.damage_serial ||
+        vt_render_cache_.viewport_offset != viewport_offset ||
         vt_render_cache_.in_alternate_screen !=
             vt_snapshot.in_alternate_screen) {
       vt_render_cache_.valid = true;
       vt_render_cache_.damage_serial = vt_snapshot.damage_serial;
+      vt_render_cache_.viewport_offset = viewport_offset;
       vt_render_cache_.in_alternate_screen = vt_snapshot.in_alternate_screen;
       vt_render_cache_.main_replay_ansi =
           RenderVtMainReplayRawUnlocked_().value_or("");
       vt_render_cache_.visible_frame_ansi =
-          RenderVtVisibleFrameRawUnlocked_().value_or("");
+          RenderVtVisibleFrameRawUnlocked_(viewport_offset).value_or("");
     }
 
     out.main_replay_ansi = vt_render_cache_.main_replay_ansi;
