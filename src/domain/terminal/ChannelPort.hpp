@@ -4,6 +4,7 @@
 #include "foundation/core/DataClass.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -35,6 +36,21 @@ struct ChannelCacheReplayResult {
   ECM last_error = OK;
 };
 
+struct ChannelVtSnapshot {
+  bool available = false;
+  int rows = 0;
+  int cols = 0;
+  int cursor_row = 0;
+  int cursor_col = 0;
+  uint64_t history_lines = 0;
+  uint64_t total_lines = 0;
+  uint64_t display_offset = 0;
+  uint64_t damage_serial = 0;
+  bool in_alternate_screen = false;
+  bool cursor_visible = false;
+  size_t rendered_main_rows = 0;
+};
+
 struct ChannelReadWrappedResult {
   std::string output = {};
   std::string channel_name = {};
@@ -50,6 +66,8 @@ struct ChannelCacheCopyResult {
   bool in_alternate_screen = false;
   std::string latest_output = {};
   size_t cached_bytes = 0;
+  ChannelVtSnapshot vt_snapshot = {};
+  std::string vt_main_replay_ansi = {};
 };
 
 struct ChannelCacheTruncateArgs {

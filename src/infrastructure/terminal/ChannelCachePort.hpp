@@ -6,12 +6,16 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <fstream>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#ifdef AMSFTP_VT_STATIC
+#include "AmsVt.h"
+#endif
 
 namespace AMInfra::terminal {
 namespace AMT = AMDomain::terminal;
@@ -42,6 +46,12 @@ private:
 
     AMT::ChannelOutputProcessor consumer = {};
     ECM last_error = OK;
+
+#ifdef AMSFTP_VT_STATIC
+    AmsVtHandle *vt = nullptr;
+    int vt_rows = 24;
+    int vt_cols = 80;
+#endif
   };
 
   struct ScreenToggleMatch_ {
@@ -59,9 +69,10 @@ private:
   };
 
 public:
-  explicit ChannelCacheStore(std::string terminal_key, std::string channel_name,
-                             AMT::BufferExceedCallback buffer_exceed_callback = {},
-                             AMT::TerminalManagerArg terminal_manager_arg = {})
+  explicit ChannelCacheStore(
+      std::string terminal_key, std::string channel_name,
+      AMT::BufferExceedCallback buffer_exceed_callback = {},
+      AMT::TerminalManagerArg terminal_manager_arg = {})
       : terminal_key_(std::move(terminal_key)),
         channel_name_(std::move(channel_name)),
         buffer_exceed_callback_(std::move(buffer_exceed_callback)),
@@ -69,7 +80,13 @@ public:
     AMT::NormalizeTerminalManagerArg(&terminal_manager_arg_);
   }
 
-  ~ChannelCacheStore() { (void)DetachConsumer(); }
+  ~ChannelCacheStore() {
+    (void)DetachConsumer();
+#ifdef AMSFTP_VT_STATIC
+    std::lock_guard<std::mutex> lock(mutex_);
+    ResetVtUnlocked_();
+#endif
+  }
 
   [[nodiscard]] ECMData<AMT::ChannelCacheReplayResult>
   AttachConsumer(AMT::ChannelOutputProcessor processor) {
@@ -82,11 +99,13 @@ public:
 
     std::vector<AMT::OutputBlock> replay_blocks = {};
     std::string fallback_output = {};
+    std::optional<std::string> vt_main_replay = std::nullopt;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       ++state_.attach_epoch;
       replay_blocks = state_.cache.blocks;
       fallback_output = state_.latest_output;
+      vt_main_replay = RenderVtMainReplayUnlocked_();
       out.data.soft_limit_threshold_bytes =
           terminal_manager_arg_.channel_cache_threshold_bytes.warning;
       out.data.hard_limit_threshold_bytes =
@@ -104,15 +123,14 @@ public:
     }
 
     std::string main_content = {};
-    std::string latest_alt = {};
-    for (auto const &block : replay_blocks) {
-      if (block.data.empty()) {
-        continue;
-      }
-      if (block.screen == AMT::ScreenKind::Main) {
+    if (vt_main_replay.has_value()) {
+      main_content = std::move(*vt_main_replay);
+    } else {
+      for (auto const &block : replay_blocks) {
+        if (block.data.empty() || block.screen != AMT::ScreenKind::Main) {
+          continue;
+        }
         main_content.append(block.data);
-      } else {
-        latest_alt = block.data;
       }
     }
 
@@ -122,6 +140,13 @@ public:
       } catch (...) {
       }
       out.data.replayed_bytes += main_content.size();
+    }
+
+    std::string latest_alt = {};
+    for (auto const &block : replay_blocks) {
+      if (block.screen == AMT::ScreenKind::Alternate && !block.data.empty()) {
+        latest_alt = block.data;
+      }
     }
     if (out.data.in_alternate_screen) {
       try {
@@ -137,7 +162,8 @@ public:
       }
     }
 
-    if (out.data.replayed_bytes == 0 && !fallback_output.empty()) {
+    if (!vt_main_replay.has_value() && out.data.replayed_bytes == 0 &&
+        !fallback_output.empty()) {
       try {
         processor(fallback_output);
       } catch (...) {
@@ -175,14 +201,15 @@ public:
     return out;
   }
 
-  [[nodiscard]] ECMData<AMT::ChannelCacheCopyResult>
-  GetCacheCopy() const {
+  [[nodiscard]] ECMData<AMT::ChannelCacheCopyResult> GetCacheCopy() const {
     ECMData<AMT::ChannelCacheCopyResult> out = {};
     std::lock_guard<std::mutex> lock(mutex_);
     out.data.blocks = state_.cache.blocks;
     out.data.in_alternate_screen = state_.cache.in_alternate_screen;
     out.data.latest_output = state_.latest_output;
     out.data.cached_bytes = state_.cached_bytes;
+    out.data.vt_snapshot = BuildVtSnapshotUnlocked_();
+    out.data.vt_main_replay_ansi = RenderVtMainReplayUnlocked_().value_or("");
     out.rcm = OK;
     return out;
   }
@@ -197,7 +224,17 @@ public:
     state_.soft_limit_hit = false;
     state_.hard_limit_hit = false;
     state_.soft_warn_epoch = state_.attach_epoch;
+#ifdef AMSFTP_VT_STATIC
+    ResetVtUnlocked_();
+    EnsureVtUnlocked_(state_.vt_cols, state_.vt_rows);
+#endif
     return OK;
+  }
+
+  void ResizeViewport(int cols, int rows) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    EnsureVtUnlocked_(cols, rows);
+    ResizeVtUnlocked_(cols, rows);
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCacheTruncateResult>
@@ -239,6 +276,7 @@ public:
       if (state_.cache.blocks.empty()) {
         state_.cache.in_alternate_screen = false;
       }
+      RebuildVtFromCacheUnlocked_();
       if (state_.cached_bytes < soft_limit_bytes) {
         state_.soft_limit_hit = false;
       }
@@ -274,7 +312,6 @@ public:
       return out;
     }
 
-    DumpRawServerOutput_(read_result.data.output);
     out.data.output = read_result.data.output;
     out.data.eof = read_result.data.eof;
 
@@ -292,6 +329,7 @@ public:
                                         read_result.data.output);
         state_.cache.in_alternate_screen = parsed.in_alternate_screen;
         state_.pending_escape_tail = std::move(parsed.pending_escape_tail);
+        FeedMainBlocksToVtUnlocked_(parsed.blocks);
 
         for (auto &block : parsed.blocks) {
           if (block.data.empty()) {
@@ -308,14 +346,14 @@ public:
         state_.cached_bytes += parsed.appended_bytes;
         if (!state_.soft_limit_hit && state_.cached_bytes >= soft_limit_bytes) {
           state_.soft_limit_hit = true;
-          soft_limit_event = AMT::BufferExceedEvent{
-              terminal_key_,
-              channel_name_,
-              AMT::BufferExceedThresholdKind::Soft,
-              state_.cached_bytes,
-              soft_limit_bytes,
-              state_.cache.in_alternate_screen,
-              state_.last_error};
+          soft_limit_event =
+              AMT::BufferExceedEvent{terminal_key_,
+                                     channel_name_,
+                                     AMT::BufferExceedThresholdKind::Soft,
+                                     state_.cached_bytes,
+                                     soft_limit_bytes,
+                                     state_.cache.in_alternate_screen,
+                                     state_.last_error};
           if (state_.soft_warn_epoch != state_.attach_epoch) {
             out.data.soft_limit_hit_now = true;
             state_.soft_warn_epoch = state_.attach_epoch;
@@ -325,20 +363,21 @@ public:
         if (!state_.hard_limit_hit && state_.cached_bytes >= hard_limit_bytes) {
           state_.hard_limit_hit = true;
           hard_limit_hit_now = true;
-          state_.last_error = Err(ErrorCode::FilesystemNoSpace,
-                                  "terminal.channel.cache.limit", channel_name_,
-                                  AMStr::fmt("Terminal output cache hard limit "
-                                             "exceeded ({}); channel closed",
-                                             AMStr::FormatSize(hard_limit_bytes)));
+          state_.last_error =
+              Err(ErrorCode::FilesystemNoSpace, "terminal.channel.cache.limit",
+                  channel_name_,
+                  AMStr::fmt("Terminal output cache hard limit "
+                             "exceeded ({}); channel closed",
+                             AMStr::FormatSize(hard_limit_bytes)));
           state_.closed = true;
-          hard_limit_event = AMT::BufferExceedEvent{
-              terminal_key_,
-              channel_name_,
-              AMT::BufferExceedThresholdKind::Hard,
-              state_.cached_bytes,
-              hard_limit_bytes,
-              state_.cache.in_alternate_screen,
-              state_.last_error};
+          hard_limit_event =
+              AMT::BufferExceedEvent{terminal_key_,
+                                     channel_name_,
+                                     AMT::BufferExceedThresholdKind::Hard,
+                                     state_.cached_bytes,
+                                     hard_limit_bytes,
+                                     state_.cache.in_alternate_screen,
+                                     state_.last_error};
         }
 
         if (state_.attached && state_.consumer) {
@@ -383,11 +422,12 @@ public:
     if (hard_limit_hit_now) {
       out.data.eof = true;
       out.data.hard_limit_hit = true;
-      out.data.last_error = Err(
-          ErrorCode::FilesystemNoSpace, "terminal.channel.cache.limit",
-          channel_name_, AMStr::fmt("Terminal output cache hard limit exceeded "
-                                    "({}); channel closed",
-                                    AMStr::FormatSize(hard_limit_bytes)));
+      out.data.last_error =
+          Err(ErrorCode::FilesystemNoSpace, "terminal.channel.cache.limit",
+              channel_name_,
+              AMStr::fmt("Terminal output cache hard limit exceeded "
+                         "({}); channel closed",
+                         AMStr::FormatSize(hard_limit_bytes)));
       out.rcm = out.data.last_error;
       return out;
     }
@@ -521,22 +561,6 @@ private:
            code == ErrorCode::ClientNotFound;
   }
 
-  static void DumpRawServerOutput_(std::string_view output) {
-    if (output.empty()) {
-      return;
-    }
-    static std::once_flag reset_once;
-    std::call_once(reset_once, []() {
-      std::ofstream("tmp.txt", std::ios::binary | std::ios::trunc);
-    });
-    std::ofstream dump_file("tmp.txt", std::ios::binary | std::ios::app);
-    if (!dump_file) {
-      return;
-    }
-    dump_file.write(output.data(),
-                    static_cast<std::streamsize>(output.size()));
-  }
-
   static void RemovePrefixFromBlocks_(size_t remove_bytes,
                                       std::vector<AMT::OutputBlock> *blocks) {
     if (!blocks || remove_bytes == 0U) {
@@ -575,6 +599,142 @@ private:
     }
     return min_remove_bytes;
   }
+
+  void EnsureVtUnlocked_(int cols, int rows) {
+#ifdef AMSFTP_VT_STATIC
+    state_.vt_cols = std::max(1, cols);
+    state_.vt_rows = std::max(1, rows);
+    if (state_.vt != nullptr) {
+      return;
+    }
+    const uint64_t scrollback_limit = std::clamp<uint64_t>(
+        terminal_manager_arg_.channel_cache_threshold_bytes.terminate /
+            static_cast<size_t>(std::max(1, state_.vt_cols)),
+        10000U, 500000U);
+    state_.vt = AmsVtCreate(state_.vt_rows, state_.vt_cols, scrollback_limit);
+#else
+    (void)cols;
+    (void)rows;
+#endif
+  }
+
+  void ResizeVtUnlocked_(int cols, int rows) {
+#ifdef AMSFTP_VT_STATIC
+    EnsureVtUnlocked_(cols, rows);
+    if (state_.vt != nullptr) {
+      AmsVtResize(state_.vt, state_.vt_rows, state_.vt_cols);
+    }
+#else
+    (void)cols;
+    (void)rows;
+#endif
+  }
+
+  void ResetVtUnlocked_() {
+#ifdef AMSFTP_VT_STATIC
+    if (state_.vt != nullptr) {
+      AmsVtFree(state_.vt);
+      state_.vt = nullptr;
+    }
+#endif
+  }
+
+  void
+  FeedMainBlocksToVtUnlocked_(const std::vector<AMT::OutputBlock> &blocks) {
+#ifdef AMSFTP_VT_STATIC
+    EnsureVtUnlocked_(state_.vt_cols, state_.vt_rows);
+    if (state_.vt == nullptr) {
+      return;
+    }
+    for (const auto &block : blocks) {
+      if (block.screen != AMT::ScreenKind::Main || block.data.empty()) {
+        continue;
+      }
+      AmsVtFeed(state_.vt, reinterpret_cast<const uint8_t *>(block.data.data()),
+                block.data.size());
+    }
+#else
+    (void)blocks;
+#endif
+  }
+
+  void RebuildVtFromCacheUnlocked_() {
+#ifdef AMSFTP_VT_STATIC
+    ResetVtUnlocked_();
+    EnsureVtUnlocked_(state_.vt_cols, state_.vt_rows);
+    FeedMainBlocksToVtUnlocked_(state_.cache.blocks);
+#endif
+  }
+
+  [[nodiscard]] std::optional<std::string> RenderVtMainReplayUnlocked_() const {
+#ifdef AMSFTP_VT_STATIC
+    if (state_.vt == nullptr) {
+      return std::nullopt;
+    }
+    char *rendered = AmsVtRenderMainReplayAnsiUtf8(state_.vt);
+    if (rendered == nullptr) {
+      return std::string{};
+    }
+    std::string out(rendered);
+    AmsVtFreeString(rendered);
+    return out;
+#else
+    return std::nullopt;
+#endif
+  }
+
+  [[nodiscard]] AMT::ChannelVtSnapshot BuildVtSnapshotUnlocked_() const {
+    AMT::ChannelVtSnapshot out = {};
+#ifdef AMSFTP_VT_STATIC
+    if (state_.vt == nullptr) {
+      return out;
+    }
+    const AmsVtSnapshot snapshot = AmsVtGetSnapshot(state_.vt);
+    out.available = true;
+    out.rows = snapshot.rows;
+    out.cols = snapshot.cols;
+    out.cursor_row = snapshot.cursor_row;
+    out.cursor_col = snapshot.cursor_col;
+    out.history_lines = snapshot.history_lines;
+    out.total_lines = snapshot.total_lines;
+    out.display_offset = snapshot.display_offset;
+    out.damage_serial = snapshot.damage_serial;
+    out.in_alternate_screen = snapshot.in_alternate_screen != 0U;
+    out.cursor_visible = snapshot.cursor_visible != 0U;
+    out.rendered_main_rows = EstimateRenderedMainRowsFromVt_(snapshot);
+#endif
+    return out;
+  }
+
+#ifdef AMSFTP_VT_STATIC
+  [[nodiscard]] size_t
+  EstimateRenderedMainRowsFromVt_(const AmsVtSnapshot &snapshot) const {
+    if (state_.vt == nullptr || snapshot.total_lines == 0U ||
+        snapshot.rows <= 0) {
+      return 0U;
+    }
+
+    const uint64_t cursor_index =
+        snapshot.history_lines +
+        static_cast<uint64_t>(std::max(0, snapshot.cursor_row));
+    uint64_t rows = std::min(snapshot.total_lines, cursor_index + 1U);
+    if (rows == 0U) {
+      return 0U;
+    }
+
+    char *last_line = AmsVtRenderBufferLineUtf8(state_.vt, rows - 1U);
+    std::string last_text = {};
+    if (last_line != nullptr) {
+      last_text = last_line;
+      AmsVtFreeString(last_line);
+    }
+    if (snapshot.cursor_col == 0 && last_text.empty() && rows > 0U) {
+      --rows;
+    }
+    return static_cast<size_t>(std::min<uint64_t>(
+        rows, static_cast<uint64_t>(std::numeric_limits<size_t>::max())));
+  }
+#endif
 
 public:
   void SetChannelName(std::string channel_name) {

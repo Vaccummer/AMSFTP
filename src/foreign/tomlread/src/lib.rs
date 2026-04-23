@@ -9,6 +9,9 @@ use std::{
 };
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
+#[path = "../../vt/src/lib.rs"]
+mod vt_exports;
+
 pub struct ConfigHandle {
     doc: DocumentMut,
     schema: J,
