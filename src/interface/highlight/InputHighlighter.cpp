@@ -98,6 +98,8 @@ std::optional<StyleIndex> ResolveStyleIndex_(TokenRole role, TokenState state) {
     return StyleIndex::VarnameZone;
   case TokenRole::VariableValue:
     return StyleIndex::VarValue;
+  case TokenRole::FindPattern:
+    return StyleIndex::FindPattern;
   case TokenRole::AtSign:
     return StyleIndex::AtSign;
   case TokenRole::DollarSign:

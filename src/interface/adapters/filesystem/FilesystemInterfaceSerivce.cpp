@@ -626,16 +626,30 @@ ECM FilesystemInterfaceSerivce::GetSize(
 ECM FilesystemInterfaceSerivce::Find(
     const FilesystemFindArg &arg,
     const std::optional<ControlComponent> &control_opt) const {
-  auto split_result = SplitRawTarget(arg.raw_path);
+  const std::string raw_path = AMStr::Strip(arg.raw_path);
+  if (raw_path.empty()) {
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No find target is given");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto split_result = SplitRawTarget(raw_path);
   if (!(split_result.rcm)) {
     prompt_io_manager_.ErrorFormat(split_result.rcm);
     return split_result.rcm;
+  }
+  PathTarget target = std::move(split_result.data);
+  const std::string raw_pattern = AMStr::Strip(arg.raw_pattern);
+  const bool recursive_pattern_mode = !raw_pattern.empty();
+  if (recursive_pattern_mode) {
+    target.path = AMPath::join(target.path.empty() ? "." : target.path, "**",
+                               raw_pattern, SepType::Unix);
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   ECM status = OK;
   auto result = filesystem_service_.find(
-      split_result.data, SearchType::All, control, {},
+      target, SearchType::All, control, {},
       [this, &status](const PathTarget &, ECM rcm) {
         prompt_io_manager_.ErrorFormat(rcm);
         status = MergeStatus_(status, rcm);
@@ -649,11 +663,10 @@ ECM FilesystemInterfaceSerivce::Find(
     status = MergeStatus_(status, result.rcm);
   }
 
-  const std::string pattern = AMStr::Strip(arg.raw_path).empty()
-                                  ? split_result.data.path
-                                  : AMStr::Strip(arg.raw_path);
+  const std::string pattern_label =
+      recursive_pattern_mode ? raw_pattern : raw_path;
   prompt_io_manager_.FmtPrint("Find {} Result for pattern \"{}\"",
-                              result.data.size(), pattern);
+                              result.data.size(), pattern_label);
   for (const auto &entry : result.data) {
     prompt_io_manager_.Print(style_service_.Format(
         entry.path, AMInterface::style::StyleIndex::None, &entry));

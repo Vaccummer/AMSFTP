@@ -30,6 +30,7 @@ struct FilesystemGetSizeArg {
 
 struct FilesystemFindArg {
   std::string raw_path = {};
+  std::string raw_pattern = {};
 };
 
 struct FilesystemRealpathArg {

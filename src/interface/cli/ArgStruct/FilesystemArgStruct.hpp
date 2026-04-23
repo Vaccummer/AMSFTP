@@ -181,17 +181,25 @@ struct SizeArgs : BaseArgStruct {
 };
 
 struct FindArgs : BaseArgStruct {
-  std::string path = {};
+  std::vector<std::string> tokens = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    std::string resolved = path;
+    auto resolved = tokens;
     managers.interfaces.var_interface_service->VSubstitutePathLike(resolved);
     AMInterface::filesystem::FilesystemFindArg arg = {};
-    arg.raw_path = resolved;
+    if (resolved.size() == 1) {
+      arg.raw_path = resolved.front();
+    } else if (resolved.size() == 2) {
+      arg.raw_path = resolved.front();
+      arg.raw_pattern = resolved.back();
+    } else {
+      return Err(EC::InvalidArg, "", "",
+                 "find requires one pattern or path plus pattern");
+    }
     return managers.interfaces.filesystem_interface_service->Find(arg);
   }
-  void reset() override { path.clear(); }
+  void reset() override { tokens.clear(); }
 };
 
 struct MkdirArgs : BaseArgStruct {

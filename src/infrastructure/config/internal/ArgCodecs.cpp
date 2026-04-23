@@ -1469,6 +1469,7 @@ void DecodePathHighlight_(const Json &json, PathHighlightStyle *out) {
                          &out->type_otherspecial);
   (void)AMJson::QueryKey(json, {"type", "nonexistent"},
                          &out->type_nonexistent);
+  (void)AMJson::QueryKey(json, {"find", "pattern"}, &out->find_pattern);
   if (out->default_style.empty()) {
     out->default_style = out->type_regular;
   }
@@ -1477,6 +1478,9 @@ void DecodePathHighlight_(const Json &json, PathHighlightStyle *out) {
   }
   if (out->tree_leaf.empty()) {
     out->tree_leaf = out->type_regular;
+  }
+  if (out->find_pattern.empty()) {
+    out->find_pattern = out->type_regular;
   }
 }
 
@@ -1491,6 +1495,7 @@ Json EncodePathHighlight_(const PathHighlightStyle &in) {
   out["type"]["symlink"] = in.type_symlink;
   out["type"]["otherspecial"] = in.type_otherspecial;
   out["type"]["nonexistent"] = in.type_nonexistent;
+  out["find"]["pattern"] = in.find_pattern;
   return out;
 }
 

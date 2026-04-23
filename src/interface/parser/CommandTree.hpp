@@ -19,6 +19,7 @@ namespace AMInterface::parser {
 enum class AMCommandArgSemantic {
   None = 0,
   Path,
+  FindPattern,
   Url,
   ShellCmd,
   HostNickname,

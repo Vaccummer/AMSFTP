@@ -102,6 +102,8 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.common.default_style;
   case StyleIndex::PathLike:
     return &cfg.common.default_style;
+  case StyleIndex::FindPattern:
+    return &cfg.path.find_pattern;
   case StyleIndex::TableSkeleton:
     return &cfg.common.type_table_skeleton;
   case StyleIndex::None:
