@@ -21,6 +21,7 @@ pub struct AmsVtSnapshot {
     total_lines: u64,
     display_offset: u64,
     damage_serial: u64,
+    rendered_main_rows: u64,
     in_alternate_screen: u8,
     cursor_visible: u8,
 }
@@ -272,6 +273,12 @@ fn render_line_ansi(vt: &AmsVtHandle, line: Line) -> String {
     out
 }
 
+fn line_is_wrapped(vt: &AmsVtHandle, line: Line) -> bool {
+    vt.term.grid()[line][Column(vt.cols - 1)]
+        .flags
+        .contains(Flags::WRAPLINE)
+}
+
 fn main_replay_row_count(vt: &AmsVtHandle) -> u64 {
     let grid = vt.term.grid();
     let history_lines = grid.history_size() as u64;
@@ -296,6 +303,28 @@ fn main_replay_row_count(vt: &AmsVtHandle) -> u64 {
     }
 
     last_index.map_or(0, |index| index + 1)
+}
+
+fn visible_frame_row_count(vt: &AmsVtHandle) -> usize {
+    if vt.rows == 0 {
+        return 0;
+    }
+
+    let grid = vt.term.grid();
+    let cursor = grid.cursor.point;
+    let mut last_line = if cursor.column.0 > 0 {
+        Some(max(0, cursor.line.0) as usize)
+    } else {
+        None
+    };
+
+    for row in 0..vt.rows {
+        if line_render_width(vt, Line(row as i32)) > 0 {
+            last_line = Some(row);
+        }
+    }
+
+    last_line.map_or(0, |line| line + 1)
 }
 
 #[no_mangle]
@@ -359,6 +388,7 @@ pub extern "C" fn AmsVtGetSnapshot(handle: *const AmsVtHandle) -> AmsVtSnapshot 
             total_lines: 0,
             display_offset: 0,
             damage_serial: 0,
+            rendered_main_rows: 0,
             in_alternate_screen: 0,
             cursor_visible: 0,
         };
@@ -377,6 +407,11 @@ pub extern "C" fn AmsVtGetSnapshot(handle: *const AmsVtHandle) -> AmsVtSnapshot 
         total_lines: history_lines + vt.rows as u64,
         display_offset: grid.display_offset() as u64,
         damage_serial: vt.damage_serial,
+        rendered_main_rows: if vt.term.mode().contains(TermMode::ALT_SCREEN) {
+            0
+        } else {
+            main_replay_row_count(vt)
+        },
         in_alternate_screen: u8::from(vt.term.mode().contains(TermMode::ALT_SCREEN)),
         cursor_visible: u8::from(vt.term.mode().contains(TermMode::SHOW_CURSOR)),
     }
@@ -423,6 +458,9 @@ pub extern "C" fn AmsVtRenderMainReplayAnsiUtf8(handle: *const AmsVtHandle) -> *
     let Some(vt) = handle_ref(handle) else {
         return ptr::null_mut();
     };
+    if vt.term.mode().contains(TermMode::ALT_SCREEN) {
+        return empty_c_string();
+    }
 
     let history_lines = vt.term.grid().history_size() as u64;
     let rows = main_replay_row_count(vt);
@@ -431,11 +469,27 @@ pub extern "C" fn AmsVtRenderMainReplayAnsiUtf8(handle: *const AmsVtHandle) -> *
         let line = buffer_index_to_line(history_lines, index);
         out.push_str(&render_line_ansi(vt, line));
         if index + 1 < rows {
-            let row = &vt.term.grid()[line];
-            let wrapped = row[Column(vt.cols - 1)].flags.contains(Flags::WRAPLINE);
-            if !wrapped {
+            if !line_is_wrapped(vt, line) {
                 out.push_str("\r\n");
             }
+        }
+    }
+    into_c_string(out)
+}
+
+#[no_mangle]
+pub extern "C" fn AmsVtRenderVisibleFrameAnsiUtf8(handle: *const AmsVtHandle) -> *mut c_char {
+    let Some(vt) = handle_ref(handle) else {
+        return ptr::null_mut();
+    };
+
+    let rows = visible_frame_row_count(vt);
+    let mut out = String::new();
+    for index in 0..rows {
+        let line = Line(index as i32);
+        out.push_str(&render_line_ansi(vt, line));
+        if index + 1 < rows && !line_is_wrapped(vt, line) {
+            out.push_str("\r\n");
         }
     }
     into_c_string(out)

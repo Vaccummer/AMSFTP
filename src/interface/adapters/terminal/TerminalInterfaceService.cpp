@@ -566,35 +566,6 @@ private:
   std::string main_screen_buffer_ = {};
 };
 
-[[nodiscard]] size_t RenderedRowsForMainCacheBlocks_(
-    const std::vector<AMDomain::terminal::OutputBlock> &blocks,
-    int viewport_cols) {
-  const int cols = std::max(1, viewport_cols);
-  size_t rows = 0U;
-  for (const auto &block : blocks) {
-    if (block.screen != AMDomain::terminal::ScreenKind::Main ||
-        block.data.empty()) {
-      continue;
-    }
-    MainScreenRenderTracker_ segment = {};
-    segment.Reset(cols, false);
-    segment.Observe(block.data);
-    rows += segment.RenderedRows();
-  }
-  return rows;
-}
-
-[[nodiscard]] size_t RenderedRowsForReplayAnsi_(std::string_view replay_ansi,
-                                                int viewport_cols) {
-  if (replay_ansi.empty()) {
-    return 0U;
-  }
-  MainScreenRenderTracker_ tracker = {};
-  tracker.Reset(std::max(1, viewport_cols), false);
-  tracker.Observe(replay_ansi);
-  return tracker.RenderedRows();
-}
-
 } // namespace
 
 class ScopedRawTerminal_ final : public NonCopyableNonMovable {
@@ -1519,26 +1490,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
   auto clear_terminal_frame = [&]() -> size_t {
     std::lock_guard<std::mutex> guard(render_mutex);
     const int viewport_cols = AMTerminalTools::GetTerminalViewportInfo().cols;
-    size_t rows = 0U;
-    if (channel_port) {
-      auto cache_result = channel_port->GetCacheCopy();
-      if ((cache_result.rcm)) {
-        if (!cache_result.data.vt_main_replay_ansi.empty()) {
-          rows = RenderedRowsForReplayAnsi_(cache_result.data.vt_main_replay_ansi,
-                                            viewport_cols);
-        }
-        if (cache_result.data.vt_snapshot.available) {
-          rows = std::max(rows, cache_result.data.vt_snapshot.rendered_main_rows);
-        }
-        if (rows == 0U) {
-          rows = RenderedRowsForMainCacheBlocks_(cache_result.data.blocks,
-                                                 viewport_cols);
-        }
-      }
-    }
-    if (rows == 0U) {
-      rows = render_tracker.RenderedRowsForViewport(viewport_cols);
-    }
+    const size_t rows = render_tracker.RenderedRowsForViewport(viewport_cols);
     render_tracker.ClearRowsInTerminal(rows);
     return rows;
   };
