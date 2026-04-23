@@ -356,6 +356,11 @@ public:
     return cache_.GetCacheCopy();
   }
 
+  [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
+  GetRenderFrame() const override {
+    return cache_.GetRenderFrame();
+  }
+
   ECM ClearCache() override { return cache_.ClearCache(); }
 
   [[nodiscard]] ECMData<AMT::ChannelCacheTruncateResult> TruncateCache(

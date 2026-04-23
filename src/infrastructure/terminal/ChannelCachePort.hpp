@@ -68,6 +68,16 @@ private:
     size_t appended_bytes = 0;
   };
 
+#ifdef AMSFTP_VT_STATIC
+  struct VtRenderCache_ {
+    bool valid = false;
+    uint64_t damage_serial = 0;
+    bool in_alternate_screen = false;
+    std::string main_replay_ansi = {};
+    std::string visible_frame_ansi = {};
+  };
+#endif
+
 public:
   explicit ChannelCacheStore(
       std::string terminal_key, std::string channel_name,
@@ -106,8 +116,10 @@ public:
       ++state_.attach_epoch;
       replay_blocks = state_.cache.blocks;
       fallback_output = state_.latest_output;
-      vt_main_replay = RenderVtMainReplayUnlocked_();
-      vt_visible_frame = RenderVtVisibleFrameUnlocked_();
+      const AMT::ChannelVtSnapshot vt_snapshot = BuildVtSnapshotUnlocked_();
+      auto vt_render_bundle = BuildVtRenderBundleUnlocked_(vt_snapshot);
+      vt_main_replay = std::move(vt_render_bundle.main_replay_ansi);
+      vt_visible_frame = std::move(vt_render_bundle.visible_frame_ansi);
       out.data.soft_limit_threshold_bytes =
           terminal_manager_arg_.channel_cache_threshold_bytes.warning;
       out.data.hard_limit_threshold_bytes =
@@ -217,9 +229,25 @@ public:
     out.data.latest_output = state_.latest_output;
     out.data.cached_bytes = state_.cached_bytes;
     out.data.vt_snapshot = BuildVtSnapshotUnlocked_();
-    out.data.vt_main_replay_ansi = RenderVtMainReplayUnlocked_().value_or("");
+    auto vt_render_bundle = BuildVtRenderBundleUnlocked_(out.data.vt_snapshot);
+    out.data.vt_main_replay_ansi =
+        std::move(vt_render_bundle.main_replay_ansi).value_or("");
     out.data.vt_visible_frame_ansi =
-        RenderVtVisibleFrameUnlocked_().value_or("");
+        std::move(vt_render_bundle.visible_frame_ansi).value_or("");
+    out.rcm = OK;
+    return out;
+  }
+
+  [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult> GetRenderFrame() const {
+    ECMData<AMT::ChannelRenderFrameResult> out = {};
+    std::lock_guard<std::mutex> lock(mutex_);
+    out.data.in_alternate_screen = state_.cache.in_alternate_screen;
+    out.data.vt_snapshot = BuildVtSnapshotUnlocked_();
+    auto vt_render_bundle = BuildVtRenderBundleUnlocked_(out.data.vt_snapshot);
+    out.data.vt_main_replay_ansi =
+        std::move(vt_render_bundle.main_replay_ansi).value_or("");
+    out.data.vt_visible_frame_ansi =
+        std::move(vt_render_bundle.visible_frame_ansi).value_or("");
     out.rcm = OK;
     return out;
   }
@@ -646,6 +674,7 @@ private:
       AmsVtFree(state_.vt);
       state_.vt = nullptr;
     }
+    vt_render_cache_ = {};
 #endif
   }
 
@@ -696,7 +725,7 @@ private:
 #endif
   }
 
-  [[nodiscard]] std::optional<std::string> RenderVtMainReplayUnlocked_() const {
+  [[nodiscard]] std::optional<std::string> RenderVtMainReplayRawUnlocked_() const {
 #ifdef AMSFTP_VT_STATIC
     if (state_.vt == nullptr) {
       return std::nullopt;
@@ -717,7 +746,7 @@ private:
 #endif
   }
 
-  [[nodiscard]] std::optional<std::string> RenderVtVisibleFrameUnlocked_() const {
+  [[nodiscard]] std::optional<std::string> RenderVtVisibleFrameRawUnlocked_() const {
 #ifdef AMSFTP_VT_STATIC
     if (state_.vt == nullptr) {
       return std::nullopt;
@@ -732,6 +761,41 @@ private:
 #else
     return std::nullopt;
 #endif
+  }
+
+  struct VtRenderBundle_ {
+    std::optional<std::string> main_replay_ansi = std::nullopt;
+    std::optional<std::string> visible_frame_ansi = std::nullopt;
+  };
+
+  [[nodiscard]] VtRenderBundle_
+  BuildVtRenderBundleUnlocked_(const AMT::ChannelVtSnapshot &vt_snapshot) const {
+    VtRenderBundle_ out = {};
+#ifdef AMSFTP_VT_STATIC
+    if (!vt_snapshot.available || state_.vt == nullptr) {
+      vt_render_cache_ = {};
+      return out;
+    }
+
+    if (!vt_render_cache_.valid ||
+        vt_render_cache_.damage_serial != vt_snapshot.damage_serial ||
+        vt_render_cache_.in_alternate_screen !=
+            vt_snapshot.in_alternate_screen) {
+      vt_render_cache_.valid = true;
+      vt_render_cache_.damage_serial = vt_snapshot.damage_serial;
+      vt_render_cache_.in_alternate_screen = vt_snapshot.in_alternate_screen;
+      vt_render_cache_.main_replay_ansi =
+          RenderVtMainReplayRawUnlocked_().value_or("");
+      vt_render_cache_.visible_frame_ansi =
+          RenderVtVisibleFrameRawUnlocked_().value_or("");
+    }
+
+    out.main_replay_ansi = vt_render_cache_.main_replay_ansi;
+    out.visible_frame_ansi = vt_render_cache_.visible_frame_ansi;
+#else
+    (void)vt_snapshot;
+#endif
+    return out;
   }
 
   [[nodiscard]] AMT::ChannelVtSnapshot BuildVtSnapshotUnlocked_() const {
@@ -773,6 +837,9 @@ private:
 
   mutable std::mutex mutex_ = {};
   RuntimeState_ state_ = {};
+#ifdef AMSFTP_VT_STATIC
+  mutable VtRenderCache_ vt_render_cache_ = {};
+#endif
 };
 
 } // namespace AMInfra::terminal

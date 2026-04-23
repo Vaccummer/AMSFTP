@@ -314,11 +314,33 @@ void WriteTerminalBytes_(std::string_view text) {
   std::fflush(stdout);
 }
 
+[[nodiscard]] std::vector<std::string>
+SplitAnsiFrameLines_(std::string_view frame) {
+  std::vector<std::string> lines = {};
+  if (frame.empty()) {
+    return lines;
+  }
+
+  size_t start = 0;
+  while (start < frame.size()) {
+    size_t end = frame.find("\r\n", start);
+    if (end == std::string_view::npos) {
+      lines.emplace_back(frame.substr(start));
+      return lines;
+    }
+    lines.emplace_back(frame.substr(start, end - start));
+    start = end + 2U;
+  }
+
+  if (frame.ends_with("\r\n")) {
+    lines.emplace_back();
+  }
+  return lines;
+}
+
 constexpr const char *kTerminalEnterAlternateScreen_ = "\x1b[?1049h";
 constexpr const char *kTerminalExitAlternateScreen_ = "\x1b[?1049l";
-constexpr const char *kTerminalHome_ = "\x1b[H";
 constexpr const char *kTerminalClearAndHome_ = "\x1b[H\x1b[2J";
-constexpr const char *kTerminalClearToEnd_ = "\x1b[J";
 
 class MainScreenRenderTracker_ final : NonCopyableNonMovable {
 public:
@@ -1467,6 +1489,9 @@ ECM TerminalInterfaceService::LaunchTerminal(
   bool physical_alt_screen_active = false;
   bool have_last_server_screen_state = false;
   bool last_server_in_alternate_screen = false;
+  std::vector<std::string> last_rendered_lines = {};
+  bool have_last_vt_snapshot = false;
+  AMDomain::terminal::ChannelVtSnapshot last_vt_snapshot = {};
   auto enter_physical_alt_screen = [&]() {
     std::lock_guard<std::mutex> guard(render_mutex);
     if (physical_alt_screen_active) {
@@ -1485,17 +1510,20 @@ ECM TerminalInterfaceService::LaunchTerminal(
     physical_alt_screen_active = false;
     have_last_server_screen_state = false;
     last_server_in_alternate_screen = false;
+    last_rendered_lines.clear();
+    have_last_vt_snapshot = false;
+    last_vt_snapshot = {};
   };
   auto render_current_frame = [&]() {
     std::string frame = {};
     AMDomain::terminal::ChannelVtSnapshot vt_snapshot = {};
     if (channel_port) {
-      auto cache_result = channel_port->GetCacheCopy();
-      if ((cache_result.rcm)) {
-        vt_snapshot = cache_result.data.vt_snapshot;
-        frame = std::move(cache_result.data.vt_visible_frame_ansi);
+      auto frame_result = channel_port->GetRenderFrame();
+      if ((frame_result.rcm)) {
+        vt_snapshot = frame_result.data.vt_snapshot;
+        frame = std::move(frame_result.data.vt_visible_frame_ansi);
         if (frame.empty()) {
-          frame = std::move(cache_result.data.vt_main_replay_ansi);
+          frame = std::move(frame_result.data.vt_main_replay_ansi);
         }
       }
     }
@@ -1503,16 +1531,61 @@ ECM TerminalInterfaceService::LaunchTerminal(
     if (!physical_alt_screen_active) {
       return;
     }
-    std::string repaint = {};
-    repaint.reserve(frame.size() + 96U);
-    repaint += "\x1b[?25l";
-    repaint += "\x1b[0m";
+    const std::vector<std::string> current_lines = SplitAnsiFrameLines_(frame);
     const bool force_full_clear =
         !have_last_server_screen_state ||
         last_server_in_alternate_screen != vt_snapshot.in_alternate_screen;
-    repaint += force_full_clear ? kTerminalClearAndHome_ : kTerminalHome_;
-    repaint += frame;
-    repaint += kTerminalClearToEnd_;
+    const bool lines_changed = force_full_clear || current_lines != last_rendered_lines;
+
+    if (!lines_changed && vt_snapshot.available && have_last_vt_snapshot) {
+      const bool cursor_changed =
+          vt_snapshot.cursor_row != last_vt_snapshot.cursor_row ||
+          vt_snapshot.cursor_col != last_vt_snapshot.cursor_col ||
+          vt_snapshot.cursor_visible != last_vt_snapshot.cursor_visible;
+      if (!cursor_changed) {
+        return;
+      }
+      std::string cursor_only = {};
+      cursor_only.reserve(48U);
+      const int cursor_row = std::max(1, vt_snapshot.cursor_row + 1);
+      const int cursor_col = std::max(1, vt_snapshot.cursor_col + 1);
+      cursor_only += AMStr::fmt("\x1b[{};{}H", cursor_row, cursor_col);
+      cursor_only += vt_snapshot.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
+      WriteTerminalBytes_(cursor_only);
+      last_vt_snapshot = vt_snapshot;
+      return;
+    }
+
+    std::string repaint = {};
+    repaint.reserve(frame.size() + current_lines.size() * 24U + 128U);
+    repaint += "\x1b[?25l";
+    repaint += "\x1b[0m";
+    if (force_full_clear) {
+      repaint += kTerminalClearAndHome_;
+      for (size_t i = 0; i < current_lines.size(); ++i) {
+        repaint += AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U));
+        repaint += "\x1b[0m";
+        repaint += current_lines[i];
+      }
+    } else {
+      const size_t overlap = std::min(last_rendered_lines.size(), current_lines.size());
+      for (size_t i = 0; i < overlap; ++i) {
+        if (last_rendered_lines[i] == current_lines[i]) {
+          continue;
+        }
+        repaint += AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U));
+        repaint += "\x1b[0m";
+        repaint += current_lines[i];
+      }
+      for (size_t i = overlap; i < current_lines.size(); ++i) {
+        repaint += AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U));
+        repaint += "\x1b[0m";
+        repaint += current_lines[i];
+      }
+      for (size_t i = current_lines.size(); i < last_rendered_lines.size(); ++i) {
+        repaint += AMStr::fmt("\x1b[{};1H\x1b[2K", static_cast<int>(i + 1U));
+      }
+    }
     if (vt_snapshot.available) {
       const int cursor_row = std::max(1, vt_snapshot.cursor_row + 1);
       const int cursor_col = std::max(1, vt_snapshot.cursor_col + 1);
@@ -1526,6 +1599,9 @@ ECM TerminalInterfaceService::LaunchTerminal(
       last_server_in_alternate_screen = false;
     }
     WriteTerminalBytes_(repaint);
+    last_rendered_lines = current_lines;
+    have_last_vt_snapshot = vt_snapshot.available;
+    last_vt_snapshot = vt_snapshot;
   };
   auto render_from_channel_update = [&](std::string_view chunk) {
     (void)chunk;
