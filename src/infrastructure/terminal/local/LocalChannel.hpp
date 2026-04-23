@@ -78,6 +78,7 @@ struct ChannelForegroundAttrs_ {
   ECM last_error = OK;
   std::intptr_t key_event_handle = -1;
   AMAtomic<std::vector<char>> *key_cache = nullptr;
+  AMT::ChannelInputTransformer input_transformer = {};
 };
 
 #ifdef _WIN32
@@ -674,6 +675,20 @@ private:
       keys.swap(*guard);
     }
 
+    AMT::ChannelInputTransformer input_transformer = {};
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      input_transformer = foreground_.input_transformer;
+    }
+    if (input_transformer) {
+      std::string transformed =
+          input_transformer(std::string_view(keys.data(), keys.size()));
+      keys.assign(transformed.begin(), transformed.end());
+    }
+    if (keys.empty()) {
+      return false;
+    }
+
     bool changed = false;
     bool detach = false;
     {
@@ -823,6 +838,7 @@ private:
       foreground_.foreground_bound = false;
       foreground_.key_event_handle = -1;
       foreground_.key_cache = nullptr;
+      foreground_.input_transformer = {};
       key_ctrl_state_.store(false, std::memory_order_release);
       loop_thread_id_ = std::thread::id{};
       SignalLoopStateChanged_();
@@ -1267,6 +1283,7 @@ public:
     foreground_.detach_requested = false;
     foreground_.key_event_handle = -1;
     foreground_.key_cache = nullptr;
+    foreground_.input_transformer = {};
     foreground_.send_buffer.clear();
     key_ctrl_state_.store(false, std::memory_order_release);
     runtime_.state = Err(EC::NoConnection, "terminal.channel.state",
@@ -1300,8 +1317,9 @@ public:
   }
 
   [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
-  GetRenderFrame() const override {
-    return cache_.GetRenderFrame();
+  GetRenderFrame(
+      const AMT::ChannelRenderFrameArgs &render_args = {}) const override {
+    return cache_.GetRenderFrame(render_args);
   }
 
   ECM ClearCache() override { return cache_.ClearCache(); }
@@ -1383,6 +1401,7 @@ public:
         foreground_.detach_requested = false;
         foreground_.key_event_handle = bind_args.key_event_handle;
         foreground_.key_cache = bind_args.key_cache;
+        foreground_.input_transformer = bind_args.input_transformer;
         key_ctrl_state_.store(false, std::memory_order_release);
         foreground_.last_error = OK;
       } else {
@@ -1400,6 +1419,7 @@ public:
       foreground_.detach_requested = false;
       foreground_.key_event_handle = -1;
       foreground_.key_cache = nullptr;
+      foreground_.input_transformer = {};
       key_ctrl_state_.store(false, std::memory_order_release);
       SignalLoopStateChanged_();
     }
@@ -1415,6 +1435,7 @@ public:
       foreground_.detach_requested = true;
       foreground_.key_event_handle = -1;
       foreground_.key_cache = nullptr;
+      foreground_.input_transformer = {};
       key_ctrl_state_.store(false, std::memory_order_release);
       SignalLoopStateChanged_();
     }

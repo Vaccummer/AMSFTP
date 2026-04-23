@@ -62,6 +62,8 @@ AMSFTP_VT_API char *AmsVtRenderMainReplayAnsiUtf8(const AmsVtHandle *handle);
 
 // Render the currently visible active screen viewport as ANSI text.
 AMSFTP_VT_API char *AmsVtRenderVisibleFrameAnsiUtf8(const AmsVtHandle *handle);
+AMSFTP_VT_API char *AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(
+    const AmsVtHandle *handle, uint64_t viewport_offset);
 
 AMSFTP_VT_API void AmsVtFreeString(char *text);
 

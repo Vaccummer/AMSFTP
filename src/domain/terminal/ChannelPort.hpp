@@ -15,6 +15,7 @@
 namespace AMDomain::terminal {
 class IChannelPort;
 using ChannelOutputProcessor = std::function<void(std::string_view)>;
+using ChannelInputTransformer = std::function<std::string(std::string_view)>;
 using ChannelPortHandle = std::shared_ptr<IChannelPort>;
 
 enum class ScreenKind { Main, Alternate };
@@ -78,6 +79,10 @@ struct ChannelRenderFrameResult {
   std::string vt_visible_frame_ansi = {};
 };
 
+struct ChannelRenderFrameArgs {
+  uint64_t viewport_offset = 0;
+};
+
 struct ChannelCacheTruncateArgs {
   size_t desired_size = 32U * 1024U * 1024U;
   bool truncate_at_newline = true;
@@ -130,6 +135,7 @@ struct ChannelForegroundBindArgs {
   ChannelOutputProcessor processor = {};
   SOCKET key_event_handle = INVALID_SOCKET;
   AMAtomic<std::vector<char>> *key_cache = nullptr;
+  ChannelInputTransformer input_transformer = {};
   ControlComponent control = {};
   int write_kick_timeout_ms = 0;
 };
@@ -185,7 +191,8 @@ public:
   GetCacheCopy() const = 0;
 
   [[nodiscard]] virtual ECMData<ChannelRenderFrameResult>
-  GetRenderFrame() const = 0;
+  GetRenderFrame(
+      const ChannelRenderFrameArgs &render_args = {}) const = 0;
 
   virtual ECM ClearCache() = 0;
 
