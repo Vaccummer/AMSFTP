@@ -35,6 +35,7 @@ struct CliHostArgs {
 struct CliProfileArgs {
   ProfileEditArgs edit = {};
   ProfileGetArgs get = {};
+  ProfileCleanArgs clean = {};
 };
 
 struct CliFilesystemArgs {

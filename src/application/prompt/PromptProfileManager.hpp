@@ -3,6 +3,7 @@
 #include "domain/config/ConfigSyncPort.hpp"
 #include "domain/prompt/PromptDomainModel.hpp"
 #include "foundation/core/DataClass.hpp"
+#include <vector>
 
 namespace AMApplication::prompt {
 using PromptProfileArg = AMDomain::prompt::PromptProfileArg;
@@ -26,6 +27,9 @@ public:
   ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
   void SetInitArg(PromptProfileArg arg);
+  [[nodiscard]] std::vector<std::string> ListZones() const;
+  [[nodiscard]] std::vector<std::string>
+  RemoveZones(const std::vector<std::string> &zones);
 
   [[nodiscard]] PromptProfileQueryResult
   GetZoneProfile(const std::string &zone) const;

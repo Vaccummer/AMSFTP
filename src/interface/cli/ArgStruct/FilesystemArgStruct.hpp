@@ -773,7 +773,7 @@ struct ExitArgs : BaseArgStruct {
                         const CliRunContext &ctx) const override {
     (void)managers;
     argstruct_common::SetRequestExit(ctx, true);
-    argstruct_common::SetSkipLoopExitCallbacks(ctx, force);
+    argstruct_common::SetForceExit(ctx, force);
     return OK;
   }
   void reset() override { force = false; }

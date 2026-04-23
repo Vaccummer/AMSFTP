@@ -64,6 +64,8 @@ ConfigInterfaceService::ConfigInterfaceService(
     AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager)
     : config_service_(config_service), host_service_(host_service),
       prompt_io_manager_(prompt_io_manager),
+      prompt_profile_manager_(prompt_profile_manager),
+      prompt_profile_history_manager_(prompt_profile_history_manager),
       prompt_profile_editor_(prompt_io_manager, prompt_profile_manager,
                              prompt_profile_history_manager) {}
 
@@ -228,6 +230,46 @@ ECM ConfigInterfaceService::GetProfile(
     }
   }
   return prompt_profile_editor_.Get(targets);
+}
+
+ECM ConfigInterfaceService::CleanProfile() {
+  std::vector<std::string> stale_profiles = {};
+  for (const auto &profile_name : prompt_profile_manager_.ListZones()) {
+    if (profile_name == AMDomain::prompt::kPromptProfileDefault) {
+      continue;
+    }
+    if (!host_service_.HostExists(profile_name)) {
+      stale_profiles.push_back(profile_name);
+    }
+  }
+
+  if (stale_profiles.empty()) {
+    prompt_io_manager_.Print("No stale profiles to clean.");
+    return OK;
+  }
+
+  prompt_io_manager_.Print(AMStr::join(stale_profiles, " "));
+  bool canceled = false;
+  const bool confirmed = prompt_io_manager_.PromptYesNo(
+      "Are you sure to remove these profiles? (y/n): ", &canceled);
+  if (canceled || !confirmed) {
+    return Err(EC::ConfigCanceled, "profile clean", "",
+               "profile clean canceled");
+  }
+
+  const std::vector<std::string> removed =
+      prompt_profile_manager_.RemoveZones(stale_profiles);
+  const std::string current_nickname =
+      prompt_profile_history_manager_.CurrentNickname();
+  if (std::find(removed.begin(), removed.end(), current_nickname) !=
+      removed.end()) {
+    const ECM change_rcm = prompt_profile_history_manager_.ChangeClient(
+        AMDomain::prompt::kPromptProfileDefault);
+    if (!(change_rcm)) {
+      return change_rcm;
+    }
+  }
+  return OK;
 }
 
 } // namespace AMInterface::config

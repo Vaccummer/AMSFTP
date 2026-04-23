@@ -308,10 +308,11 @@ public:
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCloseResult>
-  Close(bool force, const ControlComponent &control = {}) override {
+  Close(bool force, int grace_period_ms = 1500,
+        const ControlComponent &control = {}) override {
     RequestStop_();
     JoinLoop_();
-    auto close_result = RawClose_(force, control);
+    auto close_result = RawClose_(force, grace_period_ms, control);
     if (!(close_result.rcm)) {
       cache_.MarkChannelClosed(close_result.rcm);
       std::lock_guard<std::mutex> lock(mutex_);
@@ -361,7 +362,7 @@ public:
       const AMT::ChannelLoopStartArgs &start_args = {}) override {
 #ifdef _WIN32
     auto socket_result = GetWaitHandle();
-    if (!socket_result.rcm || socket_result.data != INVALID_SOCKET) {
+    if (!socket_result.rcm || socket_result.data == INVALID_SOCKET) {
       return socket_result.rcm
                  ? Err(EC::NoConnection, "terminal.channel.loop.start",
                        GetChannelName(), "Remote socket is invalid")
@@ -772,7 +773,8 @@ private:
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCloseResult>
-  RawClose_(bool force, ControlComponent const &control) {
+  RawClose_(bool force, int grace_period_ms, ControlComponent const &control) {
+    (void)force;
     ECMData<AMT::ChannelCloseResult> out = {};
     out.data.channel_name = GetChannelName();
 
@@ -788,7 +790,8 @@ private:
     auto &holder = runtime_.channel_holder;
     if (holder && holder->Raw() != nullptr) {
       runtime_.exit_status = holder->ExitStatus();
-      out.rcm = binding_.sftp_core->CloseChannel(holder, force, control);
+      out.rcm = binding_.sftp_core->CloseChannel(holder, false, control,
+                                                 grace_period_ms);
     } else {
       out.rcm = OK;
     }
@@ -1024,7 +1027,7 @@ private:
       auto r = ReadWrapped({32U * 1024U}, {});
       if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
         if (r.data.hard_limit_hit) {
-          (void)RawClose_(true, {});
+          (void)RawClose_(true, 1500, {});
         }
         std::lock_guard<std::mutex> lock(mutex_);
         if (!(r.rcm)) {
@@ -1139,6 +1142,11 @@ private:
       foreground_.send_buffer.push_back(ch);
     }
 
+    if (foreground_.send_buffer.empty()) {
+      return;
+    }
+
+    FlushSend_();
     if (foreground_.send_buffer.empty()) {
       return;
     }

@@ -269,6 +269,9 @@ void BindProfileCommands(CommandNode *root, CliArgsPool &args) {
                        static_cast<size_t>(-1), "Host nicknames", true);
         node.AddPositionalRule(0, Sem::HostNickname, true);
       });
+
+  profile_node->AddFunction("clean", "Clean profiles without hosts", args,
+                            &CliArgsPool::profile, &CliProfileArgs::clean);
 }
 
 /**
@@ -941,7 +944,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   ctx.rcm = OK;
   ctx.enter_interactive = false;
   ctx.request_exit = false;
-  ctx.skip_loop_exit_callbacks = false;
+  ctx.force_exit = false;
   ctx.command_name.clear();
 
   auto store_exit_code = [&ctx](int code) {

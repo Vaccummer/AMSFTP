@@ -75,6 +75,7 @@ struct ChannelResizeArgs {
 struct ChannelCloseArgs {
   std::string channel_name = "";
   bool force = false;
+  int grace_period_ms = 1500;
 };
 
 struct ChannelRenameArgs {

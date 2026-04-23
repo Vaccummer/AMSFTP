@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -273,6 +274,7 @@ public:
       return out;
     }
 
+    DumpRawServerOutput_(read_result.data.output);
     out.data.output = read_result.data.output;
     out.data.eof = read_result.data.eof;
 
@@ -517,6 +519,22 @@ private:
     return code == ErrorCode::NoConnection ||
            code == ErrorCode::ConnectionLost || code == ErrorCode::NoSession ||
            code == ErrorCode::ClientNotFound;
+  }
+
+  static void DumpRawServerOutput_(std::string_view output) {
+    if (output.empty()) {
+      return;
+    }
+    static std::once_flag reset_once;
+    std::call_once(reset_once, []() {
+      std::ofstream("tmp.txt", std::ios::binary | std::ios::trunc);
+    });
+    std::ofstream dump_file("tmp.txt", std::ios::binary | std::ios::app);
+    if (!dump_file) {
+      return;
+    }
+    dump_file.write(output.data(),
+                    static_cast<std::streamsize>(output.size()));
   }
 
   static void RemovePrefixFromBlocks_(size_t remove_bytes,

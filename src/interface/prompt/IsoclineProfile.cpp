@@ -462,6 +462,27 @@ bool IsoclineProfile::RemoveLastHistoryEntry() const {
   return true;
 }
 
+bool IsoclineProfile::RemoveLastHistoryEntryIfEquals(
+    const std::string &line) const {
+  if (profile_ == nullptr || line.empty()) {
+    return false;
+  }
+  ScopedProfileUse guard(profile_);
+  if (!guard.Switched()) {
+    return false;
+  }
+  const long count = ic_history_count();
+  if (count <= 0) {
+    return false;
+  }
+  const char *last = ic_history_get(0);
+  if (last == nullptr || line != last) {
+    return false;
+  }
+  ic_history_remove_last_p(profile_);
+  return true;
+}
+
 std::vector<std::string> IsoclineProfile::CollectHistory() const {
   if (profile_ == nullptr) {
     return {};

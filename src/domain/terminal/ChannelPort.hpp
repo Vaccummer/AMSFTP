@@ -150,7 +150,8 @@ public:
          const ControlComponent &control = {}) = 0;
 
   [[nodiscard]] virtual ECMData<ChannelCloseResult>
-  Close(bool force, const ControlComponent &control = {}) = 0;
+  Close(bool force, int grace_period_ms = 1500,
+        const ControlComponent &control = {}) = 0;
 
   [[nodiscard]] virtual ChannelPortState GetState() const = 0;
 

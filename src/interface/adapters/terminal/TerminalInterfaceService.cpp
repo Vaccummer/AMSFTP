@@ -21,6 +21,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_set>
+#include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -208,7 +209,8 @@ BuildTerminalSummaryLine_(const std::string &terminal_name,
 
   std::vector<std::string> styled_channels = {};
   styled_channels.reserve(channels_result.data.channels.size());
-  for (const auto &[channel_name, channel_port] : channels_result.data.channels) {
+  for (const auto &[channel_name, channel_port] :
+       channels_result.data.channels) {
     const bool channel_ok =
         channel_port != nullptr && !channel_port->GetState().closed;
     const auto channel_style =
@@ -260,10 +262,10 @@ private:
   bool active_ = false;
 };
 
-AMInterface::prompt::PromptVarMap BuildShellRunLuaVars_(
-    const AMDomain::host::ConRequest &request,
-    const AMDomain::host::ClientMetaData &metadata,
-    const std::string &cmd) {
+AMInterface::prompt::PromptVarMap
+BuildShellRunLuaVars_(const AMDomain::host::ConRequest &request,
+                      const AMDomain::host::ClientMetaData &metadata,
+                      const std::string &cmd) {
   using AMInterface::prompt::PromptVarMap;
   using AMInterface::prompt::PromptVarValue;
 
@@ -286,19 +288,17 @@ AMInterface::prompt::PromptVarMap BuildShellRunLuaVars_(
   return vars;
 }
 
-std::pair<std::string, std::optional<ECM>> ResolveShellRunCommand_(
-    const AMDomain::host::ConRequest &request,
-    const AMDomain::host::ClientMetaData &metadata,
-    const std::string &cmd) {
+std::pair<std::string, std::optional<ECM>>
+ResolveShellRunCommand_(const AMDomain::host::ConRequest &request,
+                        const AMDomain::host::ClientMetaData &metadata,
+                        const std::string &cmd) {
   const std::string cmd_template = AMStr::Strip(metadata.cmd_template);
   if (cmd_template.empty()) {
     return {cmd, std::nullopt};
   }
 
-  const auto render =
-      AMInterface::prompt::LUARender({cmd_template},
-                                     BuildShellRunLuaVars_(request, metadata,
-                                                           cmd));
+  const auto render = AMInterface::prompt::LUARender(
+      {cmd_template}, BuildShellRunLuaVars_(request, metadata, cmd));
   if (!(render.rcm)) {
     return {cmd, render.rcm};
   }
@@ -331,6 +331,7 @@ public:
     first_row_confirmed_new_region_ = false;
     parser_state_ = ParserState_::None;
     escape_buffer_.clear();
+    main_screen_buffer_.clear();
   }
 
   void SetViewportCols(int viewport_cols) {
@@ -347,12 +348,28 @@ public:
     }
   }
 
-  [[nodiscard]] size_t RenderedRows() const { return EffectiveRenderedRows_(); }
+  [[nodiscard]] size_t RenderedRows() const {
+    return RenderedRowsForViewport(cols_);
+  }
 
-  void ClearRenderedRowsInTerminal() {
-    const size_t rows_to_clear = EffectiveRenderedRows_();
+  [[nodiscard]] size_t RenderedRowsForViewport(int viewport_cols) const {
+    MainScreenRenderTracker_ replay = {};
+    replay.Reset(std::max(1, viewport_cols), false);
+    replay.Observe(main_screen_buffer_);
+    return replay.EffectiveRenderedRows_();
+  }
+
+  void ClearRowsInTerminal(size_t rows_to_clear) {
+    const int viewport_cols = AMTerminalTools::GetTerminalViewportInfo().cols;
+    MainScreenRenderTracker_ replay = {};
+    replay.Reset(std::max(1, viewport_cols), false);
+    replay.Observe(main_screen_buffer_);
     if (rows_to_clear == 0U) {
       return;
+    }
+    if (!replay.current_row_has_content_ &&
+        replay.rows_rendered_ > rows_to_clear) {
+      WriteTerminalBytes_("\x1b[1A");
     }
     for (size_t i = 0; i < rows_to_clear; ++i) {
       WriteTerminalBytes_("\r\x1b[2K");
@@ -365,10 +382,11 @@ public:
     touched_main_screen_ = false;
     first_row_confirmed_new_region_ = false;
     cursor_col_ = 0;
+    main_screen_buffer_.clear();
   }
 
 private:
-  enum class ParserState_ { None = 0, Esc, Csi };
+  enum class ParserState_ { None = 0, Esc, Csi, TerminalString, StringEsc };
 
   [[nodiscard]] size_t EffectiveRenderedRows_() const {
     if (rows_rendered_ == 0U) {
@@ -406,10 +424,40 @@ private:
       escape_buffer_.push_back(static_cast<char>(ch));
       if (ch == static_cast<unsigned char>('[')) {
         parser_state_ = ParserState_::Csi;
+      } else if (ch == static_cast<unsigned char>(']') ||
+                 ch == static_cast<unsigned char>('P') ||
+                 ch == static_cast<unsigned char>('_') ||
+                 ch == static_cast<unsigned char>('^') ||
+                 ch == static_cast<unsigned char>('X')) {
+        parser_state_ = ParserState_::TerminalString;
+        escape_buffer_.clear();
       } else {
         parser_state_ = ParserState_::None;
         escape_buffer_.clear();
       }
+      return;
+    }
+
+    if (parser_state_ == ParserState_::TerminalString) {
+      if (ch == 0x07U) {
+        parser_state_ = ParserState_::None;
+        escape_buffer_.clear();
+        return;
+      }
+      if (ch == 0x1bU) {
+        parser_state_ = ParserState_::StringEsc;
+      }
+      return;
+    }
+
+    if (parser_state_ == ParserState_::StringEsc) {
+      if (ch == static_cast<unsigned char>('\\')) {
+        parser_state_ = ParserState_::None;
+        escape_buffer_.clear();
+        return;
+      }
+      parser_state_ = (ch == 0x1bU) ? ParserState_::StringEsc
+                                    : ParserState_::TerminalString;
       return;
     }
 
@@ -453,6 +501,7 @@ private:
     if (in_alternate_screen_) {
       return;
     }
+    main_screen_buffer_.push_back(static_cast<char>(ch));
 
     if (ch == static_cast<unsigned char>('\r')) {
       cursor_col_ = 0;
@@ -514,7 +563,26 @@ private:
   bool in_alternate_screen_ = false;
   ParserState_ parser_state_ = ParserState_::None;
   std::string escape_buffer_ = {};
+  std::string main_screen_buffer_ = {};
 };
+
+[[nodiscard]] size_t RenderedRowsForMainCacheBlocks_(
+    const std::vector<AMDomain::terminal::OutputBlock> &blocks,
+    int viewport_cols) {
+  const int cols = std::max(1, viewport_cols);
+  size_t rows = 0U;
+  for (const auto &block : blocks) {
+    if (block.screen != AMDomain::terminal::ScreenKind::Main ||
+        block.data.empty()) {
+      continue;
+    }
+    MainScreenRenderTracker_ segment = {};
+    segment.Reset(cols, false);
+    segment.Observe(block.data);
+    rows += segment.RenderedRows();
+  }
+  return rows;
+}
 
 } // namespace
 
@@ -615,8 +683,8 @@ private:
 #endif
 };
 
-[[maybe_unused]] LocalInputPollStatus_ PollLocalTerminalInput_(
-    std::string *out, std::string *error) {
+[[maybe_unused]] LocalInputPollStatus_
+PollLocalTerminalInput_(std::string *out, std::string *error) {
   if (out == nullptr || error == nullptr) {
     return LocalInputPollStatus_::Error;
   }
@@ -1154,14 +1222,17 @@ ECM TerminalInterfaceService::ShellRun(
           ResolveShellRunCommand_(request, metadata_opt.value(), command);
       final_cmd = std::move(resolved_cmd);
       if (render_error.has_value()) {
-        prompt_io_manager_.Print(AMStr::fmt(
-            "cmd_template lua render failed, fallback to cmd: {}",
-            render_error->msg()));
+        prompt_io_manager_.Print(
+            AMStr::fmt("cmd_template lua render failed, fallback to cmd: {}",
+                       render_error->msg()));
       }
     }
   }
 
-  prompt_io_manager_.FmtPrint("Final cmd: {}", final_cmd);
+  prompt_io_manager_.FmtPrint(
+      "🚀 Final Command: {}",
+      style_service_.Format(AMStr::BBCEscape(final_cmd),
+                            style::StyleIndex::ShellCmd));
 
   auto client_result = filesystem_service_.GetClient(nickname, run_control);
   if (!(client_result.rcm) || !client_result.data) {
@@ -1181,7 +1252,9 @@ ECM TerminalInterfaceService::ShellRun(
          prompt_io_manager_.PrintRaw(std::string(chunk));
        }},
       run_control);
-  prompt_io_manager_.FmtPrint("Exit with code {}", shell_result.data.exit_code);
+  std::string icon_f = shell_result.data.exit_code == 0 ? "✅" : "❌";
+  prompt_io_manager_.FmtPrint("{} Exit with code {}", icon_f,
+                              shell_result.data.exit_code);
 
   if (!(shell_result.rcm)) {
     prompt_io_manager_.ErrorFormat(shell_result.rcm);
@@ -1309,7 +1382,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
         return open_result.rcm;
       }
     } else {
-      if (!channel_port_result.data || channel_port_result.data->GetState().closed) {
+      if (!channel_port_result.data ||
+          channel_port_result.data->GetState().closed) {
         const ECM rcm = Err(EC::NoConnection, "", requested_channel,
                             "Target channel is not available");
         prompt_io_manager_.ErrorFormat(rcm);
@@ -1339,12 +1413,14 @@ ECM TerminalInterfaceService::LaunchTerminal(
       return rcm;
     }
 
-    auto channel_port_result = terminal_handle->GetChannelPort(std::nullopt, control);
+    auto channel_port_result =
+        terminal_handle->GetChannelPort(std::nullopt, control);
     if (!(channel_port_result.rcm)) {
       prompt_io_manager_.ErrorFormat(channel_port_result.rcm);
       return channel_port_result.rcm;
     }
-    if (!channel_port_result.data || channel_port_result.data->GetState().closed) {
+    if (!channel_port_result.data ||
+        channel_port_result.data->GetState().closed) {
       const ECM rcm = Err(EC::NoConnection, "", current_channel,
                           "Current channel is not available");
       prompt_io_manager_.ErrorFormat(rcm);
@@ -1422,8 +1498,34 @@ ECM TerminalInterfaceService::LaunchTerminal(
   bind_args.control = control;
   bind_args.write_kick_timeout_ms = write_kick_timeout_ms;
 
+  std::string banner_target = AMStr::Strip(arg.target);
+  if (banner_target.empty()) {
+    banner_target = channel_name;
+  }
+  // write_tracked(AMStr::fmt("\r\n👨‍💻 Enter ssh terminal of {}\r\n",
+  //                          banner_target));
+
+  auto clear_terminal_frame = [&]() -> size_t {
+    std::lock_guard<std::mutex> guard(render_mutex);
+    const int viewport_cols = AMTerminalTools::GetTerminalViewportInfo().cols;
+    size_t rows = 0U;
+    if (channel_port) {
+      auto cache_result = channel_port->GetCacheCopy();
+      if ((cache_result.rcm)) {
+        rows = RenderedRowsForMainCacheBlocks_(cache_result.data.blocks,
+                                               viewport_cols);
+      }
+    }
+    if (rows == 0U) {
+      rows = render_tracker.RenderedRowsForViewport(viewport_cols);
+    }
+    render_tracker.ClearRowsInTerminal(rows);
+    return rows;
+  };
+
   auto bind_result = channel_port->BindForeground(bind_args);
   if (!(bind_result.rcm)) {
+    (void)clear_terminal_frame();
     keyboard_monitor->DeactivateCapture();
     raw_terminal.Restore();
     RestoreCliPromptStateAfterTerminalExit_();
@@ -1441,20 +1543,26 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
   if (bind_result.data.soft_limit_hit) {
     const size_t threshold_bytes = bind_result.data.soft_limit_threshold_bytes;
-    prompt_io_manager_.Print(AMStr::fmt(
-        "⚠ Terminal output cache reached soft limit ({})",
-        AMStr::FormatSize(threshold_bytes)));
+    prompt_io_manager_.Print(
+        AMStr::fmt("🚨 Terminal output cache reached soft limit ({})",
+                   AMStr::FormatSize(threshold_bytes)));
   }
 
   if (refresh_prompt_on_enter &&
       (bind_result.data.replayed_bytes + bind_result.data.fallback_bytes) ==
           0U &&
       !bind_result.data.closed) {
-    write_tracked("\r\n[terminal resumed]\r\n");
+    write_tracked("[terminal resumed]\r\n");
   }
 
   if (bind_result.data.closed) {
     (void)channel_port->UnbindForeground();
+    if (stream_in_alternate_screen) {
+      write_tracked(kTerminalExitAlternateScreen_);
+      std::lock_guard<std::mutex> guard(render_mutex);
+      render_tracker.SetAlternateScreen(false);
+    }
+    (void)clear_terminal_frame();
     keyboard_monitor->DeactivateCapture();
     raw_terminal.Restore();
     RestoreCliPromptStateAfterTerminalExit_();
@@ -1541,18 +1649,16 @@ ECM TerminalInterfaceService::LaunchTerminal(
   keyboard_monitor->DeactivateCapture();
 
   const auto channel_state_after = channel_port->GetState();
-  if (stream_in_alternate_screen || channel_state_after.in_alternate_screen) {
+  const bool channel_in_alternate_screen =
+      stream_in_alternate_screen || channel_state_after.in_alternate_screen;
+  if (channel_in_alternate_screen) {
     write_tracked(kTerminalExitAlternateScreen_);
     std::lock_guard<std::mutex> guard(render_mutex);
     render_tracker.SetAlternateScreen(false);
   }
 
   size_t cleared_rows = 0U;
-  {
-    std::lock_guard<std::mutex> guard(render_mutex);
-    cleared_rows = render_tracker.RenderedRows();
-    render_tracker.ClearRenderedRowsInTerminal();
-  }
+  cleared_rows = clear_terminal_frame();
 
   raw_terminal.Restore();
   RestoreCliPromptStateAfterTerminalExit_();
@@ -1797,12 +1903,12 @@ ECM TerminalInterfaceService::ClearTerminals(
     return timeout_rcm;
   }
 
-  const auto base_control = ResolveControl_(default_interrupt_flag_, control_opt);
+  const auto base_control =
+      ResolveControl_(default_interrupt_flag_, control_opt);
   const auto names = terminal_service_.ListTerminalNames();
   if (names.empty()) {
     prompt_io_manager_.FmtPrint(
-        "term clear: checked=0 removed=0 kept=0 timeout={}s",
-        arg.timeout_s);
+        "term clear: checked=0 removed=0 kept=0 timeout={}s", arg.timeout_s);
     return OK;
   }
 
@@ -2101,9 +2207,10 @@ ECM TerminalInterfaceService::ClearChannels(
     return timeout_rcm;
   }
 
-  const auto base_control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::string nickname =
-      AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(arg.nickname));
+  const auto base_control =
+      ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string nickname = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(arg.nickname));
   if (nickname.empty()) {
     nickname = AMDomain::host::HostService::NormalizeNickname(
         AMStr::Strip(client_service_.CurrentNickname()));
@@ -2115,10 +2222,9 @@ ECM TerminalInterfaceService::ClearChannels(
   auto terminal_result =
       terminal_service_.GetTerminalByNickname(nickname, false);
   if (!(terminal_result.rcm) || !terminal_result.data) {
-    const ECM rcm = terminal_result.rcm
-                        ? Err(EC::ClientNotFound, kOp, nickname,
-                              "Terminal not found")
-                        : terminal_result.rcm;
+    const ECM rcm = terminal_result.rcm ? Err(EC::ClientNotFound, kOp, nickname,
+                                              "Terminal not found")
+                                        : terminal_result.rcm;
     prompt_io_manager_.ErrorFormat(rcm);
     terminal_service_.TraceRuntimeEvent(rcm, nickname,
                                         "terminal.channel.clear.resolve",
@@ -2137,8 +2243,8 @@ ECM TerminalInterfaceService::ClearChannels(
 
   terminal_service_.TraceRuntimeEvent(
       OK, nickname, "terminal.channel.clear.start",
-      AMStr::fmt("channels={} timeout_ms={}",
-                 list_result.data.channels.size(), timeout_ms));
+      AMStr::fmt("channels={} timeout_ms={}", list_result.data.channels.size(),
+                 timeout_ms));
 
   const AMTerminalTools::TerminalViewportInfo geometry =
       AMTerminalTools::GetTerminalViewportInfo();
@@ -2155,15 +2261,15 @@ ECM TerminalInterfaceService::ClearChannels(
     ECM check_rcm = OK;
     bool healthy = false;
     if (!channel_port) {
-      check_rcm = Err(EC::InvalidHandle, kOp, channel_name,
-                      "Channel handle is null");
+      check_rcm =
+          Err(EC::InvalidHandle, kOp, channel_name, "Channel handle is null");
     } else {
       const auto before_state = channel_port->GetState();
       if (before_state.closed) {
-        check_rcm = before_state.last_error
-                        ? Err(EC::NoConnection, kOp, channel_name,
-                              "Channel is closed")
-                        : before_state.last_error;
+        check_rcm =
+            before_state.last_error
+                ? Err(EC::NoConnection, kOp, channel_name, "Channel is closed")
+                : before_state.last_error;
       } else {
         const ControlComponent check_control(base_control.ControlToken(),
                                              timeout_ms);
@@ -2194,20 +2300,18 @@ ECM TerminalInterfaceService::ClearChannels(
 
     const ControlComponent remove_control(base_control.ControlToken(),
                                           timeout_ms);
-    auto close_result =
-        terminal_result.data->CloseChannel({channel_name, true}, remove_control);
+    auto close_result = terminal_result.data->CloseChannel({channel_name, true},
+                                                           remove_control);
     ECM remove_rcm = close_result.rcm;
     if ((remove_rcm)) {
-      remove_rcm =
-          terminal_service_.DropChannelPort(nickname, channel_name,
-                                            remove_control);
+      remove_rcm = terminal_service_.DropChannelPort(nickname, channel_name,
+                                                     remove_control);
     }
     if (!(remove_rcm)) {
       status = MergeStatus_(status, remove_rcm);
-      prompt_io_manager_.FmtPrint("❌ Channel remove failed: {}@{} {} {}",
-                                  nickname, channel_name,
-                                  AMStr::ToString(remove_rcm.code),
-                                  remove_rcm.msg());
+      prompt_io_manager_.FmtPrint(
+          "❌ Channel remove failed: {}@{} {} {}", nickname, channel_name,
+          AMStr::ToString(remove_rcm.code), remove_rcm.msg());
       terminal_service_.TraceRuntimeEvent(
           remove_rcm, nickname, "terminal.channel.clear.remove",
           AMStr::fmt("channel={} check={} check_error={}", channel_name,

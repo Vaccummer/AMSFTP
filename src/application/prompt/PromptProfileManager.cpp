@@ -1,6 +1,8 @@
 #include "application/prompt/PromptProfileManager.hpp"
 #include "domain/prompt/PromptDomainService.hpp"
 
+#include <algorithm>
+
 namespace AMApplication::prompt {
 namespace {
 std::string ResolveProfileZone_(const std::string &zone) {
@@ -45,6 +47,42 @@ void PromptProfileManager::SetInitArg(PromptProfileArg arg) {
   AMDomain::prompt::service::NormalizePromptProfileArg(&arg);
   init_arg_.lock().store(std::move(arg));
   MarkConfigDirty();
+}
+
+std::vector<std::string> PromptProfileManager::ListZones() const {
+  auto guard = init_arg_.lock();
+  std::vector<std::string> out = {};
+  out.reserve(guard->set.size());
+  for (const auto &[zone, _] : guard->set) {
+    (void)_;
+    out.push_back(zone);
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+std::vector<std::string>
+PromptProfileManager::RemoveZones(const std::vector<std::string> &zones) {
+  std::vector<std::string> removed = {};
+  if (zones.empty()) {
+    return removed;
+  }
+
+  auto guard = init_arg_.lock();
+  auto &set = guard->set;
+  removed.reserve(zones.size());
+  for (const auto &zone : zones) {
+    if (zone.empty() || zone == AMDomain::prompt::kPromptProfileDefault) {
+      continue;
+    }
+    if (set.erase(zone) > 0) {
+      removed.push_back(zone);
+    }
+  }
+  if (!removed.empty()) {
+    MarkConfigDirty();
+  }
+  return removed;
 }
 
 PromptProfileQueryResult

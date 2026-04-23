@@ -551,8 +551,9 @@ ECM BuildInterfaceAssembly_(const ConfigSnapshots &snapshots,
   state->client_interface_service =
       std::make_unique<AMInterface::client::ClientInterfaceService>(
           *app_state->client_service, *app_state->terminal_service,
-          *app_state->filesystem_service, *app_state->host_service,
-          *app_state->known_hosts_service, *state->prompt_io_manager,
+          *app_state->filesystem_service,
+          *app_state->host_service, *app_state->known_hosts_service,
+          *app_state->prompt_profile_manager, *state->prompt_io_manager,
           *state->style_service);
   state->client_interface_service->SetDefaultControlToken(task_control_token);
   state->client_interface_service->BindInteractionCallbacks();
@@ -1072,6 +1073,13 @@ ECM ShutdownRuntime_(AppRuntime &runtime) {
   }
   if (runtime.managers.application.transfer_service.IsReady()) {
     runtime.managers.application.transfer_service.SetInstance(nullptr);
+  }
+  if (!runtime.run_ctx.force_exit &&
+      runtime.managers.interfaces.config_interface_service.IsReady()) {
+    const ECM save_rcm =
+        runtime.managers.interfaces.config_interface_service->SaveAll();
+    trace_runtime(save_rcm, "runtime.shutdown.save_config", "<config>");
+    (void)RecordCleanupError_(save_rcm, &first_error, "save config");
   }
   if (runtime.managers.application.log_manager.IsReady()) {
     runtime.managers.application.log_manager->ClearLoggers();

@@ -94,6 +94,7 @@ public:
   bool ClearHistory() const;
   bool AddHistoryEntry(const std::string &line) const;
   bool RemoveLastHistoryEntry() const;
+  bool RemoveLastHistoryEntryIfEquals(const std::string &line) const;
   [[nodiscard]] std::vector<std::string> CollectHistory() const;
   bool SetCompleter(ic_completer_fun_t *callback, void *data = nullptr) const;
   bool SetHighlighter(ic_highlight_fun_t *callback, void *data = nullptr) const;

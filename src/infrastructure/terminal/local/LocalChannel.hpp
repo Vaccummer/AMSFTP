@@ -1242,8 +1242,10 @@ public:
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCloseResult>
-  Close(bool force, const ControlComponent &control = {}) override {
+  Close(bool force, int grace_period_ms = 1500,
+        const ControlComponent &control = {}) override {
     (void)control;
+    (void)grace_period_ms;
     RequestStop_();
     JoinLoop_();
 

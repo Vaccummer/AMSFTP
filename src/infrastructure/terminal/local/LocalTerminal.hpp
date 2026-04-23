@@ -270,7 +270,9 @@ public:
       channel_port = it->second;
     }
 
-    auto close_result = channel_port->Close(close_args.force, control);
+    auto close_result = channel_port->Close(close_args.force,
+                                            close_args.grace_period_ms,
+                                            control);
     out.data.channel_name = target_name;
     out.data.exit_code = close_result.data.exit_code;
     out.data.closed = close_result.data.closed;

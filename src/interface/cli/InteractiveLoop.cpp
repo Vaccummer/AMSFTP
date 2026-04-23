@@ -188,6 +188,10 @@ void PrintECM_(AMInterface::prompt::PromptIOManager &prompt, const ECM &rcm) {
 void PrintParseOutcome_(AMInterface::prompt::PromptIOManager &prompt,
                         const CliParseOutcome &outcome) {
   if (outcome.action == CliParseAction::ParseFailed) {
+    if (!outcome.message.empty()) {
+      prompt.Print(outcome.message);
+      return;
+    }
     PrintECM_(prompt, outcome.rcm);
     return;
   }
@@ -233,8 +237,7 @@ ResolvePromptSysIcon_(AMInterface::style::AMStyleService &style_service,
   return fallback;
 }
 
-std::pair<int64_t, int64_t>
-CountFinishedTransferTasks_(
+std::pair<int64_t, int64_t> CountFinishedTransferTasks_(
     AMApplication::transfer::TransferAppService &transfer_service) {
   int64_t success_task = 0;
   int64_t failed_task = 0;
@@ -253,8 +256,7 @@ CountFinishedTransferTasks_(
   return {success_task, failed_task};
 }
 
-std::pair<int64_t, int64_t>
-CountTerminalResources_(
+std::pair<int64_t, int64_t> CountTerminalResources_(
     AMApplication::terminal::TermAppService &terminal_service) {
   int64_t term_num = 0;
   int64_t channel_num = 0;
@@ -318,8 +320,9 @@ BuildPromptRenderDTO_(const CLIServices &managers, const ECM &result,
   dto.time_now = FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
   dto.elapsed = AMStr::fmt("{}ms", std::max<int64_t>(0, elapsed_time_ms));
   dto.is_success = (result.code == EC::Success);
-  dto.ec_name = dto.is_success ? std::string()
-                               : std::string(magic_enum::enum_name(result.code));
+  dto.ec_name = dto.is_success
+                    ? std::string()
+                    : std::string(magic_enum::enum_name(result.code));
   dto.ec_code = static_cast<int64_t>(result.code);
   return dto;
 }
@@ -416,31 +419,18 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       InteractiveEventCategory::CorePromptReturn,
       [&completion_engine]() { completion_engine.ClearCache(); });
   (void)interactive_callbacks.Register(
-      InteractiveEventCategory::CorePromptReturn,
-      [&managers]() { managers.interfaces.prompt_io_manager->SyncCurrentHistory(); });
-  (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn, [&managers]() {
         if (managers.application.config_service->IsBackupNeeded()) {
           managers.interfaces.prompt_io_manager->SyncCurrentHistory();
+          (void)managers.application.config_service->BackupIfNeeded();
         }
-        (void)managers.application.config_service->BackupIfNeeded();
       });
   (void)interactive_callbacks.Register(
       InteractiveEventCategory::CorePromptReturn,
       [&completion_engine]() { completion_engine.CancelPendingAsync(); });
   (void)interactive_callbacks.Register(
-      InteractiveEventCategory::InteractiveLoopExit,
-      [&managers]() { managers.interfaces.prompt_io_manager->SyncCurrentHistory(); });
-  (void)interactive_callbacks.Register(
       InteractiveEventCategory::InteractiveLoopExit, [&managers]() {
-        if (!managers.interfaces.config_interface_service.IsReady()) {
-          return;
-        }
-        const ECM save_rcm =
-            managers.interfaces.config_interface_service->SaveAll();
-        if (!(save_rcm)) {
-          PrintECM_(managers.interfaces.prompt_io_manager.Get(), save_rcm);
-        }
+        managers.interfaces.prompt_io_manager->SyncCurrentHistory();
       });
 
   AMInterface::prompt::CLIPromtRender core_prompt(
@@ -494,10 +484,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     if (prep.rcm.code != EC::Success) {
       PrintECM_(managers.interfaces.prompt_io_manager.Get(), prep.rcm);
       store_exit_code(static_cast<int>(prep.rcm.code));
-      last_prompt_elapsed_ms =
-          std::max<int64_t>(0,
-                            AMTime::IntervalMS(dispatch_begin,
-                                               AMTime::SteadyNow()));
+      last_prompt_elapsed_ms = std::max<int64_t>(
+          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
       last_prompt_result = prep.rcm;
       continue;
     }
@@ -522,10 +510,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       store_exit_code(parse_outcome.exit_code != 0
                           ? parse_outcome.exit_code
                           : static_cast<int>(parse_outcome.rcm.code));
-      last_prompt_elapsed_ms =
-          std::max<int64_t>(0,
-                            AMTime::IntervalMS(dispatch_begin,
-                                               AMTime::SteadyNow()));
+      last_prompt_elapsed_ms = std::max<int64_t>(
+          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
       last_prompt_result = parse_outcome.rcm;
       continue;
     }
@@ -533,10 +519,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     ctx.async = false;
     ctx.enforce_interactive = true;
     DispatchCliCommands(cli_commands, managers, ctx);
-    last_prompt_elapsed_ms =
-        std::max<int64_t>(0,
-                          AMTime::IntervalMS(dispatch_begin,
-                                             AMTime::SteadyNow()));
+    last_prompt_elapsed_ms = std::max<int64_t>(
+        0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
     last_prompt_result = ctx.rcm;
 
     if (ctx.request_exit) {
@@ -544,10 +528,8 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     }
   }
 
-  if (!ctx.skip_loop_exit_callbacks) {
-    managers.runtime.interactive_event_registry.Run(
-        InteractiveEventCategory::InteractiveLoopExit);
-  }
+  managers.runtime.interactive_event_registry.Run(
+      InteractiveEventCategory::InteractiveLoopExit);
   ctx.is_interactive->store(false, std::memory_order_relaxed);
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }

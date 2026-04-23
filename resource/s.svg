@@ -1,0 +1,59 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#12314A"/>
+      <stop offset="0.55" stop-color="#0E6975"/>
+      <stop offset="1" stop-color="#18243A"/>
+    </linearGradient>
+
+    <linearGradient id="panel" x1="84" y1="112" x2="428" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14283A"/>
+      <stop offset="1" stop-color="#07131F"/>
+    </linearGradient>
+
+    <linearGradient id="accent" x1="120" y1="190" x2="250" y2="320" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#62E7FF"/>
+      <stop offset="1" stop-color="#62FFB8"/>
+    </linearGradient>
+
+    <linearGradient id="file" x1="292" y1="206" x2="396" y2="328" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD36A"/>
+      <stop offset="1" stop-color="#F6A23B"/>
+    </linearGradient>
+
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect x="40" y="40" width="432" height="432" rx="88" fill="url(#bg)"/>
+
+  <!-- terminal -->
+  <g filter="url(#shadow)">
+    <rect x="84" y="112" width="344" height="288" rx="32" fill="url(#panel)"/>
+
+    <!-- title bar -->
+    <path d="M84 144C84 126.327 98.3269 112 116 112H396C413.673 112 428 126.327 428 144V176H84V144Z" fill="#1B3A50"/>
+    <circle cx="122" cy="144" r="7" fill="#FF6B6B"/>
+    <circle cx="146" cy="144" r="7" fill="#FFD166"/>
+    <circle cx="170" cy="144" r="7" fill="#4DE3A4"/>
+
+    <!-- left terminal prompt, moved further left -->
+    <path d="M120 226L154 252L120 278" stroke="url(#accent)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M182 278H234" stroke="url(#accent)" stroke-width="18" stroke-linecap="round"/>
+
+    <!-- subtle terminal lines -->
+    <path d="M120 320H210" stroke="#62E7FF" stroke-opacity="0.22" stroke-width="10" stroke-linecap="round"/>
+    <path d="M120 346H184" stroke="#62FFB8" stroke-opacity="0.16" stroke-width="10" stroke-linecap="round"/>
+
+    <!-- file inside terminal, moved further right -->
+    <g>
+      <path d="M300 196H352L392 236V322C392 338.569 378.569 352 362 352H300C283.431 352 270 338.569 270 322V226C270 209.431 283.431 196 300 196Z" fill="url(#file)"/>
+      <path d="M352 196V228C352 236.837 359.163 244 368 244H392" fill="#FFE08A"/>
+
+      <path d="M302 278H358" stroke="#8B5A18" stroke-opacity="0.42" stroke-width="10" stroke-linecap="round"/>
+      <path d="M302 304H346" stroke="#8B5A18" stroke-opacity="0.30" stroke-width="10" stroke-linecap="round"/>
+    </g>
+  </g>
+</svg>
