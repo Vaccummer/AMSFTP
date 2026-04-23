@@ -314,7 +314,11 @@ void WriteTerminalBytes_(std::string_view text) {
   std::fflush(stdout);
 }
 
+constexpr const char *kTerminalEnterAlternateScreen_ = "\x1b[?1049h";
 constexpr const char *kTerminalExitAlternateScreen_ = "\x1b[?1049l";
+constexpr const char *kTerminalHome_ = "\x1b[H";
+constexpr const char *kTerminalClearAndHome_ = "\x1b[H\x1b[2J";
+constexpr const char *kTerminalClearToEnd_ = "\x1b[J";
 
 class MainScreenRenderTracker_ final : NonCopyableNonMovable {
 public:
@@ -1459,45 +1463,87 @@ ECM TerminalInterfaceService::LaunchTerminal(
     return activate_capture_rcm;
   }
 
-  MainScreenRenderTracker_ render_tracker = {};
-  render_tracker.Reset(geometry.cols, false);
   std::mutex render_mutex = {};
-  auto write_tracked = [&](std::string_view chunk) {
-    if (chunk.empty()) {
+  bool physical_alt_screen_active = false;
+  bool have_last_server_screen_state = false;
+  bool last_server_in_alternate_screen = false;
+  auto enter_physical_alt_screen = [&]() {
+    std::lock_guard<std::mutex> guard(render_mutex);
+    if (physical_alt_screen_active) {
       return;
     }
+    WriteTerminalBytes_(kTerminalEnterAlternateScreen_);
+    WriteTerminalBytes_(kTerminalClearAndHome_);
+    physical_alt_screen_active = true;
+  };
+  auto leave_physical_alt_screen = [&]() {
     std::lock_guard<std::mutex> guard(render_mutex);
-    const int viewport_cols = AMTerminalTools::GetTerminalViewportInfo().cols;
-    render_tracker.SetViewportCols(viewport_cols);
-    render_tracker.Observe(chunk);
-    WriteTerminalBytes_(chunk);
+    if (!physical_alt_screen_active) {
+      return;
+    }
+    WriteTerminalBytes_(kTerminalExitAlternateScreen_);
+    physical_alt_screen_active = false;
+    have_last_server_screen_state = false;
+    last_server_in_alternate_screen = false;
+  };
+  auto render_current_frame = [&]() {
+    std::string frame = {};
+    AMDomain::terminal::ChannelVtSnapshot vt_snapshot = {};
+    if (channel_port) {
+      auto cache_result = channel_port->GetCacheCopy();
+      if ((cache_result.rcm)) {
+        vt_snapshot = cache_result.data.vt_snapshot;
+        frame = std::move(cache_result.data.vt_visible_frame_ansi);
+        if (frame.empty()) {
+          frame = std::move(cache_result.data.vt_main_replay_ansi);
+        }
+      }
+    }
+    std::lock_guard<std::mutex> guard(render_mutex);
+    if (!physical_alt_screen_active) {
+      return;
+    }
+    std::string repaint = {};
+    repaint.reserve(frame.size() + 96U);
+    repaint += "\x1b[?25l";
+    repaint += "\x1b[0m";
+    const bool force_full_clear =
+        !have_last_server_screen_state ||
+        last_server_in_alternate_screen != vt_snapshot.in_alternate_screen;
+    repaint += force_full_clear ? kTerminalClearAndHome_ : kTerminalHome_;
+    repaint += frame;
+    repaint += kTerminalClearToEnd_;
+    if (vt_snapshot.available) {
+      const int cursor_row = std::max(1, vt_snapshot.cursor_row + 1);
+      const int cursor_col = std::max(1, vt_snapshot.cursor_col + 1);
+      repaint += AMStr::fmt("\x1b[{};{}H", cursor_row, cursor_col);
+      repaint += vt_snapshot.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
+      have_last_server_screen_state = true;
+      last_server_in_alternate_screen = vt_snapshot.in_alternate_screen;
+    } else {
+      repaint += "\x1b[?25h";
+      have_last_server_screen_state = false;
+      last_server_in_alternate_screen = false;
+    }
+    WriteTerminalBytes_(repaint);
+  };
+  auto render_from_channel_update = [&](std::string_view chunk) {
+    (void)chunk;
+    render_current_frame();
   };
 
   AMDomain::terminal::ChannelForegroundBindArgs bind_args = {};
-  bind_args.processor = write_tracked;
+  bind_args.processor = render_from_channel_update;
   bind_args.key_event_handle = keyboard_monitor->WaitHandle();
   bind_args.key_cache = keyboard_monitor->KeyCache();
   bind_args.control = control;
   bind_args.write_kick_timeout_ms = write_kick_timeout_ms;
 
-  std::string banner_target = AMStr::Strip(arg.target);
-  if (banner_target.empty()) {
-    banner_target = channel_name;
-  }
-  // write_tracked(AMStr::fmt("\r\n👨‍💻 Enter ssh terminal of {}\r\n",
-  //                          banner_target));
-
-  auto clear_terminal_frame = [&]() -> size_t {
-    std::lock_guard<std::mutex> guard(render_mutex);
-    const int viewport_cols = AMTerminalTools::GetTerminalViewportInfo().cols;
-    const size_t rows = render_tracker.RenderedRowsForViewport(viewport_cols);
-    render_tracker.ClearRowsInTerminal(rows);
-    return rows;
-  };
+  enter_physical_alt_screen();
 
   auto bind_result = channel_port->BindForeground(bind_args);
   if (!(bind_result.rcm)) {
-    (void)clear_terminal_frame();
+    leave_physical_alt_screen();
     keyboard_monitor->DeactivateCapture();
     raw_terminal.Restore();
     RestoreCliPromptStateAfterTerminalExit_();
@@ -1507,11 +1553,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     return bind_result.rcm;
   }
 
-  bool stream_in_alternate_screen = bind_result.data.in_alternate_screen;
-  {
-    std::lock_guard<std::mutex> guard(render_mutex);
-    render_tracker.SetAlternateScreen(stream_in_alternate_screen);
-  }
+  render_current_frame();
 
   if (bind_result.data.soft_limit_hit) {
     const size_t threshold_bytes = bind_result.data.soft_limit_threshold_bytes;
@@ -1524,17 +1566,12 @@ ECM TerminalInterfaceService::LaunchTerminal(
       (bind_result.data.replayed_bytes + bind_result.data.fallback_bytes) ==
           0U &&
       !bind_result.data.closed) {
-    write_tracked("[terminal resumed]\r\n");
+    render_current_frame();
   }
 
   if (bind_result.data.closed) {
     (void)channel_port->UnbindForeground();
-    if (stream_in_alternate_screen) {
-      write_tracked(kTerminalExitAlternateScreen_);
-      std::lock_guard<std::mutex> guard(render_mutex);
-      render_tracker.SetAlternateScreen(false);
-    }
-    (void)clear_terminal_frame();
+    leave_physical_alt_screen();
     keyboard_monitor->DeactivateCapture();
     raw_terminal.Restore();
     RestoreCliPromptStateAfterTerminalExit_();
@@ -1619,25 +1656,10 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
 
   keyboard_monitor->DeactivateCapture();
-
-  const auto channel_state_after = channel_port->GetState();
-  const bool channel_in_alternate_screen =
-      stream_in_alternate_screen || channel_state_after.in_alternate_screen;
-  if (channel_in_alternate_screen) {
-    write_tracked(kTerminalExitAlternateScreen_);
-    std::lock_guard<std::mutex> guard(render_mutex);
-    render_tracker.SetAlternateScreen(false);
-  }
-
-  size_t cleared_rows = 0U;
-  cleared_rows = clear_terminal_frame();
-
+  leave_physical_alt_screen();
   raw_terminal.Restore();
   RestoreCliPromptStateAfterTerminalExit_();
   prompt_cache_guard.Disable();
-  if (cleared_rows == 0U) {
-    prompt_io_manager_.Print("");
-  }
 
   (void)channel_port->UnbindForeground();
 
