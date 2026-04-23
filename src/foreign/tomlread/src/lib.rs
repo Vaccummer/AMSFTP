@@ -293,7 +293,7 @@ pub extern "C" fn RustTomlDebugOrder(
 /* Write file with an atomic replace to avoid partial writes on crash. */
 fn write_atomic(path: &str, content: String) -> std::io::Result<()> {
     let af = AtomicFile::new(path, AllowOverwrite);
-    af.write(|f| {
+    let atomic_result = af.write(|f| {
         f.write_all(content.as_bytes())?;
         f.sync_all()?;
         Ok(())
@@ -301,7 +301,18 @@ fn write_atomic(path: &str, content: String) -> std::io::Result<()> {
     .map_err(|e: AtomicError<std::io::Error>| match e {
         AtomicError::Internal(err) => err,
         AtomicError::User(err) => err,
-    })
+    });
+
+    match atomic_result {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            let mut file = fs::File::create(path)?;
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /* ---------------- Schema helpers ---------------- */
@@ -479,6 +490,14 @@ fn apply_json_updates_append_new(item: &mut Item, j: &J) {
     match j {
         J::Object(obj) => match item {
             Item::Table(t) => {
+                let existing_keys: Vec<String> =
+                    t.iter().map(|(k, _)| k.to_string()).collect();
+                for key in existing_keys {
+                    if !obj.contains_key(&key) {
+                        t.remove(&key);
+                    }
+                }
+
                 for (k, v) in obj {
                     if let Some(child) = t.get_mut(k) {
                         apply_json_updates_append_new(child, v);

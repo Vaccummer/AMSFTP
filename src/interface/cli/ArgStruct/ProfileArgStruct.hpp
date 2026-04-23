@@ -108,6 +108,22 @@ struct ProfileGetArgs : BaseArgStruct {
   void reset() override { nicknames.clear(); }
 };
 
+/**
+ * @brief CLI argument container for profile clean.
+ */
+struct ProfileCleanArgs : BaseArgStruct {
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    const ECM rcm = managers.interfaces.config_interface_service->CleanProfile();
+    if (!(rcm)) {
+      managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
+    }
+    return rcm;
+  }
+  void reset() override {}
+};
+
 } // namespace AMInterface::cli
 
 

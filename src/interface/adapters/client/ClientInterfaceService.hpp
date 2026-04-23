@@ -3,6 +3,7 @@
 #include "application/client/ClientAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
+#include "application/prompt/PromptProfileManager.hpp"
 #include "application/terminal/TermAppService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "foundation/core/DataClass.hpp"
@@ -18,8 +19,9 @@ namespace AMInterface::client {
 using ClientAppService = AMApplication::client::ClientAppService;
 using TermAppService = AMApplication::terminal::TermAppService;
 using FilesystemAppService = AMApplication::filesystem::FilesystemAppService;
-using AMHostConfigManager = AMApplication::host::HostAppService;
-using AMKnownHostsManager = AMApplication::host::KnownHostsAppService;
+using AMApplication::host::HostAppService;
+using AMApplication::host::KnownHostsAppService;
+using PromptProfileManager = AMApplication::prompt::PromptProfileManager;
 using PromptIOManager = AMInterface::prompt::PromptIOManager;
 using AMStyleService = AMInterface::style::AMStyleService;
 using amf = AMDomain::client::amf;
@@ -33,8 +35,9 @@ public:
   ClientInterfaceService(ClientAppService &client_service,
                          TermAppService &terminal_service,
                          FilesystemAppService &filesystem_service,
-                         AMHostConfigManager &host_config_manager,
-                         AMKnownHostsManager &known_hosts_manager,
+                         HostAppService &host_config_manager,
+                         KnownHostsAppService &known_hosts_manager,
+                         PromptProfileManager &prompt_profile_manager,
                          PromptIOManager &prompt_io_manager,
                          AMStyleService &style_service);
   ~ClientInterfaceService() override;
@@ -98,8 +101,9 @@ private:
   ClientAppService &client_service_;
   TermAppService &terminal_service_;
   FilesystemAppService &filesystem_service_;
-  AMHostConfigManager &host_config_manager_;
-  AMKnownHostsManager &known_hosts_manager_;
+  HostAppService &host_config_manager_;
+  KnownHostsAppService &known_hosts_manager_;
+  PromptProfileManager &prompt_profile_manager_;
   PromptIOManager &prompt_io_manager_;
   AMStyleService &style_service_;
   std::unique_ptr<ClientConnectSpinner> spinner_ = nullptr;

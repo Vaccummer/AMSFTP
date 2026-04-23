@@ -168,7 +168,7 @@ public:
 
     const ECM loop_rcm = port->EnsureLoopStarted(AMT::ChannelLoopStartArgs{});
     if (!loop_rcm) {
-      (void)port->Close(true, control);
+      (void)port->Close(true, kDefaultCloseTimeoutMs_, control);
       out.rcm = loop_rcm;
       return out;
     }
@@ -276,7 +276,9 @@ public:
       }
     }
 
-    auto close_result = channel_port->Close(close_args.force, control);
+    auto close_result = channel_port->Close(close_args.force,
+                                            close_args.grace_period_ms,
+                                            control);
     out.rcm = close_result.rcm;
     out.data.exit_code = close_result.data.exit_code;
     out.data.closed = true;

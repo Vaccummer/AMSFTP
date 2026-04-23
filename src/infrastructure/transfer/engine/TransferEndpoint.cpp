@@ -96,7 +96,7 @@ void TransferRuntimeProgress::UpdateSize(size_t delta) const {
   const size_t current = task_info->Size.cur_task_transferred.fetch_add(
                              delta, std::memory_order_relaxed) +
                          delta;
-  task_info->AddTransferredSize(delta);
+  (void)task_info->AddTransferredSize(delta);
   auto cur_guard = task_info->Core.cur_task.lock();
   auto *cur_task = cur_guard.load();
   if (cur_task != nullptr) {
@@ -423,7 +423,7 @@ void MarkUnfinishedTransferEntries_(
 }
 
 size_t ClampBufferSizeByPolicy_(size_t requested,
-                                const TransferBufferPolicy &p) {
+                                const TransferBufferPolicy &) {
   const size_t min_buffer =
       AMDomain::transfer::TransferManagerArg::kMinBufferBytes;
   const size_t max_buffer =

@@ -25,11 +25,14 @@ public:
   [[nodiscard]] ECM Export(const std::string &path) const;
   [[nodiscard]] ECM EditProfile(const std::string &nickname);
   [[nodiscard]] ECM GetProfile(const std::vector<std::string> &nicknames);
+  [[nodiscard]] ECM CleanProfile();
 
 private:
   AMApplication::config::ConfigAppService &config_service_;
   AMApplication::host::HostAppService &host_service_;
   AMInterface::prompt::PromptIOManager &prompt_io_manager_;
+  AMApplication::prompt::PromptProfileManager &prompt_profile_manager_;
+  AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager_;
   AMInterface::prompt::PromptProfileEditor prompt_profile_editor_;
 };
 

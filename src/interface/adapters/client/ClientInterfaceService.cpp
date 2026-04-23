@@ -311,10 +311,10 @@ NormalizedNicknames(const std::vector<std::string> &targets) {
   return out;
 }
 
-ECM ValidateChangeClientNickname_(
-    const ClientAppService &client_service,
-    const AMHostConfigManager &host_config_manager, const std::string &raw,
-    std::string *normalized) {
+ECM ValidateChangeClientNickname_(const ClientAppService &client_service,
+                                  const HostAppService &host_config_manager,
+                                  const std::string &raw,
+                                  std::string *normalized) {
   constexpr const char *kOp = "change_client.validate_nickname";
   if (normalized == nullptr) {
     return Err(EC::InvalidArg, kOp, "<output>", "Null nickname output");
@@ -349,7 +349,7 @@ ECM ValidateChangeClientNickname_(
 
 ECM ResolveChangeClientNickname_(PromptIOManager &prompt,
                                  const ClientAppService &client_service,
-                                 const AMHostConfigManager &host_config_manager,
+                                 const HostAppService &host_config_manager,
                                  const std::string &raw_nickname,
                                  std::string *normalized) {
   constexpr const char *kOp = "change_client.resolve_nickname";
@@ -857,7 +857,7 @@ bool PromptHostInt64_(PromptIOManager &prompt, const std::string &label,
   }
 }
 
-ECM ResolveHostConfig_(AMHostConfigManager &host_config_manager,
+ECM ResolveHostConfig_(HostAppService &host_config_manager,
                        const std::string &nickname, HostConfig *out) {
   if (!out) {
     return Err(EC::InvalidArg, "", "", "null host config output");
@@ -1034,7 +1034,7 @@ std::string HostFieldDisplay_(const HostConfig &entry,
 }
 
 ECM PromptAddHostConfig_(PromptIOManager &prompt,
-                         AMHostConfigManager &host_config_manager,
+                         HostAppService &host_config_manager,
                          const std::string &nickname, HostConfig *out) {
   if (!out) {
     return Err(EC::InvalidArg, "", "", "null host config output");
@@ -1186,10 +1186,9 @@ ECM PromptAddHostConfig_(PromptIOManager &prompt,
                        &entry.metadata.login_dir, true)) {
     return Err(EC::ConfigCanceled, "", "", "input canceled");
   }
-  if (!PromptHostText_(prompt,
-                       "cmd_template(lua, optional): ",
-                       entry.metadata.cmd_template,
-                       &entry.metadata.cmd_template, true)) {
+  if (!PromptHostText_(
+          prompt, "cmd_template(lua, optional): ", entry.metadata.cmd_template,
+          &entry.metadata.cmd_template, true)) {
     return Err(EC::ConfigCanceled, "", "", "input canceled");
   }
 
@@ -1338,10 +1337,9 @@ ECM PromptModifyHostConfig_(PromptIOManager &prompt,
                        &entry.metadata.login_dir, true)) {
     return Err(EC::ConfigCanceled, "", "", "input canceled");
   }
-  if (!PromptHostText_(prompt,
-                       "cmd_template(lua, optional): ",
-                       entry.metadata.cmd_template,
-                       &entry.metadata.cmd_template, true)) {
+  if (!PromptHostText_(
+          prompt, "cmd_template(lua, optional): ", entry.metadata.cmd_template,
+          &entry.metadata.cmd_template, true)) {
     return Err(EC::ConfigCanceled, "", "", "input canceled");
   }
 
@@ -1356,13 +1354,15 @@ ECM PromptModifyHostConfig_(PromptIOManager &prompt,
 ClientInterfaceService::ClientInterfaceService(
     ClientAppService &client_service, TermAppService &terminal_service,
     FilesystemAppService &filesystem_service,
-    AMHostConfigManager &host_config_manager,
-    AMKnownHostsManager &known_hosts_manager,
+    HostAppService &host_config_manager,
+    KnownHostsAppService &known_hosts_manager,
+    PromptProfileManager &prompt_profile_manager,
     PromptIOManager &prompt_io_manager, AMStyleService &style_service)
     : client_service_(client_service), terminal_service_(terminal_service),
       filesystem_service_(filesystem_service),
       host_config_manager_(host_config_manager),
       known_hosts_manager_(known_hosts_manager),
+      prompt_profile_manager_(prompt_profile_manager),
       prompt_io_manager_(prompt_io_manager), style_service_(style_service),
       spinner_(std::make_unique<ClientConnectSpinner>(prompt_io_manager)) {}
 
@@ -2882,6 +2882,7 @@ ECM ClientInterfaceService::RemoveHosts(
       prompt_io_manager_.ErrorFormat(rcm);
       return Err(rcm.code, kOp, normalized, rcm.error, rcm.raw_error);
     }
+    (void)prompt_profile_manager_.RemoveZones({normalized});
     const ECM remove_client_rcm = client_service_.RemoveClient(normalized);
     if (!(remove_client_rcm) && remove_client_rcm.code != EC::ClientNotFound) {
       prompt_io_manager_.ErrorFormat(remove_client_rcm);

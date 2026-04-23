@@ -208,7 +208,9 @@ ECM TomlConfigHandle::DumpTo(const std::filesystem::path &dst_path) {
     RustTomlFreeString(err);
   }
 
-  is_dirty_ = false;
+  if (dst_path == spec_.data_path) {
+    is_dirty_ = false;
+  }
   return OK;
 }
 

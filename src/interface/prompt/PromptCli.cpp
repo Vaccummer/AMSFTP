@@ -767,7 +767,7 @@ std::optional<std::string> PromptIOManager::Prompt(
   std::string out = line;
   ic_free(line);
   if (using_profile) {
-    (void)profile->RemoveLastHistoryEntry();
+    (void)profile->RemoveLastHistoryEntryIfEquals(out);
   }
   return out;
 }

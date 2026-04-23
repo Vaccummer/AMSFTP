@@ -8,7 +8,7 @@
 namespace AMInterface::cli {
 enum class InteractiveEventCategory {
   CorePromptReturn = 0,
-  InteractiveLoopExit = 1,
+  InteractiveLoopExit = 1
 };
 
 class InteractiveEventRegistry : public NonCopyableNonMovable {

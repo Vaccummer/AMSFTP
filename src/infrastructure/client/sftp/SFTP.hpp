@@ -921,8 +921,7 @@ public:
     if (!TryBeginClose_()) {
       return IsClosed();
     }
-    if (libssh2_channel_close(channel_) == 0 &&
-        libssh2_channel_wait_closed(channel_) == 0) {
+    if (libssh2_channel_close(channel_) == 0) {
       MarkClosed_();
       return true;
     }
@@ -939,7 +938,9 @@ public:
     libssh2_channel_signal(channel_, "TERM");
   }
 
-  // Non-blocking close; use with wait_for_socket
+  // Non-blocking close; use with wait_for_socket.
+  // libssh2_channel_close() already waits for remote close. Calling
+  // wait_closed() here is invalid unless remote EOF was observed first.
   // Return values: 0=success, EAGAIN=wait required, <0=error
   int close_nonblock() {
     if (channel_ == nullptr) {
@@ -951,10 +952,7 @@ public:
 
     int rc = libssh2_channel_close(channel_);
     if (rc == 0) {
-      rc = libssh2_channel_wait_closed(channel_);
-      if (rc == 0) {
-        MarkClosed_();
-      }
+      MarkClosed_();
     }
     return rc;
   }
@@ -1486,7 +1484,8 @@ public:
   }
 
   ECM CloseChannel(ChannelHandle &channel_handle, bool force,
-                   const ControlComponent &control = {}) {
+                   const ControlComponent &control = {},
+                   int grace_period_ms = 50) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!channel_handle) {
       return OK;
@@ -1499,7 +1498,9 @@ public:
     channel_handle->SetControlContext(std::move(is_interrupted),
                                       detail::ResolveTimeoutMs_(control),
                                       AMTime::miliseconds());
-    ECM close_rcm = channel_handle->graceful_exit(!force, 50, true);
+    const int close_grace_ms = grace_period_ms < 0 ? 0 : grace_period_ms;
+    ECM close_rcm =
+        channel_handle->graceful_exit(!force, close_grace_ms, true);
     channel_handle.reset();
     return close_rcm;
   }
