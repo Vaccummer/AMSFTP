@@ -32,6 +32,7 @@ typedef struct AmsVtSnapshot {
   uint64_t total_lines;
   uint64_t display_offset;
   uint64_t damage_serial;
+  uint64_t rendered_main_rows;
   uint8_t in_alternate_screen;
   uint8_t cursor_visible;
 } AmsVtSnapshot;
@@ -58,6 +59,9 @@ AMSFTP_VT_API char *AmsVtRenderBufferLineUtf8(const AmsVtHandle *handle,
 
 // Render main-screen scrollback plus current viewport as ANSI text.
 AMSFTP_VT_API char *AmsVtRenderMainReplayAnsiUtf8(const AmsVtHandle *handle);
+
+// Render the currently visible active screen viewport as ANSI text.
+AMSFTP_VT_API char *AmsVtRenderVisibleFrameAnsiUtf8(const AmsVtHandle *handle);
 
 AMSFTP_VT_API void AmsVtFreeString(char *text);
 

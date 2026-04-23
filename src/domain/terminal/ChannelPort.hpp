@@ -68,6 +68,7 @@ struct ChannelCacheCopyResult {
   size_t cached_bytes = 0;
   ChannelVtSnapshot vt_snapshot = {};
   std::string vt_main_replay_ansi = {};
+  std::string vt_visible_frame_ansi = {};
 };
 
 struct ChannelCacheTruncateArgs {
