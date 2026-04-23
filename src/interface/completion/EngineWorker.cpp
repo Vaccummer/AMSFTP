@@ -229,6 +229,8 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
   switch (semantic) {
   case AMCommandArgSemantic::Path:
     return AMCompletionTarget::Path;
+  case AMCommandArgSemantic::FindPattern:
+    return AMCompletionTarget::Disabled;
   case AMCommandArgSemantic::Url:
     return AMCompletionTarget::Disabled;
   case AMCommandArgSemantic::ShellCmd:

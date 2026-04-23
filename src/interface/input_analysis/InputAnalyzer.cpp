@@ -983,6 +983,11 @@ InputAnalysis InputAnalyzer::Analyze(const std::string &input) const {
         SetTokenClassification_(&token, TokenRole::ShellCommand);
         ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
         continue;
+      case AMCommandArgSemantic::FindPattern:
+        SetTokenClassification_(&token, TokenRole::FindPattern,
+                                TokenState::Valid);
+        ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
+        continue;
       case AMCommandArgSemantic::None:
       case AMCommandArgSemantic::Path:
       default:

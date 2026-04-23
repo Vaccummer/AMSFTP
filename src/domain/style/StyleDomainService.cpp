@@ -356,6 +356,7 @@ void NormalizePathHighlight(PathHighlightStyle *style) {
   NormalizeStyleToken(&style->type_symlink, defaults.type_symlink);
   NormalizeStyleToken(&style->type_otherspecial, defaults.type_otherspecial);
   NormalizeStyleToken(&style->type_nonexistent, defaults.type_nonexistent);
+  NormalizeStyleToken(&style->find_pattern, defaults.find_pattern);
   if (style->default_style.empty()) {
     style->default_style = style->type_regular;
   }
@@ -367,6 +368,9 @@ void NormalizePathHighlight(PathHighlightStyle *style) {
   }
   if (style->tree_leaf.empty()) {
     style->tree_leaf = style->type_regular;
+  }
+  if (style->find_pattern.empty()) {
+    style->find_pattern = style->type_regular;
   }
 }
 

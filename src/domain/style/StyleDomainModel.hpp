@@ -127,6 +127,7 @@ struct PathHighlightStyle {
   std::string type_symlink = "";
   std::string type_otherspecial = "";
   std::string type_nonexistent = "";
+  std::string find_pattern = "";
 };
 
 struct StyleConfig {

@@ -470,9 +470,10 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
 
   root->AddFunction("find", "Find paths", args, &CliArgsPool::fs,
                     &CliFilesystemArgs::find, [&args](CommandNode &node) {
-                      node.AddOption("path", args.fs.find.path, 1, 1,
-                                     "Path to find", true);
+                      node.AddOption("tokens", args.fs.find.tokens, 1, 2,
+                                     "[path] pattern", true);
                       node.AddPositionalRule(0, Sem::Path, false);
+                      node.AddPositionalRule(1, Sem::FindPattern, false);
                     });
 
   root->AddFunction("mkdir", "Create directories", args, &CliArgsPool::fs,

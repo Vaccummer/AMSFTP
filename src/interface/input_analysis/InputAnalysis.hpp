@@ -43,6 +43,7 @@ enum class TokenRole {
   VariableZone,
   VariableValue,
   Path,
+  FindPattern,
   AtSign,
   DollarSign,
   EqualSign,
