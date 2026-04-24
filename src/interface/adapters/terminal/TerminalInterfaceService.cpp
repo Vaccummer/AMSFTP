@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -1674,9 +1675,55 @@ ECM TerminalInterfaceService::LaunchTerminal(
     std::lock_guard<std::mutex> input_guard(local_input_mutex);
     pending_local_input.append(chunk.data(), chunk.size());
     std::string passthrough = {};
+    constexpr uint64_t kMouseWheelStep = 3U;
     auto page_step = [&]() -> uint64_t {
       const auto vt_snapshot = load_vt_snapshot();
       return static_cast<uint64_t>(std::max(1, vt_snapshot.rows));
+    };
+    auto try_consume_mouse_wheel =
+        [&](const std::string &seq) -> bool {
+      if (seq.size() < 6U || !seq.starts_with("\x1b[<")) {
+        return false;
+      }
+      size_t const first_sep = seq.find(';', 3U);
+      if (first_sep == std::string::npos || first_sep <= 3U) {
+        return false;
+      }
+
+      uint64_t button = 0;
+      auto const *begin = seq.data() + 3;
+      auto const *end = seq.data() + first_sep;
+      auto const parse_result = std::from_chars(begin, end, button);
+      if (parse_result.ec != std::errc{} || parse_result.ptr != end) {
+        return false;
+      }
+      if ((button & 64U) == 0U || (button & 3U) > 1U) {
+        return false;
+      }
+
+      const auto vt_snapshot = load_vt_snapshot();
+      if (!vt_snapshot.available || vt_snapshot.in_alternate_screen) {
+        return false;
+      }
+
+      const bool wheel_up = (button & 1U) == 0U;
+      const uint64_t current =
+          local_viewport_offset.load(std::memory_order_acquire);
+      if (!wheel_up && current == 0U) {
+        return false;
+      }
+
+      if (wheel_up) {
+        const uint64_t desired =
+            (current > std::numeric_limits<uint64_t>::max() - kMouseWheelStep)
+                ? std::numeric_limits<uint64_t>::max()
+                : current + kMouseWheelStep;
+        (void)apply_local_viewport_offset(desired);
+      } else {
+        (void)apply_local_viewport_offset(
+            current > kMouseWheelStep ? current - kMouseWheelStep : 0U);
+      }
+      return true;
     };
 
     while (!pending_local_input.empty()) {
@@ -1710,6 +1757,10 @@ ECM TerminalInterfaceService::LaunchTerminal(
         }
 
         const std::string seq = pending_local_input.substr(0, final_pos + 1U);
+        if (try_consume_mouse_wheel(seq)) {
+          pending_local_input.erase(0, seq.size());
+          continue;
+        }
         if (seq == "\x1b[5~") {
           const uint64_t current =
               local_viewport_offset.load(std::memory_order_acquire);
