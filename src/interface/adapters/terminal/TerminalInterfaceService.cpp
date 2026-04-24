@@ -2174,12 +2174,12 @@ ECM TerminalInterfaceService::LaunchTerminal(
     sync_channel_resize_if_needed();
 
     const auto loop_state = channel_port->GetLoopState();
-    if (loop_state.detach_requested || !loop_state.foreground_bound) {
-      detached = true;
-      break;
-    }
     if (loop_state.closed) {
       wait_rcm = (loop_state.last_error) ? loop_state.last_error : OK;
+      break;
+    }
+    if (loop_state.detach_requested || !loop_state.foreground_bound) {
+      detached = true;
       break;
     }
 
@@ -2230,6 +2230,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
       !(final_state.last_error)) {
     wait_rcm = final_state.last_error;
   }
+  const bool remove_closed_channel = final_state.closed && !detached;
 
   clear_keyboard_capture_buffers();
   leave_physical_alt_screen();
@@ -2237,7 +2238,15 @@ ECM TerminalInterfaceService::LaunchTerminal(
   RestoreCliPromptStateAfterTerminalExit_();
   prompt_cache_guard.Disable();
 
-  (void)channel_port->UnbindForeground();
+  if (remove_closed_channel) {
+    const auto close_result =
+        terminal_handle->CloseChannel({channel_name, true}, control);
+    if (!(close_result.rcm) && (wait_rcm)) {
+      wait_rcm = close_result.rcm;
+    }
+  } else {
+    (void)channel_port->UnbindForeground();
+  }
 
 #ifdef _WIN32
   control_guard.reset();
