@@ -1906,6 +1906,20 @@ ECM TerminalInterfaceService::LaunchTerminal(
       const auto vt_snapshot = load_vt_snapshot();
       return static_cast<uint64_t>(std::max(1, vt_snapshot.rows));
     };
+    auto apply_local_mouse_wheel = [&](uint64_t button) {
+      uint64_t const current =
+          local_viewport_offset.load(std::memory_order_acquire);
+      if ((button & 1U) == 0U) {
+        uint64_t const desired =
+            (current > std::numeric_limits<uint64_t>::max() - kMouseWheelStep)
+                ? std::numeric_limits<uint64_t>::max()
+                : current + kMouseWheelStep;
+        (void)apply_local_viewport_offset(desired);
+      } else {
+        (void)apply_local_viewport_offset(
+            current > kMouseWheelStep ? current - kMouseWheelStep : 0U);
+      }
+    };
     auto try_handle_mouse_sequence = [&](const std::string &seq) -> bool {
       uint64_t button = 0;
       if (seq.size() >= 6U && seq.starts_with("\x1b[<")) {
@@ -1931,22 +1945,20 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
       auto const vt_snapshot = load_vt_snapshot();
       bool const wheel = (button & 64U) != 0U && (button & 3U) <= 1U;
+      bool const ctrl_pressed = (button & 16U) != 0U;
       if (local_browse_active.load(std::memory_order_acquire)) {
         if (wheel) {
-          uint64_t const current =
-              local_viewport_offset.load(std::memory_order_acquire);
-          if ((button & 1U) == 0U) {
-            uint64_t const desired =
-                (current > std::numeric_limits<uint64_t>::max() - kMouseWheelStep)
-                    ? std::numeric_limits<uint64_t>::max()
-                    : current + kMouseWheelStep;
-            (void)apply_local_viewport_offset(desired);
-          } else {
-            (void)apply_local_viewport_offset(
-                current > kMouseWheelStep ? current - kMouseWheelStep : 0U);
-          }
+          apply_local_mouse_wheel(button);
         } else {
           (void)exit_local_scrollback();
+        }
+        return true;
+      }
+
+      if (ctrl_pressed) {
+        if (wheel && vt_snapshot.available) {
+          local_browse_active.store(true, std::memory_order_release);
+          apply_local_mouse_wheel(button);
         }
         return true;
       }
@@ -1958,18 +1970,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
       if (wheel && vt_snapshot.available && !vt_snapshot.in_alternate_screen) {
         local_browse_active.store(true, std::memory_order_release);
-        uint64_t const current =
-            local_viewport_offset.load(std::memory_order_acquire);
-        if ((button & 1U) == 0U) {
-          uint64_t const desired =
-              (current > std::numeric_limits<uint64_t>::max() - kMouseWheelStep)
-                  ? std::numeric_limits<uint64_t>::max()
-                  : current + kMouseWheelStep;
-          (void)apply_local_viewport_offset(desired);
-        } else {
-          (void)apply_local_viewport_offset(
-              current > kMouseWheelStep ? current - kMouseWheelStep : 0U);
-        }
+        apply_local_mouse_wheel(button);
         return true;
       }
 
