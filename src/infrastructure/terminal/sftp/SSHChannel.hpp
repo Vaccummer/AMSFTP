@@ -431,7 +431,8 @@ public:
       return out;
     }
 
-    out = AttachConsumer(bind_args.processor);
+    out = cache_.AttachConsumer(bind_args.processor,
+                                bind_args.render_processor);
     if (!(out.rcm)) {
       return out;
     }
