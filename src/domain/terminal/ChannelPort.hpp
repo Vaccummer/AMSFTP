@@ -49,6 +49,15 @@ struct ChannelVtSnapshot {
   uint64_t damage_serial = 0;
   bool in_alternate_screen = false;
   bool cursor_visible = false;
+  bool mouse_reporting_active = false;
+  bool mouse_report_click = false;
+  bool mouse_drag = false;
+  bool mouse_motion = false;
+  bool mouse_sgr_encoding = false;
+  bool mouse_utf8_encoding = false;
+  bool app_cursor_keys = false;
+  bool app_keypad = false;
+  bool alternate_scroll = false;
   size_t rendered_main_rows = 0;
 };
 

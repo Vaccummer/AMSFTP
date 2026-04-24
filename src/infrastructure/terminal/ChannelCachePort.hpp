@@ -826,6 +826,15 @@ private:
     out.damage_serial = snapshot.damage_serial;
     out.in_alternate_screen = snapshot.in_alternate_screen != 0U;
     out.cursor_visible = snapshot.cursor_visible != 0U;
+    out.mouse_reporting_active = snapshot.mouse_reporting_active != 0U;
+    out.mouse_report_click = snapshot.mouse_report_click != 0U;
+    out.mouse_drag = snapshot.mouse_drag != 0U;
+    out.mouse_motion = snapshot.mouse_motion != 0U;
+    out.mouse_sgr_encoding = snapshot.mouse_sgr_encoding != 0U;
+    out.mouse_utf8_encoding = snapshot.mouse_utf8_encoding != 0U;
+    out.app_cursor_keys = snapshot.app_cursor_keys != 0U;
+    out.app_keypad = snapshot.app_keypad != 0U;
+    out.alternate_scroll = snapshot.alternate_scroll != 0U;
     out.rendered_main_rows = static_cast<size_t>(std::min<uint64_t>(
         snapshot.rendered_main_rows,
         static_cast<uint64_t>(std::numeric_limits<size_t>::max())));
