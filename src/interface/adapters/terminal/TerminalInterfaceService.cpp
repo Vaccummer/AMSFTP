@@ -269,10 +269,7 @@ void RestoreCliPromptStateAfterTerminalExit_() {
   out += "\x1b>";
 
   const bool capture_local_wheel =
-      allow_local_wheel_capture &&
-      (local_browse_active || !vt_snapshot.available ||
-       (!vt_snapshot.in_alternate_screen &&
-        !vt_snapshot.mouse_reporting_active));
+      allow_local_wheel_capture && local_browse_active;
   if (vt_snapshot.available) {
     if (!local_browse_active && vt_snapshot.mouse_reporting_active) {
       if (vt_snapshot.mouse_report_click) {
@@ -1698,10 +1695,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const std::string input_protocol_ansi =
         BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active);
 #ifdef _WIN32
-    bool const enable_local_wheel_capture =
-        browse_active ||
-        !vt_snapshot.available ||
-        (!vt_snapshot.in_alternate_screen && !vt_snapshot.mouse_reporting_active);
+    bool const enable_local_wheel_capture = browse_active;
     raw_terminal.SetMouseInputEnabled(enable_local_wheel_capture);
 #endif
     const bool force_full_clear =
@@ -1946,6 +1940,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
             (void)apply_local_viewport_offset(
                 current > kMouseWheelStep ? current - kMouseWheelStep : 0U);
           }
+        } else {
+          (void)exit_local_scrollback();
         }
         return true;
       }
