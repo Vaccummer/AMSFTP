@@ -76,6 +76,7 @@ struct CliChannelArgs {
   ChannelListArgs ls = {};
   ChannelRemoveArgs rm = {};
   ChannelRenameArgs rn = {};
+  ChannelExportArgs export_history = {};
   ChannelClearArgs clear = {};
 };
 

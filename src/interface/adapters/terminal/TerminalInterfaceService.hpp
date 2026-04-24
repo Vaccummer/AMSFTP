@@ -68,6 +68,10 @@ public:
       const ChannelRenameArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
+  ECM ExportChannelHistory(
+      const ChannelExportArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
   ECM ClearChannels(
       const ChannelClearArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;

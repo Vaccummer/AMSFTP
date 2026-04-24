@@ -28,11 +28,16 @@ struct PromptRenderDTO {
     failed_task = 11,
     channel_num = 12,
     term_num = 13,
-    time_now = 14,
-    elapsed = 15,
-    is_success = 16,
-    ec_name = 17,
-    ec_code = 18,
+    channel_ok = 14,
+    channel_disconnected = 15,
+    term_ok = 16,
+    term_disconnected = 17,
+    channel_name = 18,
+    time_now = 19,
+    elapsed = 20,
+    is_success = 21,
+    ec_name = 22,
+    ec_code = 23,
   };
 
   std::string nickname = "local";
@@ -48,6 +53,11 @@ struct PromptRenderDTO {
   int64_t failed_task = 0;
   int64_t channel_num = 0;
   int64_t term_num = 0;
+  int64_t channel_ok = 0;
+  int64_t channel_disconnected = 0;
+  int64_t term_ok = 0;
+  int64_t term_disconnected = 0;
+  std::string channel_name = "";
   std::string time_now = "";
   std::string elapsed = "";
   bool is_success = true;
@@ -59,7 +69,7 @@ struct PromptRenderDTO {
       std::variant<std::string PromptRenderDTO::*, bool PromptRenderDTO::*,
                    int64_t PromptRenderDTO::*, double PromptRenderDTO::*>;
   using Value = std::variant<std::string, bool, int64_t, double>;
-  static_assert(magic_enum::enum_count<Attr>() == 18,
+  static_assert(magic_enum::enum_count<Attr>() == 23,
                 "PromptRenderDTO::members must stay aligned with Attr values");
   static constexpr std::array<MemberPtr, magic_enum::enum_count<Attr>()>
       members{
@@ -69,7 +79,11 @@ struct PromptRenderDTO {
           &PromptRenderDTO::task_pending, &PromptRenderDTO::task_running,
           &PromptRenderDTO::task_paused,  &PromptRenderDTO::success_task,
           &PromptRenderDTO::failed_task,  &PromptRenderDTO::channel_num,
-          &PromptRenderDTO::term_num,     &PromptRenderDTO::time_now,
+          &PromptRenderDTO::term_num,     &PromptRenderDTO::channel_ok,
+          &PromptRenderDTO::channel_disconnected,
+          &PromptRenderDTO::term_ok,
+          &PromptRenderDTO::term_disconnected,
+          &PromptRenderDTO::channel_name, &PromptRenderDTO::time_now,
           &PromptRenderDTO::elapsed,      &PromptRenderDTO::is_success,
           &PromptRenderDTO::ec_name,      &PromptRenderDTO::ec_code};
 
