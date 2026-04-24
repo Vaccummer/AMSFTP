@@ -758,9 +758,9 @@ public:
     }
     DWORD mode = raw_input_mode_;
     if (enabled) {
-      mode |= ENABLE_MOUSE_INPUT;
+      mode |= ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT;
     } else {
-      mode &= ~ENABLE_MOUSE_INPUT;
+      mode &= ~(ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT);
     }
     if (SetConsoleMode(input_, mode) == 0) {
       return;
