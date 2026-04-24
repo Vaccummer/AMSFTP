@@ -171,10 +171,6 @@ public:
   [[nodiscard]] virtual IVtFramePort *GetVtFramePort() = 0;
   [[nodiscard]] virtual const IVtFramePort *GetVtFramePort() const = 0;
 
-  [[nodiscard]] virtual ECMData<ChannelRenderFrameResult>
-  GetRenderFrame(
-      const ChannelRenderFrameArgs &render_args = {}) const = 0;
-
   virtual ECM ClearCache() = 0;
 
   [[nodiscard]] virtual ECMData<ChannelCacheTruncateResult>
