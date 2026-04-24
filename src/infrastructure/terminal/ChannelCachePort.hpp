@@ -93,9 +93,9 @@ public:
   AttachConsumer(AMT::ChannelOutputProcessor processor,
                  AMT::ChannelRenderProcessor render_processor = {}) {
     ECMData<AMT::ChannelCacheReplayResult> out = {};
-    if (!processor) {
+    if (!processor && !render_processor) {
       out.rcm = Err(ErrorCode::InvalidArg, "terminal.channel.attach",
-                    channel_name_, "Output processor is empty");
+                    channel_name_, "Output/render processor is empty");
       return out;
     }
 
@@ -141,7 +141,7 @@ public:
       }
     }
 
-    if (!main_content.empty()) {
+    if (processor && !main_content.empty()) {
       try {
         processor(main_content);
       } catch (...) {
@@ -156,27 +156,33 @@ public:
       }
     }
     if (out.data.in_alternate_screen) {
-      try {
-        processor("\x1b[?1049h");
-      } catch (...) {
+      if (processor) {
+        try {
+          processor("\x1b[?1049h");
+        } catch (...) {
+        }
       }
       if (vt_visible_frame.has_value()) {
-        try {
-          processor(*vt_visible_frame);
-        } catch (...) {
+        if (processor) {
+          try {
+            processor(*vt_visible_frame);
+          } catch (...) {
+          }
+          out.data.replayed_bytes += vt_visible_frame->size();
         }
-        out.data.replayed_bytes += vt_visible_frame->size();
       } else if (!latest_alt.empty()) {
-        try {
-          processor(latest_alt);
-        } catch (...) {
+        if (processor) {
+          try {
+            processor(latest_alt);
+          } catch (...) {
+          }
+          out.data.replayed_bytes += latest_alt.size();
         }
-        out.data.replayed_bytes += latest_alt.size();
       }
     }
 
     if (!vt_main_replay.has_value() && out.data.replayed_bytes == 0 &&
-        !fallback_output.empty()) {
+        processor && !fallback_output.empty()) {
       try {
         processor(fallback_output);
       } catch (...) {
