@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/terminal/TerminalModel.hpp"
+#include "domain/terminal/VtPort.hpp"
 #include "foundation/core/DataClass.hpp"
 
 #include <cstddef>
@@ -16,6 +17,8 @@ namespace AMDomain::terminal {
 class IChannelPort;
 using ChannelOutputProcessor = std::function<void(std::string_view)>;
 using ChannelInputTransformer = std::function<std::string(std::string_view)>;
+using ChannelRenderProcessor =
+    std::function<void(const ChannelRenderFrameResult &)>;
 using ChannelPortHandle = std::shared_ptr<IChannelPort>;
 
 enum class ScreenKind { Main, Alternate };
@@ -37,30 +40,6 @@ struct ChannelCacheReplayResult {
   ECM last_error = OK;
 };
 
-struct ChannelVtSnapshot {
-  bool available = false;
-  int rows = 0;
-  int cols = 0;
-  int cursor_row = 0;
-  int cursor_col = 0;
-  uint64_t history_lines = 0;
-  uint64_t total_lines = 0;
-  uint64_t display_offset = 0;
-  uint64_t damage_serial = 0;
-  bool in_alternate_screen = false;
-  bool cursor_visible = false;
-  bool mouse_reporting_active = false;
-  bool mouse_report_click = false;
-  bool mouse_drag = false;
-  bool mouse_motion = false;
-  bool mouse_sgr_encoding = false;
-  bool mouse_utf8_encoding = false;
-  bool app_cursor_keys = false;
-  bool app_keypad = false;
-  bool alternate_scroll = false;
-  size_t rendered_main_rows = 0;
-};
-
 struct ChannelReadWrappedResult {
   std::string output = {};
   std::string channel_name = {};
@@ -79,17 +58,6 @@ struct ChannelCacheCopyResult {
   ChannelVtSnapshot vt_snapshot = {};
   std::string vt_main_replay_ansi = {};
   std::string vt_visible_frame_ansi = {};
-};
-
-struct ChannelRenderFrameResult {
-  bool in_alternate_screen = false;
-  ChannelVtSnapshot vt_snapshot = {};
-  std::string vt_main_replay_ansi = {};
-  std::string vt_visible_frame_ansi = {};
-};
-
-struct ChannelRenderFrameArgs {
-  uint64_t viewport_offset = 0;
 };
 
 struct ChannelCacheTruncateArgs {
@@ -142,6 +110,7 @@ struct ChannelLoopStartArgs {
 
 struct ChannelForegroundBindArgs {
   ChannelOutputProcessor processor = {};
+  ChannelRenderProcessor render_processor = {};
   SOCKET key_event_handle = INVALID_SOCKET;
   AMAtomic<std::vector<char>> *key_cache = nullptr;
   ChannelInputTransformer input_transformer = {};

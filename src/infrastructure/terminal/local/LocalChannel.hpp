@@ -1393,7 +1393,8 @@ public:
       return {AMT::ChannelCacheReplayResult{}, loop_rcm};
     }
 
-    auto result = AttachConsumer(bind_args.processor);
+    auto result =
+        cache_.AttachConsumer(bind_args.processor, bind_args.render_processor);
     {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
       if (result.rcm) {

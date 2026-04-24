@@ -2,6 +2,7 @@
 
 #include "domain/terminal/ChannelPort.hpp"
 #include "foundation/tools/string.hpp"
+#include "infrastructure/terminal/vt/AmsVtPort.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,10 +13,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#ifdef AMSFTP_VT_STATIC
-#include "AmsVt.h"
-#endif
 
 namespace AMInfra::terminal {
 namespace AMT = AMDomain::terminal;
@@ -45,13 +42,9 @@ private:
     std::uint64_t soft_warn_epoch = 0;
 
     AMT::ChannelOutputProcessor consumer = {};
+    AMT::ChannelRenderProcessor render_consumer = {};
     ECM last_error = OK;
-
-#ifdef AMSFTP_VT_STATIC
-    AmsVtHandle *vt = nullptr;
-    int vt_rows = 24;
-    int vt_cols = 80;
-#endif
+    vt::AmsVtPort vt;
   };
 
   struct ScreenToggleMatch_ {
@@ -68,7 +61,6 @@ private:
     size_t appended_bytes = 0;
   };
 
-#ifdef AMSFTP_VT_STATIC
   struct VtRenderCache_ {
     bool valid = false;
     uint64_t damage_serial = 0;
@@ -77,7 +69,6 @@ private:
     std::string main_replay_ansi = {};
     std::string visible_frame_ansi = {};
   };
-#endif
 
 public:
   explicit ChannelCacheStore(
@@ -89,18 +80,18 @@ public:
         buffer_exceed_callback_(std::move(buffer_exceed_callback)),
         terminal_manager_arg_(std::move(terminal_manager_arg)) {
     AMT::NormalizeTerminalManagerArg(&terminal_manager_arg_);
+    state_.vt.SetTerminalManagerArg(terminal_manager_arg_);
   }
 
   ~ChannelCacheStore() {
     (void)DetachConsumer();
-#ifdef AMSFTP_VT_STATIC
     std::lock_guard<std::mutex> lock(mutex_);
     ResetVtUnlocked_();
-#endif
   }
 
   [[nodiscard]] ECMData<AMT::ChannelCacheReplayResult>
-  AttachConsumer(AMT::ChannelOutputProcessor processor) {
+  AttachConsumer(AMT::ChannelOutputProcessor processor,
+                 AMT::ChannelRenderProcessor render_processor = {}) {
     ECMData<AMT::ChannelCacheReplayResult> out = {};
     if (!processor) {
       out.rcm = Err(ErrorCode::InvalidArg, "terminal.channel.attach",
@@ -132,6 +123,7 @@ public:
       out.data.last_error = state_.last_error;
       state_.attached = false;
       state_.consumer = {};
+      state_.render_consumer = {};
       if (state_.soft_limit_hit) {
         state_.soft_warn_epoch = state_.attach_epoch;
       }
@@ -196,6 +188,7 @@ public:
       std::lock_guard<std::mutex> lock(mutex_);
       state_.attached = true;
       state_.consumer = std::move(processor);
+      state_.render_consumer = std::move(render_processor);
     }
 
     out.rcm = OK;
@@ -206,6 +199,7 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     state_.attached = false;
     state_.consumer = {};
+    state_.render_consumer = {};
     return OK;
   }
 
@@ -229,30 +223,20 @@ public:
     out.data.in_alternate_screen = state_.cache.in_alternate_screen;
     out.data.latest_output = state_.latest_output;
     out.data.cached_bytes = state_.cached_bytes;
-    out.data.vt_snapshot = BuildVtSnapshotUnlocked_();
-    auto vt_render_bundle = BuildVtRenderBundleUnlocked_(out.data.vt_snapshot);
-    out.data.vt_main_replay_ansi =
-        std::move(vt_render_bundle.main_replay_ansi).value_or("");
+    auto render_frame = BuildRenderFrameUnlocked_();
+    out.data.vt_snapshot = render_frame.vt_snapshot;
+    out.data.vt_main_replay_ansi = std::move(render_frame.vt_main_replay_ansi);
     out.data.vt_visible_frame_ansi =
-        std::move(vt_render_bundle.visible_frame_ansi).value_or("");
+        std::move(render_frame.vt_visible_frame_ansi);
     out.rcm = OK;
     return out;
   }
 
   [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
-  GetRenderFrame(
-      const AMT::ChannelRenderFrameArgs &render_args = {}) const {
+  GetRenderFrame(const AMT::ChannelRenderFrameArgs &render_args = {}) const {
     ECMData<AMT::ChannelRenderFrameResult> out = {};
     std::lock_guard<std::mutex> lock(mutex_);
-    out.data.in_alternate_screen = state_.cache.in_alternate_screen;
-    out.data.vt_snapshot = BuildVtSnapshotUnlocked_();
-    auto vt_render_bundle =
-        BuildVtRenderBundleUnlocked_(out.data.vt_snapshot,
-                                     render_args.viewport_offset);
-    out.data.vt_main_replay_ansi =
-        std::move(vt_render_bundle.main_replay_ansi).value_or("");
-    out.data.vt_visible_frame_ansi =
-        std::move(vt_render_bundle.visible_frame_ansi).value_or("");
+    out.data = BuildRenderFrameUnlocked_(render_args.viewport_offset);
     out.rcm = OK;
     return out;
   }
@@ -267,10 +251,8 @@ public:
     state_.soft_limit_hit = false;
     state_.hard_limit_hit = false;
     state_.soft_warn_epoch = state_.attach_epoch;
-#ifdef AMSFTP_VT_STATIC
-    ResetVtUnlocked_();
-    EnsureVtUnlocked_(state_.vt_cols, state_.vt_rows);
-#endif
+    state_.vt.Clear();
+    vt_render_cache_ = {};
     return OK;
   }
 
@@ -359,6 +341,8 @@ public:
     out.data.eof = read_result.data.eof;
 
     AMT::ChannelOutputProcessor consumer = {};
+    AMT::ChannelRenderProcessor render_consumer = {};
+    std::optional<AMT::ChannelRenderFrameResult> render_frame = std::nullopt;
     AMT::BufferExceedCallback buffer_exceed_callback = {};
     std::optional<AMT::BufferExceedEvent> soft_limit_event = std::nullopt;
     std::optional<AMT::BufferExceedEvent> hard_limit_event = std::nullopt;
@@ -426,6 +410,10 @@ public:
         if (state_.attached && state_.consumer) {
           consumer = state_.consumer;
         }
+        if (state_.attached && state_.render_consumer) {
+          render_consumer = state_.render_consumer;
+          render_frame = BuildRenderFrameUnlocked_();
+        }
         if (buffer_exceed_callback_) {
           buffer_exceed_callback = buffer_exceed_callback_;
         }
@@ -443,6 +431,12 @@ public:
     if (!out.data.output.empty() && consumer) {
       try {
         consumer(out.data.output);
+      } catch (...) {
+      }
+    }
+    if (render_consumer && render_frame.has_value()) {
+      try {
+        render_consumer(*render_frame);
       } catch (...) {
       }
     }
@@ -643,131 +637,56 @@ private:
     return min_remove_bytes;
   }
 
-  void EnsureVtUnlocked_(int cols, int rows) {
-#ifdef AMSFTP_VT_STATIC
-    state_.vt_cols = std::max(1, cols);
-    state_.vt_rows = std::max(1, rows);
-    if (state_.vt != nullptr) {
-      return;
-    }
-    const uint64_t scrollback_limit = std::clamp<uint64_t>(
-        terminal_manager_arg_.channel_cache_threshold_bytes.terminate /
-            static_cast<size_t>(std::max(1, state_.vt_cols)),
-        10000U, 500000U);
-    state_.vt = AmsVtCreate(state_.vt_rows, state_.vt_cols, scrollback_limit);
-#else
-    (void)cols;
-    (void)rows;
-#endif
-  }
+  void EnsureVtUnlocked_(int cols, int rows) { state_.vt.Ensure(cols, rows); }
 
   void ResizeVtUnlocked_(int cols, int rows) {
-#ifdef AMSFTP_VT_STATIC
-    EnsureVtUnlocked_(cols, rows);
-    if (state_.vt != nullptr) {
-      AmsVtResize(state_.vt, state_.vt_rows, state_.vt_cols);
-    }
-#else
-    (void)cols;
-    (void)rows;
-#endif
+    state_.vt.Resize(cols, rows);
+    vt_render_cache_ = {};
   }
 
   void ResetVtUnlocked_() {
-#ifdef AMSFTP_VT_STATIC
-    if (state_.vt != nullptr) {
-      AmsVtFree(state_.vt);
-      state_.vt = nullptr;
-    }
+    state_.vt.Reset();
     vt_render_cache_ = {};
-#endif
   }
 
   void FeedRawOutputToVtUnlocked_(std::string_view output) {
-#ifdef AMSFTP_VT_STATIC
-    EnsureVtUnlocked_(state_.vt_cols, state_.vt_rows);
-    if (state_.vt == nullptr || output.empty()) {
-      return;
-    }
-    AmsVtFeed(state_.vt, reinterpret_cast<const uint8_t *>(output.data()),
-              output.size());
-#else
-    (void)output;
-#endif
+    state_.vt.Feed(output);
   }
 
   void RebuildVtFromCacheUnlocked_() {
-#ifdef AMSFTP_VT_STATIC
     ResetVtUnlocked_();
-    EnsureVtUnlocked_(state_.vt_cols, state_.vt_rows);
-    if (state_.vt == nullptr) {
-      return;
-    }
-
-    auto feed_toggle = [this](bool to_alternate) {
-      static constexpr std::string_view kEnterAlt = "\x1b[?1049h";
-      static constexpr std::string_view kExitAlt = "\x1b[?1049l";
-      std::string_view const seq = to_alternate ? kEnterAlt : kExitAlt;
-      AmsVtFeed(state_.vt, reinterpret_cast<const uint8_t *>(seq.data()),
-                seq.size());
-    };
 
     AMT::ScreenKind current_screen = AMT::ScreenKind::Main;
     for (const auto &block : state_.cache.blocks) {
       if (block.screen != current_screen) {
-        feed_toggle(block.screen == AMT::ScreenKind::Alternate);
+        state_.vt.FeedScreenToggle(block.screen == AMT::ScreenKind::Alternate);
         current_screen = block.screen;
       }
       FeedRawOutputToVtUnlocked_(block.data);
     }
 
-    const AMT::ScreenKind final_screen =
-        state_.cache.in_alternate_screen ? AMT::ScreenKind::Alternate
-                                         : AMT::ScreenKind::Main;
+    const AMT::ScreenKind final_screen = state_.cache.in_alternate_screen
+                                             ? AMT::ScreenKind::Alternate
+                                             : AMT::ScreenKind::Main;
     if (current_screen != final_screen) {
-      feed_toggle(final_screen == AMT::ScreenKind::Alternate);
+      state_.vt.FeedScreenToggle(final_screen == AMT::ScreenKind::Alternate);
     }
-#endif
   }
 
-  [[nodiscard]] std::optional<std::string> RenderVtMainReplayRawUnlocked_() const {
-#ifdef AMSFTP_VT_STATIC
-    if (state_.vt == nullptr) {
+  [[nodiscard]] std::optional<std::string>
+  RenderVtMainReplayRawUnlocked_() const {
+    if (!state_.vt.Snapshot().available) {
       return std::nullopt;
     }
-    const AmsVtSnapshot snapshot = AmsVtGetSnapshot(state_.vt);
-    if (snapshot.in_alternate_screen != 0U) {
-      return std::string{};
-    }
-    char *rendered = AmsVtRenderMainReplayAnsiUtf8(state_.vt);
-    if (rendered == nullptr) {
-      return std::string{};
-    }
-    std::string out(rendered);
-    AmsVtFreeString(rendered);
-    return out;
-#else
-    return std::nullopt;
-#endif
+    return state_.vt.RenderMainReplayAnsi();
   }
 
   [[nodiscard]] std::optional<std::string>
   RenderVtVisibleFrameRawUnlocked_(uint64_t viewport_offset) const {
-#ifdef AMSFTP_VT_STATIC
-    if (state_.vt == nullptr) {
+    if (!state_.vt.Snapshot().available) {
       return std::nullopt;
     }
-    char *rendered =
-        AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(state_.vt, viewport_offset);
-    if (rendered == nullptr) {
-      return std::string{};
-    }
-    std::string out(rendered);
-    AmsVtFreeString(rendered);
-    return out;
-#else
-    return std::nullopt;
-#endif
+    return state_.vt.RenderVisibleFrameAnsi(viewport_offset);
   }
 
   struct VtRenderBundle_ {
@@ -779,8 +698,7 @@ private:
   BuildVtRenderBundleUnlocked_(const AMT::ChannelVtSnapshot &vt_snapshot,
                                uint64_t viewport_offset = 0) const {
     VtRenderBundle_ out = {};
-#ifdef AMSFTP_VT_STATIC
-    if (!vt_snapshot.available || state_.vt == nullptr) {
+    if (!vt_snapshot.available) {
       vt_render_cache_ = {};
       return out;
     }
@@ -802,43 +720,24 @@ private:
 
     out.main_replay_ansi = vt_render_cache_.main_replay_ansi;
     out.visible_frame_ansi = vt_render_cache_.visible_frame_ansi;
-#else
-    (void)vt_snapshot;
-#endif
     return out;
   }
 
   [[nodiscard]] AMT::ChannelVtSnapshot BuildVtSnapshotUnlocked_() const {
-    AMT::ChannelVtSnapshot out = {};
-#ifdef AMSFTP_VT_STATIC
-    if (state_.vt == nullptr) {
-      return out;
-    }
-    const AmsVtSnapshot snapshot = AmsVtGetSnapshot(state_.vt);
-    out.available = true;
-    out.rows = snapshot.rows;
-    out.cols = snapshot.cols;
-    out.cursor_row = snapshot.cursor_row;
-    out.cursor_col = snapshot.cursor_col;
-    out.history_lines = snapshot.history_lines;
-    out.total_lines = snapshot.total_lines;
-    out.display_offset = snapshot.display_offset;
-    out.damage_serial = snapshot.damage_serial;
-    out.in_alternate_screen = snapshot.in_alternate_screen != 0U;
-    out.cursor_visible = snapshot.cursor_visible != 0U;
-    out.mouse_reporting_active = snapshot.mouse_reporting_active != 0U;
-    out.mouse_report_click = snapshot.mouse_report_click != 0U;
-    out.mouse_drag = snapshot.mouse_drag != 0U;
-    out.mouse_motion = snapshot.mouse_motion != 0U;
-    out.mouse_sgr_encoding = snapshot.mouse_sgr_encoding != 0U;
-    out.mouse_utf8_encoding = snapshot.mouse_utf8_encoding != 0U;
-    out.app_cursor_keys = snapshot.app_cursor_keys != 0U;
-    out.app_keypad = snapshot.app_keypad != 0U;
-    out.alternate_scroll = snapshot.alternate_scroll != 0U;
-    out.rendered_main_rows = static_cast<size_t>(std::min<uint64_t>(
-        snapshot.rendered_main_rows,
-        static_cast<uint64_t>(std::numeric_limits<size_t>::max())));
-#endif
+    return state_.vt.Snapshot();
+  }
+
+  [[nodiscard]] AMT::ChannelRenderFrameResult
+  BuildRenderFrameUnlocked_(uint64_t viewport_offset = 0) const {
+    AMT::ChannelRenderFrameResult out = {};
+    out.in_alternate_screen = state_.cache.in_alternate_screen;
+    out.vt_snapshot = BuildVtSnapshotUnlocked_();
+    auto vt_render_bundle =
+        BuildVtRenderBundleUnlocked_(out.vt_snapshot, viewport_offset);
+    out.vt_main_replay_ansi =
+        std::move(vt_render_bundle.main_replay_ansi).value_or("");
+    out.vt_visible_frame_ansi =
+        std::move(vt_render_bundle.visible_frame_ansi).value_or("");
     return out;
   }
 
@@ -855,10 +754,8 @@ private:
   AMT::TerminalManagerArg terminal_manager_arg_ = {};
 
   mutable std::mutex mutex_ = {};
-  RuntimeState_ state_ = {};
-#ifdef AMSFTP_VT_STATIC
+  RuntimeState_ state_ = RuntimeState_();
   mutable VtRenderCache_ vt_render_cache_ = {};
-#endif
 };
 
 } // namespace AMInfra::terminal
