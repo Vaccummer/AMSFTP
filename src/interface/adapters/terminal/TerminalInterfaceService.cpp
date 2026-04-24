@@ -269,7 +269,10 @@ void RestoreCliPromptStateAfterTerminalExit_() {
   out += "\x1b>";
 
   const bool capture_local_wheel =
-      allow_local_wheel_capture && local_browse_active;
+      allow_local_wheel_capture &&
+      (local_browse_active ||
+       (!vt_snapshot.in_alternate_screen &&
+        !vt_snapshot.mouse_reporting_active));
   if (vt_snapshot.available) {
     if (!local_browse_active && vt_snapshot.mouse_reporting_active) {
       if (vt_snapshot.mouse_report_click) {
@@ -1966,6 +1969,13 @@ ECM TerminalInterfaceService::LaunchTerminal(
         } else {
           (void)apply_local_viewport_offset(
               current > kMouseWheelStep ? current - kMouseWheelStep : 0U);
+        }
+        return true;
+      }
+
+      if (vt_snapshot.available && !vt_snapshot.mouse_reporting_active) {
+        if (local_browse_active.load(std::memory_order_acquire)) {
+          (void)exit_local_scrollback();
         }
         return true;
       }
