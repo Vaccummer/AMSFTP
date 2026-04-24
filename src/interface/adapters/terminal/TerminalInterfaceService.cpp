@@ -60,6 +60,8 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
 constexpr const char *kDefaultTerminalType_ = "xterm-256color";
 constexpr std::string_view kLocalWheelUpInput_("\0AMSFTP_WHEEL_UP\0", 17);
 constexpr std::string_view kLocalWheelDownInput_("\0AMSFTP_WHEEL_DOWN\0", 19);
+constexpr std::string_view kLocalAltDownInput_("\0AMSFTP_ALT_DOWN\0", 17);
+constexpr std::string_view kLocalAltUpInput_("\0AMSFTP_ALT_UP\0", 15);
 
 [[nodiscard]] AMDomain::terminal::ChannelOpenArgs
 BuildChannelOpenArgs_(const std::string &channel_name,
@@ -261,7 +263,8 @@ void RestoreCliPromptStateAfterTerminalExit_() {
 
 [[nodiscard]] std::string BuildTerminalInputProtocolAnsi_(
     const AMDomain::terminal::ChannelVtSnapshot &vt_snapshot,
-    bool local_browse_active, bool allow_local_wheel_capture = true) {
+    bool local_browse_active, bool suppress_mouse_tracking = false,
+    bool allow_local_wheel_capture = true) {
   constexpr std::string_view kDisableMouseProtocols =
       "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1007l";
   std::string out(kDisableMouseProtocols);
@@ -269,12 +272,13 @@ void RestoreCliPromptStateAfterTerminalExit_() {
   out += "\x1b>";
 
   const bool capture_local_wheel =
-      allow_local_wheel_capture &&
+      allow_local_wheel_capture && !suppress_mouse_tracking &&
       (local_browse_active ||
        (!vt_snapshot.in_alternate_screen &&
         !vt_snapshot.mouse_reporting_active));
   if (vt_snapshot.available) {
-    if (!local_browse_active && vt_snapshot.mouse_reporting_active) {
+    if (!suppress_mouse_tracking && !local_browse_active &&
+        vt_snapshot.mouse_reporting_active) {
       if (vt_snapshot.mouse_report_click) {
         out += "\x1b[?1000h";
       }
@@ -292,7 +296,8 @@ void RestoreCliPromptStateAfterTerminalExit_() {
       }
     }
     if (!local_browse_active && vt_snapshot.in_alternate_screen &&
-        !vt_snapshot.mouse_reporting_active && vt_snapshot.alternate_scroll) {
+        !suppress_mouse_tracking && !vt_snapshot.mouse_reporting_active &&
+        vt_snapshot.alternate_scroll) {
       out += "\x1b[?1007h";
     }
     if (vt_snapshot.app_cursor_keys) {
@@ -842,6 +847,23 @@ PollLocalTerminalInput_(std::string *out, std::string *error) {
         return LocalInputPollStatus_::Ready;
       }
       continue;
+    }
+
+    if (record.EventType == KEY_EVENT &&
+        record.Event.KeyEvent.wVirtualKeyCode == VK_MENU) {
+      DWORD consumed = 0;
+      if (ReadConsoleInputW(input, &record, 1, &consumed) == 0) {
+        *error = "Console input consume failed";
+        return LocalInputPollStatus_::Error;
+      }
+      if (consumed == 0) {
+        return LocalInputPollStatus_::Ready;
+      }
+      std::string_view const token = record.Event.KeyEvent.bKeyDown
+                                         ? kLocalAltDownInput_
+                                         : kLocalAltUpInput_;
+      out->assign(token.data(), token.size());
+      return LocalInputPollStatus_::Ready;
     }
 
     const bool key_down =
@@ -1614,12 +1636,14 @@ ECM TerminalInterfaceService::LaunchTerminal(
   bool have_last_server_screen_state = false;
   bool last_server_in_alternate_screen = false;
   bool last_local_browse_active = false;
+  bool last_local_mouse_passthrough_active = false;
   AMTerminalTools::TerminalViewportInfo last_render_geometry = geometry;
   std::vector<std::string> last_rendered_lines = {};
   bool have_last_vt_snapshot = false;
   AMDomain::terminal::ChannelVtSnapshot last_vt_snapshot = {};
   std::atomic<uint64_t> local_viewport_offset = 0;
   std::atomic<bool> local_browse_active = false;
+  std::atomic<bool> local_mouse_passthrough_active = false;
   std::string pending_local_input = {};
   AMTerminalTools::TerminalViewportInfo last_geometry = geometry;
   auto clear_keyboard_capture_buffers = [&]() {
@@ -1657,12 +1681,14 @@ ECM TerminalInterfaceService::LaunchTerminal(
 #ifdef _WIN32
       raw_terminal.SetMouseInputEnabled(false);
 #endif
-      WriteTerminalBytes_(BuildTerminalInputProtocolAnsi_({}, false, false));
+      WriteTerminalBytes_(
+          BuildTerminalInputProtocolAnsi_({}, false, false, false));
       WriteTerminalBytes_(kTerminalExitAlternateScreen_);
       physical_alt_screen_active = false;
       have_last_server_screen_state = false;
       last_server_in_alternate_screen = false;
       last_local_browse_active = false;
+      last_local_mouse_passthrough_active = false;
       last_render_geometry = geometry;
       last_rendered_lines.clear();
       have_last_vt_snapshot = false;
@@ -1670,6 +1696,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     }
     local_viewport_offset.store(0, std::memory_order_release);
     local_browse_active.store(false, std::memory_order_release);
+    local_mouse_passthrough_active.store(false, std::memory_order_release);
     {
       std::lock_guard<std::mutex> input_guard(local_input_mutex);
       pending_local_input.clear();
@@ -1684,6 +1711,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
     AMDomain::terminal::ChannelVtSnapshot vt_snapshot =
         frame_result.vt_snapshot;
     bool const browse_active = local_browse_active.load(std::memory_order_acquire);
+    bool const mouse_passthrough_active =
+        local_mouse_passthrough_active.load(std::memory_order_acquire);
     const uint64_t viewport_offset =
         local_viewport_offset.load(std::memory_order_acquire);
     if (browse_active || viewport_offset != 0U) {
@@ -1696,11 +1725,13 @@ ECM TerminalInterfaceService::LaunchTerminal(
     auto const current_geometry = AMTerminalTools::GetTerminalViewportInfo();
     const std::vector<std::string> current_lines = SplitAnsiFrameLines_(frame);
     const std::string input_protocol_ansi =
-        BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active);
+        BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active,
+                                        mouse_passthrough_active);
 #ifdef _WIN32
     bool const enable_local_wheel_capture =
-        browse_active ||
-        (!vt_snapshot.in_alternate_screen && !vt_snapshot.mouse_reporting_active);
+        !mouse_passthrough_active &&
+        (browse_active || (!vt_snapshot.in_alternate_screen &&
+                           !vt_snapshot.mouse_reporting_active));
     raw_terminal.SetMouseInputEnabled(enable_local_wheel_capture);
 #endif
     const bool force_full_clear =
@@ -1712,7 +1743,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const bool input_protocol_changed =
         !have_last_vt_snapshot ||
         InputProtocolStateChanged_(vt_snapshot, last_vt_snapshot) ||
-        browse_active != last_local_browse_active;
+        browse_active != last_local_browse_active ||
+        mouse_passthrough_active != last_local_mouse_passthrough_active;
 
     if (!lines_changed && vt_snapshot.available && have_last_vt_snapshot) {
       const bool cursor_changed =
@@ -1737,6 +1769,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
       cursor_only += vt_snapshot.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
       WriteTerminalBytes_(cursor_only);
       last_local_browse_active = browse_active;
+      last_local_mouse_passthrough_active = mouse_passthrough_active;
       last_render_geometry = current_geometry;
       last_vt_snapshot = vt_snapshot;
       return;
@@ -1793,6 +1826,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     WriteTerminalBytes_(repaint);
     last_rendered_lines = current_lines;
     last_local_browse_active = browse_active;
+    last_local_mouse_passthrough_active = mouse_passthrough_active;
     last_render_geometry = current_geometry;
     have_last_vt_snapshot = vt_snapshot.available;
     last_vt_snapshot = vt_snapshot;
@@ -1945,7 +1979,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
       auto const vt_snapshot = load_vt_snapshot();
       bool const wheel = (button & 64U) != 0U && (button & 3U) <= 1U;
-      bool const ctrl_pressed = (button & 16U) != 0U;
+      bool const alt_pressed = (button & 8U) != 0U;
       if (local_browse_active.load(std::memory_order_acquire)) {
         if (wheel) {
           apply_local_mouse_wheel(button);
@@ -1955,7 +1989,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
         return true;
       }
 
-      if (ctrl_pressed) {
+      if (alt_pressed) {
         if (wheel && vt_snapshot.available) {
           local_browse_active.store(true, std::memory_order_release);
           apply_local_mouse_wheel(button);
@@ -1985,6 +2019,19 @@ ECM TerminalInterfaceService::LaunchTerminal(
     };
 
     while (!pending_local_input.empty()) {
+      if (pending_local_input.starts_with(kLocalAltDownInput_)) {
+        local_mouse_passthrough_active.store(true, std::memory_order_release);
+        (void)exit_local_scrollback();
+        render_current_frame();
+        pending_local_input.erase(0, kLocalAltDownInput_.size());
+        continue;
+      }
+      if (pending_local_input.starts_with(kLocalAltUpInput_)) {
+        local_mouse_passthrough_active.store(false, std::memory_order_release);
+        render_current_frame();
+        pending_local_input.erase(0, kLocalAltUpInput_.size());
+        continue;
+      }
       if (pending_local_input.starts_with(kLocalWheelUpInput_)) {
         local_browse_active.store(true, std::memory_order_release);
         uint64_t const current =
