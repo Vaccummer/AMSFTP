@@ -17,7 +17,7 @@
 namespace AMInfra::terminal {
 namespace AMT = AMDomain::terminal;
 
-class ChannelCacheStore {
+class ChannelCacheStore : public AMT::IVtFramePort {
 
 private:
   static constexpr size_t kMaxEscapeTailBytes = 16U;
@@ -233,12 +233,23 @@ public:
   }
 
   [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
-  GetRenderFrame(const AMT::ChannelRenderFrameArgs &render_args = {}) const {
+  RenderFrame(
+      const AMT::ChannelRenderFrameArgs &render_args = {}) const override {
     ECMData<AMT::ChannelRenderFrameResult> out = {};
     std::lock_guard<std::mutex> lock(mutex_);
     out.data = BuildRenderFrameUnlocked_(render_args.viewport_offset);
     out.rcm = OK;
     return out;
+  }
+
+  [[nodiscard]] AMT::ChannelVtSnapshot Snapshot() const override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return BuildVtSnapshotUnlocked_();
+  }
+
+  [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
+  GetRenderFrame(const AMT::ChannelRenderFrameArgs &render_args = {}) const {
+    return RenderFrame(render_args);
   }
 
   ECM ClearCache() {

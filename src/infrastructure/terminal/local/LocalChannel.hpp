@@ -1316,10 +1316,18 @@ public:
     return cache_.GetCacheCopy();
   }
 
+  [[nodiscard]] AMT::IVtFramePort *GetVtFramePort() override {
+    return &cache_;
+  }
+
+  [[nodiscard]] const AMT::IVtFramePort *GetVtFramePort() const override {
+    return &cache_;
+  }
+
   [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
   GetRenderFrame(
       const AMT::ChannelRenderFrameArgs &render_args = {}) const override {
-    return cache_.GetRenderFrame(render_args);
+    return cache_.RenderFrame(render_args);
   }
 
   ECM ClearCache() override { return cache_.ClearCache(); }
