@@ -1695,7 +1695,9 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const std::string input_protocol_ansi =
         BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active);
 #ifdef _WIN32
-    bool const enable_local_wheel_capture = browse_active;
+    bool const enable_local_wheel_capture =
+        browse_active ||
+        (!vt_snapshot.in_alternate_screen && !vt_snapshot.mouse_reporting_active);
     raw_terminal.SetMouseInputEnabled(enable_local_wheel_capture);
 #endif
     const bool force_full_clear =
