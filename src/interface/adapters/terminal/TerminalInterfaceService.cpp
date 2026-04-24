@@ -1572,6 +1572,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     return rcm;
   }
   const auto channel_port = channel_port_result.data;
+  auto *vt_frame_port = channel_port->GetVtFramePort();
 
   const ECM loop_rcm =
       channel_port->EnsureLoopStarted({control, write_kick_timeout_ms});
@@ -1799,11 +1800,11 @@ ECM TerminalInterfaceService::LaunchTerminal(
   };
   std::function<void()> render_current_frame = [&]() {
     AMDomain::terminal::ChannelRenderFrameResult frame_result = {};
-    if (channel_port) {
+    if (vt_frame_port != nullptr) {
       AMDomain::terminal::ChannelRenderFrameArgs render_args = {};
       render_args.viewport_offset =
           local_viewport_offset.load(std::memory_order_acquire);
-      auto result = channel_port->GetRenderFrame(render_args);
+      auto result = vt_frame_port->RenderFrame(render_args);
       if ((result.rcm)) {
         frame_result = std::move(result.data);
       }
@@ -1827,14 +1828,10 @@ ECM TerminalInterfaceService::LaunchTerminal(
   };
   AMDomain::terminal::ChannelForegroundBindArgs bind_args = {};
   auto load_vt_snapshot = [&]() -> AMDomain::terminal::ChannelVtSnapshot {
-    if (!channel_port) {
+    if (vt_frame_port == nullptr) {
       return {};
     }
-    auto frame_result = channel_port->GetRenderFrame();
-    if (!(frame_result.rcm)) {
-      return {};
-    }
-    return frame_result.data.vt_snapshot;
+    return vt_frame_port->Snapshot();
   };
   auto clamp_local_viewport_offset =
       [&](uint64_t desired_offset) -> uint64_t {
