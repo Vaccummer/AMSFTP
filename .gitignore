@@ -24,3 +24,4 @@ AMATrial*
 !src/infrastructure/config/**
 trashes/
 /task_md
+logs

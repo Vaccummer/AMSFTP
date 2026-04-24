@@ -60,9 +60,9 @@ Check these values before configuring the project:
 
 ### Build Steps
 
-1. Build the Rust TOML helper library in `release` mode.
+1. Build the Rust helper library in `release` mode.
 
-`CMakeLists.txt` currently searches `rust_toml_read.lib` only in `src/foreign/tomlread/target/release`, so this step should stay as `--release`.
+`CMakeLists.txt` currently searches `rust_toml_read.lib` only in `src/foreign/tomlread/target/release`, so this step should stay as `--release`. This crate also includes the Rust VT backend exports used by interactive terminal history rendering.
 
 ```powershell
 Set-Location .\src\foreign\tomlread
@@ -236,16 +236,26 @@ ssh dev@main
 term ls
 channel add dev@main
 channel ls dev
+channel export dev@main D:\logs\dev-main.txt
 channel rm dev@main
 ```
 
 Terminal target syntax is `[terminal]@[channel]` or just `channel`. For example, `ssh dev@main` opens channel `main` in terminal/client `dev`.
+
+`channel export <terminal>@<channel> <local-file>` appends the channel's VT history to a local text file. Formatting such as colors and bold text is ignored, missing parent directories are created automatically, and relative paths are resolved to an absolute local path before writing and printing.
 
 Terminal shortcuts:
 
 - `Ctrl+]`, then `q` or `Q`: detach from the foreground terminal and return to the AMSFTP prompt.
 - Exiting the remote or local shell closes the foreground session normally.
 - `term ls` and `channel ls` show reusable terminal/channel state after detaching.
+
+Terminal prompt templates in `config/settings.toml` can also use these Lua globals:
+
+- `channel_num`, `term_num`: total managed channels and terminals
+- `channel_ok`, `channel_disconnected`: channel counts for the current terminal/client
+- `term_ok`, `term_disconnected`: terminal session state counts
+- `channel_name`: current channel name for the current terminal/client, or an empty string when none is active
 
 ### Interactive Shortcuts
 

@@ -2,18 +2,38 @@
 
 Rust terminal emulator backend for AMSFTP interactive channels.
 
-## Integration order
+## Current integration
 
-1. Split server output into main-screen and alternate-screen blocks in C++.
-   Feed only main-screen blocks into `AmsVtFeed`; alternate-screen output stays
-   raw and is written directly to the physical terminal while the channel is
-   attached.
-2. Keep the Rust VT size synchronized with the physical terminal size through
-   `AmsVtResize`.
-3. Use `AmsVtGetSnapshot` and `AmsVtRenderBufferLineUtf8` to render replay
-   content instead of replaying raw escape sequences from C++ caches.
-4. Move channel detach cleanup to the Rust-rendered buffer model, so row
-   accounting is derived from the emulator state rather than cursor guesses.
+The C++ channel cache feeds server output into the Rust VT through
+`AmsVtFeed`, keeps the viewport synchronized with `AmsVtResize`, and uses
+`AmsVtGetSnapshot` plus rendered frames to drive foreground terminal redraw.
 
-The C++ runtime is intentionally not wired to this backend yet. CMake only links
-`amsftp_vt.lib` when the Rust static library already exists.
+The VT model owns parsed terminal state:
+
+- main screen
+- alternate screen
+- scrollback
+- cursor position and visibility
+- terminal modes, including mouse reporting and application key modes
+
+The C++ cache still keeps raw main/alternate output blocks for fallback,
+threshold accounting, and VT rebuild after cache truncation. Interactive redraw
+and exported history should prefer VT-rendered content rather than replaying raw
+escape sequences.
+
+## Export behavior
+
+`AmsVtRenderMainReplayAnsiUtf8` renders main-screen scrollback plus the current
+viewport as ANSI text. `AmsVtRenderVisibleFrameWithOffsetAnsiUtf8` renders the
+active visible frame, optionally offset into scrollback.
+
+The C++ `IVtFramePort::RenderPlainTextHistory()` path converts VT-rendered
+history to plain text for `channel export <terminal>@<channel> <local-file>`.
+ANSI formatting is stripped, and the interface layer appends the result to a
+local file after creating missing parent directories.
+
+## Build note
+
+The root build currently links the Rust exports through the `rust_toml_read`
+static library, which includes this backend as a path module. Build
+`src/foreign/tomlread` in `release` mode before configuring the CMake preset.
