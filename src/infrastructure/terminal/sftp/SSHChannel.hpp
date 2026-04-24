@@ -365,12 +365,6 @@ public:
     return &cache_;
   }
 
-  [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
-  GetRenderFrame(
-      const AMT::ChannelRenderFrameArgs &render_args = {}) const override {
-    return cache_.RenderFrame(render_args);
-  }
-
   ECM ClearCache() override { return cache_.ClearCache(); }
 
   [[nodiscard]] ECMData<AMT::ChannelCacheTruncateResult> TruncateCache(

@@ -253,11 +253,6 @@ public:
     return BuildVtSnapshotUnlocked_();
   }
 
-  [[nodiscard]] ECMData<AMT::ChannelRenderFrameResult>
-  GetRenderFrame(const AMT::ChannelRenderFrameArgs &render_args = {}) const {
-    return RenderFrame(render_args);
-  }
-
   ECM ClearCache() {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.cache.blocks.clear();
