@@ -168,7 +168,6 @@ public:
   [[nodiscard]] virtual ECMData<ChannelCacheCopyResult>
   GetCacheCopy() const = 0;
 
-  [[nodiscard]] virtual IVtFramePort *GetVtFramePort() = 0;
   [[nodiscard]] virtual const IVtFramePort *GetVtFramePort() const = 0;
 
   virtual ECM ClearCache() = 0;

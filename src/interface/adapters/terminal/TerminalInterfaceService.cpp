@@ -1569,7 +1569,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     return rcm;
   }
   const auto channel_port = channel_port_result.data;
-  auto *vt_frame_port = channel_port->GetVtFramePort();
+  const auto *vt_frame_port = channel_port->GetVtFramePort();
 
   const ECM loop_rcm =
       channel_port->EnsureLoopStarted({control, write_kick_timeout_ms});
