@@ -788,6 +788,18 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
         });
 
     channel_module_node->AddFunction(
+        "export", "Append channel VT history to a local text file", args,
+        &CliArgsPool::channel, &CliChannelArgs::export_history,
+        [&args](CommandNode &node) {
+          node.AddOption("target", args.channel.export_history.request.target,
+                         1, 1, "Channel target: [termname]@channel", true);
+          node.AddOption("path", args.channel.export_history.request.path, 1,
+                         1, "Local text file path", true);
+          node.AddPositionalRule(0, Sem::ChannelTargetExisting, false);
+          node.AddPositionalRule(1, Sem::Path, false);
+        });
+
+    channel_module_node->AddFunction(
         "clear", "Check and remove unhealthy channels", args,
         &CliArgsPool::channel, &CliChannelArgs::clear,
         [&args](CommandNode &node) {

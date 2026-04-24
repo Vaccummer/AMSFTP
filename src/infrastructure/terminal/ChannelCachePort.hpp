@@ -253,6 +253,14 @@ public:
     return BuildVtSnapshotUnlocked_();
   }
 
+  [[nodiscard]] std::string RenderPlainTextHistory() const override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!state_.vt.Snapshot().available) {
+      return {};
+    }
+    return state_.vt.RenderPlainTextHistory();
+  }
+
   ECM ClearCache() {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.cache.blocks.clear();

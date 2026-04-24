@@ -15,6 +15,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -2970,6 +2972,107 @@ ECM TerminalInterfaceService::RenameChannel(
   prompt_io_manager_.FmtPrint("✅ Channel renamed: {}@{} -> {}@{}",
                               src_target.nickname, src_channel,
                               dst_target.nickname, dst_channel);
+  return OK;
+}
+
+ECM TerminalInterfaceService::ExportChannelHistory(
+    const ChannelExportArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string default_nickname = AMDomain::host::HostService::NormalizeNickname(
+      AMStr::Strip(filesystem_service_.CurrentNickname()));
+  if (default_nickname.empty()) {
+    default_nickname = "local";
+  }
+
+  auto target_result = ParseTerminalTargetSpec_(arg.target, default_nickname);
+  if (!(target_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(target_result.rcm);
+    return target_result.rcm;
+  }
+  const TerminalTargetSpec_ target = target_result.data;
+  const std::string channel_name =
+      target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
+  if (channel_name.empty()) {
+    const ECM rcm =
+        Err(EC::InvalidArg, "", arg.target, "Channel name is required");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  std::filesystem::path export_path(AMStr::Strip(arg.path));
+  if (export_path.empty()) {
+    const ECM rcm =
+        Err(EC::InvalidArg, "", "path", "Export path is required");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  if (control.IsInterrupted()) {
+    return Err(EC::Terminate, "channel.export", channel_name,
+               "Interrupted by user");
+  }
+
+  auto channel_result = terminal_service_.EnsureChannelPort(
+      target.nickname, channel_name, control);
+  if (!(channel_result.rcm) || !channel_result.data) {
+    const ECM rcm = channel_result.rcm
+                        ? Err(EC::InvalidHandle, "", channel_name,
+                              "Channel handle is null")
+                        : channel_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  const AMDomain::terminal::IVtFramePort *vt_port =
+      channel_result.data->GetVtFramePort();
+  if (vt_port == nullptr || !vt_port->Snapshot().available) {
+    const ECM rcm =
+        Err(EC::OperationUnsupported, "channel.export", channel_name,
+            "VT history is unavailable for this channel");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  std::string history = vt_port->RenderPlainTextHistory();
+  if (!history.empty() && history.back() != '\n') {
+    history.push_back('\n');
+  }
+
+  std::error_code fs_ec = {};
+  const std::filesystem::path parent = export_path.parent_path();
+  if (!parent.empty()) {
+    std::filesystem::create_directories(parent, fs_ec);
+    if (fs_ec) {
+      const ECM rcm =
+          Err(EC::LocalFileError, "channel.export", parent.string(),
+              AMStr::fmt("Failed to create parent directories: {}",
+                         fs_ec.message()));
+      prompt_io_manager_.ErrorFormat(rcm);
+      return rcm;
+    }
+  }
+
+  std::ofstream out(export_path, std::ios::out | std::ios::binary |
+                                     std::ios::app);
+  if (!out.is_open()) {
+    const ECM rcm = Err(EC::LocalFileOpenError, "channel.export",
+                        export_path.string(), "Failed to open export file");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+  out.write(history.data(), static_cast<std::streamsize>(history.size()));
+  if (!out.good()) {
+    const ECM rcm = Err(EC::LocalFileWriteError, "channel.export",
+                        export_path.string(), "Failed to write export file");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  prompt_io_manager_.FmtPrint("✅ Channel history exported: {}@{} -> {} "
+                              "({} bytes appended)",
+                              target.nickname, channel_name,
+                              export_path.string(), history.size());
   return OK;
 }
 

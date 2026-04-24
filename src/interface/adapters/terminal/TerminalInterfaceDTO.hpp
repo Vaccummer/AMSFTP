@@ -47,6 +47,11 @@ struct ChannelRenameArg {
   std::string dst = {};
 };
 
+struct ChannelExportArg {
+  std::string target = {};
+  std::string path = {};
+};
+
 struct ChannelClearArg {
   std::string nickname = {};
   double timeout_s = 1.5;

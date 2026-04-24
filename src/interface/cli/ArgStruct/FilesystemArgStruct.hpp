@@ -745,6 +745,20 @@ struct ChannelRenameArgs : BaseArgStruct {
   void reset() override { request = {}; }
 };
 
+struct ChannelExportArgs : BaseArgStruct {
+  AMInterface::terminal::ChannelExportArg request = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    auto arg = request;
+    arg.target = AMStr::Strip(arg.target);
+    arg.path = AMStr::Strip(arg.path);
+    return managers.interfaces.terminal_interface_service->ExportChannelHistory(
+        arg);
+  }
+  void reset() override { request = {}; }
+};
+
 struct ChannelClearArgs : BaseArgStruct {
   AMInterface::terminal::ChannelClearArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,

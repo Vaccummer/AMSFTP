@@ -54,6 +54,7 @@ public:
 
   [[nodiscard]] virtual ChannelVtSnapshot Snapshot() const = 0;
   [[nodiscard]] virtual std::string RenderMainReplayAnsi() const = 0;
+  [[nodiscard]] virtual std::string RenderPlainTextHistory() const = 0;
   [[nodiscard]] virtual std::string
   RenderVisibleFrameAnsi(uint64_t viewport_offset = 0) const = 0;
 };
@@ -63,6 +64,7 @@ public:
   virtual ~IVtFramePort() = default;
 
   [[nodiscard]] virtual ChannelVtSnapshot Snapshot() const = 0;
+  [[nodiscard]] virtual std::string RenderPlainTextHistory() const = 0;
   [[nodiscard]] virtual ECMData<ChannelRenderFrameResult>
   RenderFrame(const ChannelRenderFrameArgs &render_args = {}) const = 0;
 };

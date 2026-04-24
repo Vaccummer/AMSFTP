@@ -2,6 +2,7 @@
 #include "application/client/ClientAppService.hpp"
 #include "application/prompt/PromptRenderDTO.hpp"
 #include "domain/config/ConfigModel.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
@@ -256,25 +257,75 @@ std::pair<int64_t, int64_t> CountFinishedTransferTasks_(
   return {success_task, failed_task};
 }
 
-std::pair<int64_t, int64_t> CountTerminalResources_(
-    AMApplication::terminal::TermAppService &terminal_service) {
-  int64_t term_num = 0;
+struct PromptTerminalResourceSnapshot_ {
   int64_t channel_num = 0;
+  int64_t term_num = 0;
+  int64_t channel_ok = 0;
+  int64_t channel_disconnected = 0;
+  int64_t term_ok = 0;
+  int64_t term_disconnected = 0;
+  std::string channel_name = "";
+};
+
+std::string NormalizePromptTerminalKey_(const std::string &nickname) {
+  std::string key =
+      AMDomain::host::HostService::NormalizeNickname(AMStr::Strip(nickname));
+  if (AMDomain::host::HostService::IsLocalNickname(key)) {
+    key = "local";
+  }
+  return key;
+}
+
+PromptTerminalResourceSnapshot_ CountTerminalResources_(
+    AMApplication::terminal::TermAppService &terminal_service,
+    const std::string &current_nickname) {
+  PromptTerminalResourceSnapshot_ out = {};
+  const std::string current_key = NormalizePromptTerminalKey_(current_nickname);
   const auto terminal_names = terminal_service.ListTerminalNames();
-  term_num = static_cast<int64_t>(terminal_names.size());
+  out.term_num = static_cast<int64_t>(terminal_names.size());
   for (const auto &terminal_name : terminal_names) {
     auto terminal_result =
         terminal_service.GetTerminalByNickname(terminal_name, true);
+    const bool terminal_ok =
+        (terminal_result.rcm) && terminal_result.data &&
+        terminal_result.data->GetSessionState().status ==
+            AMDomain::client::ClientStatus::OK;
+    if (terminal_ok) {
+      ++out.term_ok;
+    } else {
+      ++out.term_disconnected;
+    }
     if (!(terminal_result.rcm) || !terminal_result.data) {
       continue;
     }
+
     auto list_result = terminal_result.data->ListChannels({}, {});
     if (!(list_result.rcm)) {
       continue;
     }
-    channel_num += static_cast<int64_t>(list_result.data.channels.size());
+
+    const bool is_current_terminal =
+        NormalizePromptTerminalKey_(terminal_name) == current_key;
+    if (is_current_terminal) {
+      out.channel_name = list_result.data.current_channel;
+    }
+
+    out.channel_num += static_cast<int64_t>(list_result.data.channels.size());
+    if (!is_current_terminal) {
+      continue;
+    }
+
+    for (const auto &[_, channel_port] : list_result.data.channels) {
+      const bool channel_ok =
+          channel_port != nullptr && !channel_port->GetState().closed;
+      if (channel_ok) {
+        ++out.channel_ok;
+      } else {
+        ++out.channel_disconnected;
+      }
+    }
   }
-  return {channel_num, term_num};
+  return out;
 }
 
 AMApplication::prompt::PromptRenderDTO
@@ -312,10 +363,15 @@ BuildPromptRenderDTO_(const CLIServices &managers, const ECM &result,
   dto.success_task = success_task;
   dto.failed_task = failed_task;
 
-  const auto [channel_num, term_num] =
-      CountTerminalResources_(managers.application.terminal_service.Get());
-  dto.channel_num = channel_num;
-  dto.term_num = term_num;
+  const auto terminal_snapshot = CountTerminalResources_(
+      managers.application.terminal_service.Get(), dto.nickname);
+  dto.channel_num = terminal_snapshot.channel_num;
+  dto.term_num = terminal_snapshot.term_num;
+  dto.channel_ok = terminal_snapshot.channel_ok;
+  dto.channel_disconnected = terminal_snapshot.channel_disconnected;
+  dto.term_ok = terminal_snapshot.term_ok;
+  dto.term_disconnected = terminal_snapshot.term_disconnected;
+  dto.channel_name = terminal_snapshot.channel_name;
 
   dto.time_now = FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
   dto.elapsed = AMStr::fmt("{}ms", std::max<int64_t>(0, elapsed_time_ms));
