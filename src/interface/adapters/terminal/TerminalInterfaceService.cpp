@@ -3007,6 +3007,7 @@ ECM TerminalInterfaceService::ExportChannelHistory(
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
+  export_path = std::filesystem::absolute(export_path);
 
   if (control.IsInterrupted()) {
     return Err(EC::Terminate, "channel.export", channel_name,
