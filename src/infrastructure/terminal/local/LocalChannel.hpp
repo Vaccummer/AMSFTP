@@ -1316,10 +1316,6 @@ public:
     return cache_.GetCacheCopy();
   }
 
-  [[nodiscard]] AMT::IVtFramePort *GetVtFramePort() override {
-    return &cache_;
-  }
-
   [[nodiscard]] const AMT::IVtFramePort *GetVtFramePort() const override {
     return &cache_;
   }
