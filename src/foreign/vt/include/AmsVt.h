@@ -35,6 +35,15 @@ typedef struct AmsVtSnapshot {
   uint64_t rendered_main_rows;
   uint8_t in_alternate_screen;
   uint8_t cursor_visible;
+  uint8_t mouse_reporting_active;
+  uint8_t mouse_report_click;
+  uint8_t mouse_drag;
+  uint8_t mouse_motion;
+  uint8_t mouse_sgr_encoding;
+  uint8_t mouse_utf8_encoding;
+  uint8_t app_cursor_keys;
+  uint8_t app_keypad;
+  uint8_t alternate_scroll;
 } AmsVtSnapshot;
 
 AMSFTP_VT_API AmsVtHandle *AmsVtCreate(int32_t rows, int32_t cols,

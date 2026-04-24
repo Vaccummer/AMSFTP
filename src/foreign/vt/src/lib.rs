@@ -24,6 +24,15 @@ pub struct AmsVtSnapshot {
     rendered_main_rows: u64,
     in_alternate_screen: u8,
     cursor_visible: u8,
+    mouse_reporting_active: u8,
+    mouse_report_click: u8,
+    mouse_drag: u8,
+    mouse_motion: u8,
+    mouse_sgr_encoding: u8,
+    mouse_utf8_encoding: u8,
+    app_cursor_keys: u8,
+    app_keypad: u8,
+    alternate_scroll: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -421,6 +430,15 @@ pub extern "C" fn AmsVtGetSnapshot(handle: *const AmsVtHandle) -> AmsVtSnapshot 
             rendered_main_rows: 0,
             in_alternate_screen: 0,
             cursor_visible: 0,
+            mouse_reporting_active: 0,
+            mouse_report_click: 0,
+            mouse_drag: 0,
+            mouse_motion: 0,
+            mouse_sgr_encoding: 0,
+            mouse_utf8_encoding: 0,
+            app_cursor_keys: 0,
+            app_keypad: 0,
+            alternate_scroll: 0,
         };
     };
 
@@ -444,6 +462,15 @@ pub extern "C" fn AmsVtGetSnapshot(handle: *const AmsVtHandle) -> AmsVtSnapshot 
         },
         in_alternate_screen: u8::from(vt.term.mode().contains(TermMode::ALT_SCREEN)),
         cursor_visible: u8::from(vt.term.mode().contains(TermMode::SHOW_CURSOR)),
+        mouse_reporting_active: u8::from(vt.term.mode().intersects(TermMode::MOUSE_MODE)),
+        mouse_report_click: u8::from(vt.term.mode().contains(TermMode::MOUSE_REPORT_CLICK)),
+        mouse_drag: u8::from(vt.term.mode().contains(TermMode::MOUSE_DRAG)),
+        mouse_motion: u8::from(vt.term.mode().contains(TermMode::MOUSE_MOTION)),
+        mouse_sgr_encoding: u8::from(vt.term.mode().contains(TermMode::SGR_MOUSE)),
+        mouse_utf8_encoding: u8::from(vt.term.mode().contains(TermMode::UTF8_MOUSE)),
+        app_cursor_keys: u8::from(vt.term.mode().contains(TermMode::APP_CURSOR)),
+        app_keypad: u8::from(vt.term.mode().contains(TermMode::APP_KEYPAD)),
+        alternate_scroll: u8::from(vt.term.mode().contains(TermMode::ALTERNATE_SCROLL)),
     }
 }
 
@@ -527,8 +554,7 @@ pub extern "C" fn AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(
         let line = visible_viewport_line(vt, index, viewport_offset);
         let width = visible_line_render_width(vt, line);
         out.push_str(&render_line_ansi_with_width(vt, line, width));
-        out.push_str("\x1b[K");
-        if index + 1 < rows && !line_is_wrapped(vt, line) {
+        if index + 1 < rows {
             out.push_str("\r\n");
         }
     }
