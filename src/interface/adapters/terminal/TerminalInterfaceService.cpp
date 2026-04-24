@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -60,8 +61,6 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
 constexpr const char *kDefaultTerminalType_ = "xterm-256color";
 constexpr std::string_view kLocalWheelUpInput_("\0AMSFTP_WHEEL_UP\0", 17);
 constexpr std::string_view kLocalWheelDownInput_("\0AMSFTP_WHEEL_DOWN\0", 19);
-constexpr std::string_view kLocalAltDownInput_("\0AMSFTP_ALT_DOWN\0", 17);
-constexpr std::string_view kLocalAltUpInput_("\0AMSFTP_ALT_UP\0", 15);
 
 [[nodiscard]] AMDomain::terminal::ChannelOpenArgs
 BuildChannelOpenArgs_(const std::string &channel_name,
@@ -263,22 +262,15 @@ void RestoreCliPromptStateAfterTerminalExit_() {
 
 [[nodiscard]] std::string BuildTerminalInputProtocolAnsi_(
     const AMDomain::terminal::ChannelVtSnapshot &vt_snapshot,
-    bool local_browse_active, bool suppress_mouse_tracking = false,
-    bool allow_local_wheel_capture = true) {
+    bool local_browse_active) {
   constexpr std::string_view kDisableMouseProtocols =
       "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1007l";
   std::string out(kDisableMouseProtocols);
   out += "\x1b[?1l";
   out += "\x1b>";
 
-  const bool capture_local_wheel =
-      allow_local_wheel_capture && !suppress_mouse_tracking &&
-      (local_browse_active ||
-       (!vt_snapshot.in_alternate_screen &&
-        !vt_snapshot.mouse_reporting_active));
   if (vt_snapshot.available) {
-    if (!suppress_mouse_tracking && !local_browse_active &&
-        vt_snapshot.mouse_reporting_active) {
+    if (!local_browse_active && vt_snapshot.mouse_reporting_active) {
       if (vt_snapshot.mouse_report_click) {
         out += "\x1b[?1000h";
       }
@@ -296,8 +288,7 @@ void RestoreCliPromptStateAfterTerminalExit_() {
       }
     }
     if (!local_browse_active && vt_snapshot.in_alternate_screen &&
-        !suppress_mouse_tracking && !vt_snapshot.mouse_reporting_active &&
-        vt_snapshot.alternate_scroll) {
+        !vt_snapshot.mouse_reporting_active && vt_snapshot.alternate_scroll) {
       out += "\x1b[?1007h";
     }
     if (vt_snapshot.app_cursor_keys) {
@@ -306,9 +297,6 @@ void RestoreCliPromptStateAfterTerminalExit_() {
     if (vt_snapshot.app_keypad) {
       out += "\x1b=";
     }
-  }
-  if (capture_local_wheel) {
-    out += "\x1b[?1000h\x1b[?1006h";
   }
   return out;
 }
@@ -849,23 +837,6 @@ PollLocalTerminalInput_(std::string *out, std::string *error) {
       continue;
     }
 
-    if (record.EventType == KEY_EVENT &&
-        record.Event.KeyEvent.wVirtualKeyCode == VK_MENU) {
-      DWORD consumed = 0;
-      if (ReadConsoleInputW(input, &record, 1, &consumed) == 0) {
-        *error = "Console input consume failed";
-        return LocalInputPollStatus_::Error;
-      }
-      if (consumed == 0) {
-        return LocalInputPollStatus_::Ready;
-      }
-      std::string_view const token = record.Event.KeyEvent.bKeyDown
-                                         ? kLocalAltDownInput_
-                                         : kLocalAltUpInput_;
-      out->assign(token.data(), token.size());
-      return LocalInputPollStatus_::Ready;
-    }
-
     const bool key_down =
         record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown;
     if (key_down) {
@@ -1065,6 +1036,17 @@ public:
     out->assign(guard->data(), guard->size());
     guard->clear();
     return true;
+  }
+
+  void InjectInput(std::string_view input) {
+    if (input.empty()) {
+      return;
+    }
+    {
+      auto guard = key_cache_.lock();
+      guard->insert(guard->end(), input.begin(), input.end());
+    }
+    SignalKey_();
   }
 
   bool ConsumeFatalError(std::string *error) {
@@ -1296,6 +1278,169 @@ private:
   int key_pipe_[2] = {-1, -1};
 #endif
 };
+
+#ifdef _WIN32
+class MouseWheelMonitor_ final : NonCopyableNonMovable {
+public:
+  using WheelCallback = std::function<void(std::string_view)>;
+
+  MouseWheelMonitor_() = default;
+  ~MouseWheelMonitor_() override { Stop(); }
+
+  ECM Start(HWND target_window, WheelCallback callback) {
+    if (running_) {
+      return OK;
+    }
+    target_window_ =
+        target_window == nullptr ? nullptr : GetAncestor(target_window, GA_ROOT);
+    if (target_window_ == nullptr) {
+      return Err(EC::InvalidArg, "terminal.mouse_wheel.start", "<window>",
+                 "Foreground terminal window is unavailable");
+    }
+    if (!callback) {
+      return Err(EC::InvalidArg, "terminal.mouse_wheel.start", "<callback>",
+                 "Mouse wheel callback is empty");
+    }
+
+    ready_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (ready_event_ == nullptr) {
+      return Err(EC::CommonFailure, "terminal.mouse_wheel.start", "<event>",
+                 "Failed to create mouse hook ready event");
+    }
+
+    callback_ = std::move(callback);
+    enabled_.store(false, std::memory_order_release);
+    stop_requested_.store(false, std::memory_order_release);
+
+    try {
+      hook_thread_ = std::jthread([this]() { HookLoop_(); });
+    } catch (...) {
+      CloseReadyEvent_();
+      callback_ = {};
+      return Err(EC::CommonFailure, "terminal.mouse_wheel.start", "<thread>",
+                 "Failed to create mouse hook thread");
+    }
+
+    const DWORD wait_rc = WaitForSingleObject(ready_event_, 3000);
+    if (wait_rc != WAIT_OBJECT_0 || hook_ == nullptr) {
+      Stop();
+      return Err(EC::CommonFailure, "terminal.mouse_wheel.start", "<hook>",
+                 "Failed to install mouse wheel hook");
+    }
+
+    running_ = true;
+    return OK;
+  }
+
+  void Stop() {
+    stop_requested_.store(true, std::memory_order_release);
+    enabled_.store(false, std::memory_order_release);
+    if (hook_thread_id_ != 0U) {
+      (void)PostThreadMessageW(hook_thread_id_, WM_QUIT, 0, 0);
+    }
+    if (hook_thread_.joinable()) {
+      hook_thread_.request_stop();
+      hook_thread_.join();
+    }
+    running_ = false;
+    callback_ = {};
+    target_window_ = nullptr;
+    CloseReadyEvent_();
+  }
+
+  void SetEnabled(bool enabled) {
+    enabled_.store(enabled, std::memory_order_release);
+  }
+
+private:
+  void HookLoop_() {
+    hook_thread_id_ = GetCurrentThreadId();
+    active_instance_ = this;
+    MSG queue_warmup = {};
+    (void)PeekMessageW(&queue_warmup, nullptr, WM_USER, WM_USER,
+                       PM_NOREMOVE);
+    hook_ = SetWindowsHookExW(WH_MOUSE_LL, &MouseWheelMonitor_::HookProc_,
+                              GetModuleHandleW(nullptr), 0);
+    if (ready_event_ != nullptr) {
+      (void)SetEvent(ready_event_);
+    }
+
+    MSG msg = {};
+    while (!stop_requested_.load(std::memory_order_acquire) &&
+           GetMessageW(&msg, nullptr, 0, 0) > 0) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+
+    if (hook_ != nullptr) {
+      (void)UnhookWindowsHookEx(hook_);
+      hook_ = nullptr;
+    }
+    if (active_instance_ == this) {
+      active_instance_ = nullptr;
+    }
+    hook_thread_id_ = 0U;
+  }
+
+  [[nodiscard]] bool ForegroundMatchesTarget_() const {
+    HWND foreground = GetForegroundWindow();
+    if (foreground == nullptr || target_window_ == nullptr) {
+      return false;
+    }
+    foreground = GetAncestor(foreground, GA_ROOT);
+    return foreground == target_window_;
+  }
+
+  [[nodiscard]] LRESULT HandleHook_(int code, WPARAM wparam,
+                                    LPARAM lparam) {
+    if (code != HC_ACTION || wparam != WM_MOUSEWHEEL ||
+        !enabled_.load(std::memory_order_acquire) ||
+        !ForegroundMatchesTarget_()) {
+      return CallNextHookEx(hook_, code, wparam, lparam);
+    }
+
+    auto const *info = reinterpret_cast<const MSLLHOOKSTRUCT *>(lparam);
+    if (info == nullptr) {
+      return CallNextHookEx(hook_, code, wparam, lparam);
+    }
+    const SHORT delta = static_cast<SHORT>(HIWORD(info->mouseData));
+    std::string_view const token =
+        delta > 0 ? kLocalWheelUpInput_ : kLocalWheelDownInput_;
+    if (callback_) {
+      callback_(token);
+      return 1;
+    }
+    return CallNextHookEx(hook_, code, wparam, lparam);
+  }
+
+  static LRESULT CALLBACK HookProc_(int code, WPARAM wparam, LPARAM lparam) {
+    if (active_instance_ == nullptr) {
+      return CallNextHookEx(nullptr, code, wparam, lparam);
+    }
+    return active_instance_->HandleHook_(code, wparam, lparam);
+  }
+
+  void CloseReadyEvent_() {
+    if (ready_event_ != nullptr) {
+      (void)CloseHandle(ready_event_);
+      ready_event_ = nullptr;
+    }
+  }
+
+private:
+  inline static MouseWheelMonitor_ *active_instance_ = nullptr;
+
+  std::atomic<bool> enabled_ = false;
+  std::atomic<bool> stop_requested_ = false;
+  bool running_ = false;
+  HWND target_window_ = nullptr;
+  HHOOK hook_ = nullptr;
+  HANDLE ready_event_ = nullptr;
+  DWORD hook_thread_id_ = 0U;
+  std::jthread hook_thread_ = {};
+  WheelCallback callback_ = {};
+};
+#endif
 
 struct TerminalInterfaceService::SharedKeyboardMonitor_ {
   KeyboardInputMonitor_ monitor = {};
@@ -1636,16 +1781,36 @@ ECM TerminalInterfaceService::LaunchTerminal(
   bool have_last_server_screen_state = false;
   bool last_server_in_alternate_screen = false;
   bool last_local_browse_active = false;
-  bool last_local_mouse_passthrough_active = false;
   AMTerminalTools::TerminalViewportInfo last_render_geometry = geometry;
   std::vector<std::string> last_rendered_lines = {};
   bool have_last_vt_snapshot = false;
   AMDomain::terminal::ChannelVtSnapshot last_vt_snapshot = {};
   std::atomic<uint64_t> local_viewport_offset = 0;
   std::atomic<bool> local_browse_active = false;
-  std::atomic<bool> local_mouse_passthrough_active = false;
   std::string pending_local_input = {};
   AMTerminalTools::TerminalViewportInfo last_geometry = geometry;
+#ifdef _WIN32
+  MouseWheelMonitor_ mouse_wheel_monitor = {};
+  HWND const terminal_foreground_window =
+      GetAncestor(GetForegroundWindow(), GA_ROOT);
+  const ECM mouse_wheel_start_rcm =
+      mouse_wheel_monitor.Start(terminal_foreground_window,
+                                [keyboard_monitor](std::string_view token) {
+                                  if (keyboard_monitor != nullptr) {
+                                    keyboard_monitor->InjectInput(token);
+                                  }
+                                });
+  if (!(mouse_wheel_start_rcm)) {
+    keyboard_monitor->DeactivateCapture();
+    keyboard_monitor->DrainSignal();
+    raw_terminal.Restore();
+    RestoreCliPromptStateAfterTerminalExit_();
+    prompt_cache_guard.Disable();
+    prompt_io_manager_.Print("");
+    prompt_io_manager_.ErrorFormat(mouse_wheel_start_rcm);
+    return mouse_wheel_start_rcm;
+  }
+#endif
   auto clear_keyboard_capture_buffers = [&]() {
     if (keyboard_monitor == nullptr) {
       return;
@@ -1679,16 +1844,15 @@ ECM TerminalInterfaceService::LaunchTerminal(
         return;
       }
 #ifdef _WIN32
+      mouse_wheel_monitor.SetEnabled(false);
       raw_terminal.SetMouseInputEnabled(false);
 #endif
-      WriteTerminalBytes_(
-          BuildTerminalInputProtocolAnsi_({}, false, false, false));
+      WriteTerminalBytes_(BuildTerminalInputProtocolAnsi_({}, false));
       WriteTerminalBytes_(kTerminalExitAlternateScreen_);
       physical_alt_screen_active = false;
       have_last_server_screen_state = false;
       last_server_in_alternate_screen = false;
       last_local_browse_active = false;
-      last_local_mouse_passthrough_active = false;
       last_render_geometry = geometry;
       last_rendered_lines.clear();
       have_last_vt_snapshot = false;
@@ -1696,7 +1860,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
     }
     local_viewport_offset.store(0, std::memory_order_release);
     local_browse_active.store(false, std::memory_order_release);
-    local_mouse_passthrough_active.store(false, std::memory_order_release);
     {
       std::lock_guard<std::mutex> input_guard(local_input_mutex);
       pending_local_input.clear();
@@ -1711,8 +1874,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
     AMDomain::terminal::ChannelVtSnapshot vt_snapshot =
         frame_result.vt_snapshot;
     bool const browse_active = local_browse_active.load(std::memory_order_acquire);
-    bool const mouse_passthrough_active =
-        local_mouse_passthrough_active.load(std::memory_order_acquire);
     const uint64_t viewport_offset =
         local_viewport_offset.load(std::memory_order_acquire);
     if (browse_active || viewport_offset != 0U) {
@@ -1725,14 +1886,11 @@ ECM TerminalInterfaceService::LaunchTerminal(
     auto const current_geometry = AMTerminalTools::GetTerminalViewportInfo();
     const std::vector<std::string> current_lines = SplitAnsiFrameLines_(frame);
     const std::string input_protocol_ansi =
-        BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active,
-                                        mouse_passthrough_active);
+        BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active);
 #ifdef _WIN32
-    bool const enable_local_wheel_capture =
-        !mouse_passthrough_active &&
-        (browse_active || (!vt_snapshot.in_alternate_screen &&
-                           !vt_snapshot.mouse_reporting_active));
-    raw_terminal.SetMouseInputEnabled(enable_local_wheel_capture);
+    mouse_wheel_monitor.SetEnabled(
+        vt_snapshot.available && !vt_snapshot.in_alternate_screen &&
+        !vt_snapshot.mouse_reporting_active);
 #endif
     const bool force_full_clear =
         !have_last_server_screen_state ||
@@ -1743,8 +1901,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const bool input_protocol_changed =
         !have_last_vt_snapshot ||
         InputProtocolStateChanged_(vt_snapshot, last_vt_snapshot) ||
-        browse_active != last_local_browse_active ||
-        mouse_passthrough_active != last_local_mouse_passthrough_active;
+        browse_active != last_local_browse_active;
 
     if (!lines_changed && vt_snapshot.available && have_last_vt_snapshot) {
       const bool cursor_changed =
@@ -1769,7 +1926,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
       cursor_only += vt_snapshot.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
       WriteTerminalBytes_(cursor_only);
       last_local_browse_active = browse_active;
-      last_local_mouse_passthrough_active = mouse_passthrough_active;
       last_render_geometry = current_geometry;
       last_vt_snapshot = vt_snapshot;
       return;
@@ -1826,7 +1982,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
     WriteTerminalBytes_(repaint);
     last_rendered_lines = current_lines;
     last_local_browse_active = browse_active;
-    last_local_mouse_passthrough_active = mouse_passthrough_active;
     last_render_geometry = current_geometry;
     have_last_vt_snapshot = vt_snapshot.available;
     last_vt_snapshot = vt_snapshot;
@@ -1979,20 +2134,11 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
       auto const vt_snapshot = load_vt_snapshot();
       bool const wheel = (button & 64U) != 0U && (button & 3U) <= 1U;
-      bool const alt_pressed = (button & 8U) != 0U;
       if (local_browse_active.load(std::memory_order_acquire)) {
         if (wheel) {
           apply_local_mouse_wheel(button);
         } else {
           (void)exit_local_scrollback();
-        }
-        return true;
-      }
-
-      if (alt_pressed) {
-        if (wheel && vt_snapshot.available) {
-          local_browse_active.store(true, std::memory_order_release);
-          apply_local_mouse_wheel(button);
         }
         return true;
       }
@@ -2019,19 +2165,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
     };
 
     while (!pending_local_input.empty()) {
-      if (pending_local_input.starts_with(kLocalAltDownInput_)) {
-        local_mouse_passthrough_active.store(true, std::memory_order_release);
-        (void)exit_local_scrollback();
-        render_current_frame();
-        pending_local_input.erase(0, kLocalAltDownInput_.size());
-        continue;
-      }
-      if (pending_local_input.starts_with(kLocalAltUpInput_)) {
-        local_mouse_passthrough_active.store(false, std::memory_order_release);
-        render_current_frame();
-        pending_local_input.erase(0, kLocalAltUpInput_.size());
-        continue;
-      }
       if (pending_local_input.starts_with(kLocalWheelUpInput_)) {
         local_browse_active.store(true, std::memory_order_release);
         uint64_t const current =
