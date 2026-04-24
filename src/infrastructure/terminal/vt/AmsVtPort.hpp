@@ -6,14 +6,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#ifdef AMSFTP_VT_STATIC
-#include "AmsVt.h"
-#endif
+#include "foreign\vt\include\AmsVt.h"
 
 namespace AMInfra::terminal::vt {
 namespace AMT = AMDomain::terminal;
@@ -40,7 +37,7 @@ public:
   void Ensure(int cols, int rows) {
     cols_ = std::max(1, cols);
     rows_ = std::max(1, rows);
-#ifdef AMSFTP_VT_STATIC
+
     if (handle_ != nullptr) {
       return;
     }
@@ -49,34 +46,29 @@ public:
             static_cast<size_t>(std::max(1, cols_)),
         10000U, 500000U);
     handle_ = AmsVtCreate(rows_, cols_, scrollback_limit);
-#endif
   }
 
   void Feed(std::string_view bytes) override {
     if (bytes.empty()) {
       return;
     }
-#ifdef AMSFTP_VT_STATIC
+
     Ensure(cols_, rows_);
     if (handle_ == nullptr) {
       return;
     }
     AmsVtFeed(handle_, reinterpret_cast<const uint8_t *>(bytes.data()),
               bytes.size());
-#else
-    (void)bytes;
-#endif
   }
 
   void Resize(int cols, int rows) override {
     cols_ = std::max(1, cols);
     rows_ = std::max(1, rows);
-#ifdef AMSFTP_VT_STATIC
+
     Ensure(cols_, rows_);
     if (handle_ != nullptr) {
       AmsVtResize(handle_, rows_, cols_);
     }
-#endif
   }
 
   void Clear() override {
@@ -85,12 +77,11 @@ public:
   }
 
   void Reset() {
-#ifdef AMSFTP_VT_STATIC
+
     if (handle_ != nullptr) {
       AmsVtFree(handle_);
       handle_ = nullptr;
     }
-#endif
   }
 
   void FeedScreenToggle(bool to_alternate) {
@@ -101,7 +92,7 @@ public:
 
   [[nodiscard]] AMT::ChannelVtSnapshot Snapshot() const override {
     AMT::ChannelVtSnapshot out = {};
-#ifdef AMSFTP_VT_STATIC
+
     if (handle_ == nullptr) {
       return out;
     }
@@ -129,12 +120,12 @@ public:
     out.rendered_main_rows = static_cast<size_t>(std::min<uint64_t>(
         snapshot.rendered_main_rows,
         static_cast<uint64_t>(std::numeric_limits<size_t>::max())));
-#endif
+
     return out;
   }
 
   [[nodiscard]] std::string RenderMainReplayAnsi() const override {
-#ifdef AMSFTP_VT_STATIC
+
     if (handle_ == nullptr) {
       return {};
     }
@@ -143,13 +134,10 @@ public:
       return {};
     }
     return TakeAmsVtString_(AmsVtRenderMainReplayAnsiUtf8(handle_));
-#else
-    return {};
-#endif
   }
 
   [[nodiscard]] std::string RenderPlainTextHistory() const override {
-#ifdef AMSFTP_VT_STATIC
+
     if (handle_ == nullptr) {
       return {};
     }
@@ -159,27 +147,19 @@ public:
             ? TakeAmsVtString_(AmsVtRenderVisibleFrameAnsiUtf8(handle_))
             : TakeAmsVtString_(AmsVtRenderMainReplayAnsiUtf8(handle_));
     return NormalizePlainText_(StripAnsiControls_(rendered));
-#else
-    return {};
-#endif
   }
 
   [[nodiscard]] std::string
   RenderVisibleFrameAnsi(uint64_t viewport_offset = 0) const override {
-#ifdef AMSFTP_VT_STATIC
+
     if (handle_ == nullptr) {
       return {};
     }
     return TakeAmsVtString_(
         AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(handle_, viewport_offset));
-#else
-    (void)viewport_offset;
-    return {};
-#endif
   }
 
 private:
-#ifdef AMSFTP_VT_STATIC
   [[nodiscard]] static std::string TakeAmsVtString_(char *rendered) {
     if (rendered == nullptr) {
       return {};
@@ -188,7 +168,6 @@ private:
     AmsVtFreeString(rendered);
     return out;
   }
-#endif
 
   [[nodiscard]] static std::string StripAnsiControls_(std::string_view text) {
     std::string out = {};
@@ -255,9 +234,8 @@ private:
   AMT::TerminalManagerArg terminal_manager_arg_ = {};
   int cols_ = 80;
   int rows_ = 24;
-#ifdef AMSFTP_VT_STATIC
+
   AmsVtHandle *handle_ = nullptr;
-#endif
 };
 
 } // namespace AMInfra::terminal::vt

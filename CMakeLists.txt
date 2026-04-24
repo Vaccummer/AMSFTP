@@ -91,9 +91,6 @@ find_file(RUST_TOML_READ_STATIC_LIB
   NO_DEFAULT_PATH
 )
 if (RUST_TOML_READ_STATIC_LIB)
-  target_include_directories(amsftp PRIVATE
-    "${AMSFTP_RUST_VT_DIR}/include"
-  )
   target_link_libraries(amsftp PRIVATE
     ${RUST_TOML_READ_STATIC_LIB}
     ntdll
