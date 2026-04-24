@@ -425,7 +425,8 @@ public:
   [[nodiscard]] ECMData<AMT::ChannelCacheReplayResult>
   BindForeground(const AMT::ChannelForegroundBindArgs &bind_args) override {
     ECMData<AMT::ChannelCacheReplayResult> out = {};
-    if (!bind_args.processor || bind_args.key_cache == nullptr ||
+    if ((!bind_args.processor && !bind_args.render_processor) ||
+        bind_args.key_cache == nullptr ||
         bind_args.key_event_handle <= 0) {
       out.rcm = Err(EC::InvalidArg, "terminal.channel.bind", GetChannelName(),
                     "Foreground binding arguments are invalid");

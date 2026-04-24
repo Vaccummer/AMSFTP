@@ -1823,9 +1823,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
     }
     render_frame_result_to_terminal(frame_result);
   };
-  auto render_from_channel_update = [&](std::string_view chunk) {
-    (void)chunk;
-  };
   AMDomain::terminal::ChannelForegroundBindArgs bind_args = {};
   auto load_vt_snapshot = [&]() -> AMDomain::terminal::ChannelVtSnapshot {
     if (vt_frame_port == nullptr) {
@@ -2114,7 +2111,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
     return passthrough;
   };
 
-  bind_args.processor = render_from_channel_update;
   bind_args.render_processor = render_from_channel_frame;
   bind_args.key_event_handle = keyboard_monitor->WaitHandle();
   bind_args.key_cache = keyboard_monitor->KeyCache();
