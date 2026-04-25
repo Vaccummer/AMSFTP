@@ -152,27 +152,6 @@ ParseTerminalChannelTarget_(const std::string &raw_prefix,
   return out;
 }
 
-bool ShouldCompleteSshTerminalPart_(const AMCompletionContext &ctx) {
-  const bool prefix_has_at = ctx.token_prefix.find('@') != std::string::npos;
-  const bool postfix_has_at = ctx.token_postfix.find('@') != std::string::npos;
-  return !prefix_has_at && postfix_has_at;
-}
-
-bool IsSshEmptyTerminalSlot_(const AMCompletionContext &ctx) {
-  const bool prefix_has_at = ctx.token_prefix.find('@') != std::string::npos;
-  const bool postfix_has_at = ctx.token_postfix.find('@') != std::string::npos;
-  return !prefix_has_at && postfix_has_at &&
-         AMStr::Strip(ctx.token_prefix).empty();
-}
-
-std::string ExtractSshChannelSuffix_(const AMCompletionContext &ctx) {
-  const size_t at_pos = ctx.token_postfix.find('@');
-  if (at_pos == std::string::npos) {
-    return "";
-  }
-  return ctx.token_postfix.substr(at_pos);
-}
-
 std::string FormatWithStyle_(const AMCompletionContext &ctx,
                              const std::string &text,
                              AMInterface::style::StyleIndex style_index) {
@@ -532,13 +511,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   if (channel_existing_target || channel_new_target ||
       channel_create_or_use_target) {
     if (channel_create_or_use_target && !channel_existing_target &&
-        !channel_new_target && IsSshEmptyTerminalSlot_(ctx)) {
-      return result;
-    }
-
-    if (channel_create_or_use_target && !channel_existing_target &&
-        !channel_new_target && ShouldCompleteSshTerminalPart_(ctx)) {
-      const std::string suffix = ExtractSshChannelSuffix_(ctx);
+        !channel_new_target) {
       std::vector<HostLikeNameInfo> names = CollectTerminalLikeNames_(runtime);
       std::vector<std::string> keys;
       keys.reserve(names.size());
@@ -548,7 +521,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       for (const auto &match : BuildGeneralMatch(keys, prefix)) {
         const auto &name_item = names[match.index];
         AMCompletionCandidate candidate;
-        candidate.insert_text = name_item.name + suffix;
+        candidate.insert_text = name_item.name;
         const auto state = runtime->QueryTerminalNameState(name_item.name);
         candidate.display =
             FormatWithStyle_(ctx, name_item.name, TerminalStyleKey_(state));

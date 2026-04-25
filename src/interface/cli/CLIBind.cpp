@@ -709,17 +709,17 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
       [&args](CommandNode &node) {
         node.AddOption(
             "target", args.fs.ssh.request.target, 0, 1,
-            "Optional terminal target spec: [nickname]@[channel] or channel");
+            "Optional term target: host@name or name");
         node.AddPositionalRule(0, Sem::SshChannelTarget, false);
       });
 
   CommandNode *term_module_node = root->AddFunction("term", "Terminal manager");
   if (term_module_node) {
     term_module_node->AddFunction(
-        "add", "Add one terminal by nickname", args, &CliArgsPool::term,
+        "add", "Add one term by host@name", args, &CliArgsPool::term,
         &CliTermArgs::add, [&args](CommandNode &node) {
           node.AddOption("nickname", args.term.add.request.nicknames, 1,
-                         static_cast<size_t>(-1), "Target nicknames", true);
+                         static_cast<size_t>(-1), "Term targets", true);
           node.AddFlag("-f", "--force", args.term.add.request.force,
                        "Recreate terminal if it already exists");
           node.AddPositionalRule(0, Sem::TerminalName, true);
@@ -745,73 +745,6 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                          "Per-terminal check timeout in seconds");
         });
   }
-
-  CommandNode *channel_module_node =
-      root->AddFunction("channel", "Terminal channel manager");
-  if (channel_module_node) {
-    channel_module_node->AddFunction(
-        "add", "Add one channel", args, &CliArgsPool::channel,
-        &CliChannelArgs::add, [&args](CommandNode &node) {
-          node.AddOption("target", args.channel.add.request.target, 1, 1,
-                         "Channel target: [termname]@channel", true);
-          node.AddPositionalRule(0, Sem::ChannelTargetNew, false);
-        });
-
-    channel_module_node->AddFunction(
-        "ls", "List channels in one terminal", args, &CliArgsPool::channel,
-        &CliChannelArgs::ls, [&args](CommandNode &node) {
-          node.AddOption("nickname", args.channel.ls.request.nickname, 0, 1,
-                         "Terminal nickname (optional, default current)");
-          node.AddPositionalRule(0, Sem::TerminalName, false);
-        });
-
-    channel_module_node->AddFunction(
-        "rm", "Remove one channel", args, &CliArgsPool::channel,
-        &CliChannelArgs::rm, [&args](CommandNode &node) {
-          node.AddOption("target", args.channel.rm.request.target, 1, 1,
-                         "Channel target: [termname]@channel", true);
-          node.AddFlag("-f", "--force", args.channel.rm.request.force,
-                       "Force close channel");
-          node.AddPositionalRule(0, Sem::ChannelTargetExisting, false);
-        });
-
-    channel_module_node->AddFunction(
-        "rn", "Rename one channel inside one terminal", args,
-        &CliArgsPool::channel, &CliChannelArgs::rn,
-        [&args](CommandNode &node) {
-          node.AddOption("src", args.channel.rn.request.src, 1, 1,
-                         "Source: [termname]@channel", true);
-          node.AddOption("dst", args.channel.rn.request.dst, 1, 1,
-                         "Destination: [termname]@channel", true);
-          node.AddPositionalRule(0, Sem::ChannelTargetExisting, false);
-          node.AddPositionalRule(1, Sem::ChannelTargetNew, false);
-        });
-
-    channel_module_node->AddFunction(
-        "export", "Append channel VT history to a local text file", args,
-        &CliArgsPool::channel, &CliChannelArgs::export_history,
-        [&args](CommandNode &node) {
-          node.AddOption("target", args.channel.export_history.request.target,
-                         1, 1, "Channel target: [termname]@channel", true);
-          node.AddOption("path", args.channel.export_history.request.path, 1,
-                         1, "Local text file path", true);
-          node.AddPositionalRule(0, Sem::ChannelTargetExisting, false);
-          node.AddPositionalRule(1, Sem::Path, false);
-        });
-
-    channel_module_node->AddFunction(
-        "clear", "Check and remove unhealthy channels", args,
-        &CliArgsPool::channel, &CliChannelArgs::clear,
-        [&args](CommandNode &node) {
-          node.AddOption("nickname", args.channel.clear.request.nickname, 0, 1,
-                         "Terminal nickname (optional, default current)");
-          node.AddOption("-t", "--timeout",
-                         args.channel.clear.request.timeout_s, 1, 1,
-                         Sem::None, "Per-channel check timeout in seconds");
-          node.AddPositionalRule(0, Sem::TerminalName, false);
-        });
-  }
-
   root->AddFunction("bash", "Enter interactive mode", args, &CliArgsPool::fs,
                     &CliFilesystemArgs::bash);
 

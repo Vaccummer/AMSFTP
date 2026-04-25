@@ -7,7 +7,9 @@
 #include "interface/adapters/terminal/TerminalInterfaceDTO.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
 
 namespace AMInterface::style {
 class AMStyleService;
@@ -87,6 +89,8 @@ private:
   AMDomain::client::amf default_interrupt_flag_ = nullptr;
   mutable std::shared_ptr<SharedKeyboardMonitor_> shared_keyboard_monitor_ =
       nullptr;
+  mutable std::mutex last_entered_term_mutex_ = {};
+  mutable std::string last_entered_term_key_ = {};
 };
 
 } // namespace AMInterface::terminal

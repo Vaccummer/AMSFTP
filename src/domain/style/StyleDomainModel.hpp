@@ -130,6 +130,11 @@ struct PathHighlightStyle {
   std::string find_pattern = "";
 };
 
+struct TerminalStyle {
+  std::string banner_template =
+      "[#5e63b6 b]Welcome to use CLIPrompt![/]\n";
+};
+
 struct StyleConfig {
   CompleteMenuStyle complete_menu = {};
   ProgressBarStyle progress_bar = {};
@@ -138,6 +143,7 @@ struct StyleConfig {
   ValueQueryHighlightStyle value_query_highlight = {};
   InternalStyle internal_style = {};
   PathHighlightStyle path = {};
+  TerminalStyle terminal = {};
 };
 
 struct StyleConfigArg {

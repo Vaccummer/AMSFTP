@@ -947,20 +947,29 @@ InputAnalysis InputAnalyzer::Analyze(const std::string &input) const {
                                                  TerminalNameState::Nonexistent));
         ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
         continue;
-      case AMCommandArgSemantic::ChannelTargetExisting:
-      case AMCommandArgSemantic::ChannelTargetNew:
       case AMCommandArgSemantic::SshChannelTarget: {
         const ParsedTerminalChannelTarget_ target = ParseTerminalChannelTarget_(
             raw_text, runtime_context.current_nickname);
-        const bool allow_new =
-            (*hint.semantic == AMCommandArgSemantic::ChannelTargetNew ||
-             *hint.semantic == AMCommandArgSemantic::SshChannelTarget);
+        const std::string term_key =
+            target.terminal_name + "@" + target.channel_name;
+        SetTokenClassification_(
+            &token, TokenRole::TerminalName,
+            TerminalStateToTokenState_(
+                runtime_ ? runtime_->QueryTerminalNameState(term_key)
+                         : IInputSemanticRuntime::TerminalNameState::Nonexistent));
+        ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
+        continue;
+      }
+      case AMCommandArgSemantic::ChannelTargetExisting:
+      case AMCommandArgSemantic::ChannelTargetNew: {
+        const ParsedTerminalChannelTarget_ target = ParseTerminalChannelTarget_(
+            raw_text, runtime_context.current_nickname);
+        const bool allow_new = *hint.semantic == AMCommandArgSemantic::ChannelTargetNew;
         SetTokenClassification_(
             &token, TokenRole::ChannelName,
             ChannelStateToTokenState_(
-                runtime_ ? runtime_->QueryChannelNameState(target.terminal_name,
-                                                           target.channel_name,
-                                                           allow_new)
+                runtime_ ? runtime_->QueryChannelNameState(
+                               target.terminal_name, target.channel_name, allow_new)
                          : IInputSemanticRuntime::ChannelNameState::Nonexistent));
         ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
         continue;
