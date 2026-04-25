@@ -172,9 +172,9 @@ std::string ResolvePathStyleTag(const AMDomain::style::StyleConfig &cfg,
   return NormalizeStyleTag(*path_tag);
 }
 
-AMProgressBarStyle
+AMBar::AMProgressBarStyle
 BuildProgressBarStyle(const AMDomain::style::StyleConfig &cfg) {
-  AMProgressBarStyle style{};
+  AMBar::AMProgressBarStyle style{};
   style.prefix_template = cfg.progress_bar.prefix_template;
   style.bar_template = cfg.progress_bar.bar_template;
   style.refresh_interval_ms =
@@ -208,7 +208,7 @@ BuildProgressBarStyle(const AMDomain::style::StyleConfig &cfg) {
 
 AMStyleService::AMStyleService(StyleConfigArg arg)
     : StyleConfigManager(std::move(arg)),
-      progress_bar_style_(std::optional<AMProgressBarStyle>{}) {}
+      progress_bar_style_(std::optional<AMBar::AMProgressBarStyle>{}) {}
 
 ECM AMStyleService::Init() {
   ECM rcm = StyleConfigManager::Init();
@@ -241,27 +241,27 @@ std::string AMStyleService::FormatUtf8Table(
   return AMStr::FormatUtf8Table(keys, rows, skeleton_color, 1, 1, 0, 0);
 }
 
-std::unique_ptr<BaseProgressBar>
+std::unique_ptr<AMBar::BaseProgressBar>
 AMStyleService::CreateProgressBar(int64_t total_size,
                                   const std::string &prefix) {
   (void)prefix;
   {
     const auto cached = progress_bar_style_.lock().load();
     if (cached.has_value()) {
-      auto bar = std::make_unique<BaseProgressBar>(cached.value());
+      auto bar = std::make_unique<AMBar::BaseProgressBar>(cached.value());
       bar->SetTotal(total_size);
       return bar;
     }
   }
 
   const auto cfg = GetInitArg().style;
-  const AMProgressBarStyle built = detail::BuildProgressBarStyle(cfg);
+  const AMBar::AMProgressBarStyle built = detail::BuildProgressBarStyle(cfg);
 
   auto cached = progress_bar_style_.lock();
   if (!cached->has_value()) {
     cached->emplace(built);
   }
-  auto bar = std::make_unique<BaseProgressBar>(cached->value());
+  auto bar = std::make_unique<AMBar::BaseProgressBar>(cached->value());
   bar->SetTotal(total_size);
   return bar;
 }

@@ -3,11 +3,11 @@
 
 #include "foundation/tools/prompt_ui.hpp"
 #include "foundation/tools/string.hpp"
+#include "foundation/core/SPSCRingBuffer.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <deque>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
@@ -202,22 +202,25 @@ private:
    */
   void UpdateSpeedLocked_() {
     const auto now = std::chrono::steady_clock::now();
-    speed_samples_.push_back({now, current_size_});
-    const auto horizon = std::chrono::milliseconds(style_.speed_window_ms);
-    while (speed_samples_.size() > 1 &&
-           (now - speed_samples_.front().when) > horizon) {
-      speed_samples_.pop_front();
-    }
-    if (speed_samples_.size() >= 2) {
-      const auto &first = speed_samples_.front();
-      const auto &last = speed_samples_.back();
-      const double dt =
-          std::chrono::duration<double>(last.when - first.when).count();
-      if (dt > 0.0) {
-        speed_bps_ = static_cast<double>(last.value - first.value) / dt;
-      } else {
-        speed_bps_ = 0.0;
+    speed_samples_.push({now, current_size_});
+    auto latest = speed_samples_.back();
+    if (latest.has_value() && speed_samples_.count() >= 2) {
+      const auto cutoff = now - std::chrono::milliseconds(style_.speed_window_ms);
+      SpeedSample first = *latest;
+      speed_samples_.for_each([&](const SpeedSample &s) {
+        if (s.when <= cutoff) {
+          first = s;
+        }
+      });
+      if (first.when == latest->when) {
+        if (auto oldest = speed_samples_.front(); oldest.has_value()) {
+          first = *oldest;
+        }
       }
+      const double dt =
+          std::chrono::duration<double>(latest->when - first.when).count();
+      speed_bps_ =
+          (dt > 0.0) ? static_cast<double>(latest->value - first.value) / dt : 0.0;
     } else {
       speed_bps_ = 0.0;
     }
@@ -415,10 +418,7 @@ private:
     std::chrono::steady_clock::time_point when;
     int64_t value = 0;
   };
-  std::deque<SpeedSample> speed_samples_;
+  AMFoundation::SPSCRingBuffer<SpeedSample, 256> speed_samples_{};
   double speed_bps_ = 0.0;
 };
 } // namespace AMBar
-
-using AMProgressBarStyle = AMBar::AMProgressBarStyle;
-using BaseProgressBar = AMBar::BaseProgressBar;

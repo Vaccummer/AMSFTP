@@ -80,8 +80,17 @@ target_compile_definitions(amsftp PRIVATE
   AMSFTP_APP_DESCRIPTION="${AMSFTP_APP_DESCRIPTION_TEXT}"
   AMSFTP_APP_VERSION="${AMSFTP_APP_VERSION_TEXT}"
 )
-target_compile_options(amsftp PRIVATE /W4 /Zi)
-target_link_options(amsftp PRIVATE /DEBUG:FULL)
+target_compile_options(amsftp PRIVATE /W4 /Zi
+  $<$<CONFIG:Release>:/O2>
+  $<$<CONFIG:Release>:/Ob2>
+  $<$<CONFIG:Release>:/Oi>
+  $<$<CONFIG:Release>:/arch:AVX2>
+  $<$<CONFIG:Release>:/guard:cf>
+)
+target_link_options(amsftp PRIVATE /DEBUG:FULL
+  $<$<CONFIG:Release>:/guard:cf>
+)
+set_property(TARGET amsftp PROPERTY INTERPROCEDURAL_OPTIMIZATION $<CONFIG:Release>)
 
 set(AMSFTP_RUST_DIR "${PROJECT_SOURCE_DIR}/src/foreign/amsrust")
 find_program(CARGO_EXECUTABLE cargo)

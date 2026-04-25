@@ -4,7 +4,6 @@
 #include <regex>
 #include <type_traits>
 #include <unordered_map>
-#include <unordered_set>
 #include <variant>
 #ifdef _WIN32
 #define _WINSOCKAPI_
@@ -22,8 +21,6 @@
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
-using EC = ErrorCode;
-using result_map = std::unordered_map<std::string, ErrorCode>;
 namespace fs = std::filesystem;
 
 namespace AMPath {
@@ -376,16 +373,15 @@ inline std::string NormalizeJoinedPath(const std::string &path,
 template <typename T> using JoinArgDecayT_ = std::decay_t<T>;
 
 template <typename T>
-concept JoinArg_ =
-    std::same_as<JoinArgDecayT_<T>, std::filesystem::path> ||
-    std::same_as<JoinArgDecayT_<T>, std::string> ||
-    std::same_as<JoinArgDecayT_<T>, std::vector<std::string>> ||
-    std::same_as<JoinArgDecayT_<T>, std::wstring> ||
-    std::same_as<JoinArgDecayT_<T>, const char *> ||
-    std::same_as<JoinArgDecayT_<T>, char *> ||
-    std::same_as<JoinArgDecayT_<T>, const wchar_t *> ||
-    std::same_as<JoinArgDecayT_<T>, wchar_t *> ||
-    std::same_as<JoinArgDecayT_<T>, SepType>;
+concept JoinArg_ = std::same_as<JoinArgDecayT_<T>, std::filesystem::path> ||
+                   std::same_as<JoinArgDecayT_<T>, std::string> ||
+                   std::same_as<JoinArgDecayT_<T>, std::vector<std::string>> ||
+                   std::same_as<JoinArgDecayT_<T>, std::wstring> ||
+                   std::same_as<JoinArgDecayT_<T>, const char *> ||
+                   std::same_as<JoinArgDecayT_<T>, char *> ||
+                   std::same_as<JoinArgDecayT_<T>, const wchar_t *> ||
+                   std::same_as<JoinArgDecayT_<T>, wchar_t *> ||
+                   std::same_as<JoinArgDecayT_<T>, SepType>;
 
 template <typename... Args>
   requires(JoinArg_<Args> && ...)
@@ -971,8 +967,9 @@ listdir(const std::string &path, int timeout_ms = -1,
   for (const auto &entry : dir_iter) {
     if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
                               std::chrono::milliseconds(timeout_ms)) {
-      return {ECM{EC::OperationTimeout, "path.listdir", pathf, "Listdir timeout"},
-              result};
+      return {
+          ECM{EC::OperationTimeout, "path.listdir", pathf, "Listdir timeout"},
+          result};
     }
     auto [error, info] = stat(entry.path().string(), false);
     if (error.code != EC::Success) {
@@ -983,4 +980,3 @@ listdir(const std::string &path, int timeout_ms = -1,
   return {OK, result};
 }
 } // namespace AMPath
-

@@ -139,10 +139,10 @@ BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
                     AMPath::basename(cur_task->dst));
 }
 
-BaseProgressBar::RenderArgs
+AMBar::BaseProgressBar::RenderArgs
 BuildTransferProgressRenderArgs_(const std::shared_ptr<TaskInfo> &task_info,
                                  int64_t speed_window_ms) {
-  BaseProgressBar::RenderArgs args = {};
+  AMBar::BaseProgressBar::RenderArgs args = {};
   if (!task_info) {
     args.filename = "Task";
     return args;
@@ -1451,14 +1451,15 @@ ECM TransferInterfaceService::WaitTask_(
     }
   } scoped_cursor(&prompt_io_manager_, false);
 
-  auto build_bar = [this, &task_info]() -> std::unique_ptr<BaseProgressBar> {
+  auto build_bar =
+      [this, &task_info]() -> std::unique_ptr<AMBar::BaseProgressBar> {
     const auto total_size = static_cast<int64_t>(
         task_info->Size.total.load(std::memory_order_relaxed));
     const std::string prefix = BuildTransferProgressPrefix_(task_info);
     if (style_service_ != nullptr) {
       return style_service_->CreateProgressBar(total_size, prefix);
     }
-    auto bar = std::make_unique<BaseProgressBar>();
+    auto bar = std::make_unique<AMBar::BaseProgressBar>();
     bar->SetTotal(total_size);
     return bar;
   };
@@ -1471,12 +1472,12 @@ ECM TransferInterfaceService::WaitTask_(
   }
   std::string final_line = "";
   std::string last_progress_line = "";
-  BaseProgressBar::RenderArgs last_render_args = {};
+  AMBar::BaseProgressBar::RenderArgs last_render_args = {};
   auto is_generic_task_label = [](const std::string &s) -> bool {
     return s.starts_with("Task ");
   };
   auto render_progress_line = [&]() -> std::string {
-    BaseProgressBar::RenderArgs args = BuildTransferProgressRenderArgs_(
+    AMBar::BaseProgressBar::RenderArgs args = BuildTransferProgressRenderArgs_(
         task_info, ResolveTaskSpeedWindowMs_(style_service_));
     if (is_generic_task_label(args.filename) &&
         !last_render_args.filename.empty() &&
@@ -1518,7 +1519,7 @@ ECM TransferInterfaceService::WaitTask_(
           final_prefix = latest_args.filename;
         }
       }
-      BaseProgressBar::RenderArgs final_args = last_render_args;
+      AMBar::BaseProgressBar::RenderArgs final_args = last_render_args;
       final_args.filename = final_prefix;
       final_args.total = total_now;
       final_args.transferred = transferred_now;
@@ -2075,15 +2076,15 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
         style_service_, transfer_refresh_interval_ms_);
     struct TaskWatchItem_ {
       std::shared_ptr<TaskInfo> task_info = nullptr;
-      std::unique_ptr<BaseProgressBar> bar = nullptr;
+      std::unique_ptr<AMBar::BaseProgressBar> bar = nullptr;
       std::optional<std::string> rendered_line = std::nullopt;
-      BaseProgressBar::RenderArgs last_render_args = {};
+      AMBar::BaseProgressBar::RenderArgs last_render_args = {};
       bool frozen = false;
     };
     std::vector<TaskWatchItem_> watch_items = {};
     watch_items.reserve(conducting_tasks.size());
     auto make_bar = [this](const std::shared_ptr<TaskInfo> &task_info)
-        -> std::unique_ptr<BaseProgressBar> {
+        -> std::unique_ptr<AMBar::BaseProgressBar> {
       const auto total_size = static_cast<int64_t>(
           task_info->Size.total.load(std::memory_order_relaxed));
       const std::string prefix = BuildTransferProgressPrefix_(task_info);
@@ -2093,7 +2094,7 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
           return bar;
         }
       }
-      auto bar = std::make_unique<BaseProgressBar>();
+      auto bar = std::make_unique<AMBar::BaseProgressBar>();
       bar->SetTotal(total_size);
       return bar;
     };
@@ -2160,7 +2161,7 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
             item.frozen = true;
             ++frozen_count;
             if (!item.rendered_line.has_value()) {
-              BaseProgressBar::RenderArgs args =
+              AMBar::BaseProgressBar::RenderArgs args =
                   BuildTransferProgressRenderArgs_(
                       item.task_info,
                       ResolveTaskSpeedWindowMs_(style_service_));
@@ -2176,8 +2177,9 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
             continue;
           }
 
-          BaseProgressBar::RenderArgs args = BuildTransferProgressRenderArgs_(
-              item.task_info, ResolveTaskSpeedWindowMs_(style_service_));
+          AMBar::BaseProgressBar::RenderArgs args =
+              BuildTransferProgressRenderArgs_(
+                  item.task_info, ResolveTaskSpeedWindowMs_(style_service_));
           if (is_generic_task_label(args.filename) &&
               !item.last_render_args.filename.empty() &&
               !is_generic_task_label(item.last_render_args.filename)) {
