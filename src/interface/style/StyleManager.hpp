@@ -27,10 +27,10 @@ public:
   [[nodiscard]] std::string
   FormatUtf8Table(const std::vector<std::string> &keys,
                   const std::vector<std::vector<std::string>> &rows) const;
-  [[nodiscard]] std::unique_ptr<BaseProgressBar>
+  [[nodiscard]] std::unique_ptr<AMBar::BaseProgressBar>
   CreateProgressBar(int64_t total_size, const std::string &prefix);
 
 private:
-  AMAtomic<std::optional<AMProgressBarStyle>> progress_bar_style_ = {};
+  AMAtomic<std::optional<AMBar::AMProgressBarStyle>> progress_bar_style_ = {};
 };
 } // namespace AMInterface::style

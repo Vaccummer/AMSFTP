@@ -17,8 +17,7 @@ inline bool IsTagWhitespace(char ch) {
 }
 
 inline bool IsAsciiAlphaNum(char ch) {
-  const unsigned char uch = static_cast<unsigned char>(ch);
-  return std::isalnum(uch) != 0;
+  return std::isalnum(static_cast<unsigned char>(ch)) != 0;
 }
 
 inline bool IsTagIdentChar(char ch) {
@@ -227,13 +226,11 @@ inline int ComputeWrappedRows(const std::vector<std::string> &lines, int cols) {
   const int width = std::max(1, cols);
   int rows = 0;
   for (const auto &line : lines) {
-    const std::string plain =
-        NormalizeMeasureLine(StripStyleForMeasure(line));
+    const std::string plain = NormalizeMeasureLine(StripStyleForMeasure(line));
     const size_t display_width = AMStr::DisplayWidthUtf8(plain);
-    const int line_rows =
-        std::max<int>(1, static_cast<int>((display_width +
-                                           static_cast<size_t>(width) - 1) /
-                                          static_cast<size_t>(width)));
+    const int line_rows = std::max<int>(
+        1, static_cast<int>((display_width + static_cast<size_t>(width) - 1) /
+                            static_cast<size_t>(width)));
     rows += line_rows;
   }
   return rows;

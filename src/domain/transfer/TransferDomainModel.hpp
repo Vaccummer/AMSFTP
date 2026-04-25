@@ -3,13 +3,13 @@
 #include "domain/client/ClientPort.hpp"
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
+#include "foundation/core/SPSCRingBuffer.hpp"
 #include "foundation/tools/string.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -329,8 +329,7 @@ struct TaskProgressData {
     size_t transferred = 0;
   };
 
-  mutable AMAtomic<std::deque<SpeedSample>> speed_samples =
-      AMAtomic<std::deque<SpeedSample>>(std::deque<SpeedSample>{});
+  mutable AMFoundation::SPSCRingBuffer<SpeedSample, 256> speed_samples{};
 };
 
 struct TaskCoreData {
@@ -430,20 +429,16 @@ struct TaskInfo {
     return current;
   }
 
-  void DeleteProgressData() {
-    auto samples = Progress.speed_samples.lock();
-    samples->clear();
-  }
+  void DeleteProgressData() { Progress.speed_samples.clear(); }
 
   void ResetProgressData(bool seed_current_sample = true) {
-    auto samples = Progress.speed_samples.lock();
-    samples->clear();
+    Progress.speed_samples.clear();
     if (!seed_current_sample) {
       return;
     }
-    AppendSpeedSampleLocked_(
-        &samples, Size.transferred.load(std::memory_order_relaxed),
-        std::chrono::steady_clock::now());
+    Progress.speed_samples.push(
+        {std::chrono::steady_clock::now(),
+         Size.transferred.load(std::memory_order_relaxed)});
   }
 
   void SetTransferredSize(size_t value) {
@@ -481,28 +476,28 @@ struct TaskInfo {
       int64_t window_ms = 7000) const {
     const auto horizon =
         std::chrono::milliseconds(std::max<int64_t>(1, window_ms));
-    auto samples = Progress.speed_samples.lock();
-    if (samples->size() < 2) {
+    auto latest = Progress.speed_samples.back();
+    if (!latest.has_value() || Progress.speed_samples.count() < 2) {
       return 0.0;
     }
-
-    const auto &latest = samples->back();
-    const auto cutoff = latest.when - horizon;
-    auto first = samples->begin();
-    for (auto it = samples->begin(); it != samples->end(); ++it) {
-      if (it->when <= cutoff) {
-        first = it;
-        continue;
+    const auto cutoff = latest->when - horizon;
+    TaskStruct::TaskProgressData::SpeedSample first = *latest;
+    Progress.speed_samples.for_each([&](const auto &s) {
+      if (s.when <= cutoff) {
+        first = s;
       }
-      break;
+    });
+    if (first.when == latest->when) {
+      if (auto oldest = Progress.speed_samples.front(); oldest.has_value()) {
+        first = *oldest;
+      }
     }
-
     const double dt =
-        std::chrono::duration<double>(latest.when - first->when).count();
-    if (dt <= 0.0 || latest.transferred < first->transferred) {
+        std::chrono::duration<double>(latest->when - first.when).count();
+    if (dt <= 0.0 || latest->transferred < first.transferred) {
       return 0.0;
     }
-    return static_cast<double>(latest.transferred - first->transferred) / dt;
+    return static_cast<double>(latest->transferred - first.transferred) / dt;
   }
 
   bool TryMarkCompletionDispatched() {
@@ -634,38 +629,9 @@ struct TaskInfo {
   }
 
 private:
-  using SpeedSamples = std::deque<TaskStruct::TaskProgressData::SpeedSample>;
-  using SpeedSamplesGuard = AMAtomic<SpeedSamples>::Guard;
-
   void AppendSpeedSample_(size_t transferred) {
-    auto samples = Progress.speed_samples.lock();
-    AppendSpeedSampleLocked_(&samples, transferred,
-                             std::chrono::steady_clock::now());
-  }
-
-  [[nodiscard]] size_t ResolveSpeedSampleLimit_() const {
-    const int64_t window_ms =
-        std::max<int64_t>(1, Set.speed_windows_size_s.load(
-                                 std::memory_order_relaxed)) *
-        1000;
-    const int64_t interval_ms = std::max<int64_t>(
-        1, static_cast<int64_t>(Set.callback.cb_interval_s * 1000.0));
-    return std::max<size_t>(
-        2, static_cast<size_t>((window_ms + interval_ms - 1) / interval_ms) +
-               1);
-  }
-
-  void AppendSpeedSampleLocked_(
-      SpeedSamplesGuard *samples, size_t transferred,
-      std::chrono::steady_clock::time_point when) {
-    if (samples == nullptr) {
-      return;
-    }
-    (*samples)->push_back({when, transferred});
-    const size_t max_samples = ResolveSpeedSampleLimit_();
-    while ((*samples)->size() > max_samples) {
-      (*samples)->pop_front();
-    }
+    Progress.speed_samples.push(
+        {std::chrono::steady_clock::now(), transferred});
   }
 };
 
