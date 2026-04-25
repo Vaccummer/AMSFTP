@@ -61,8 +61,3 @@ private:
   std::atomic<bool> running_{false};
   std::atomic<size_t> pending_tasks_{0};
 };
-
-/**
- * @brief Backward compatibility alias used by current config storage code.
- */
-using AMInfraConfigWriteDispatcher = AMInfraAsyncWriter;

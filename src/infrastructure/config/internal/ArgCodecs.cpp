@@ -1209,13 +1209,7 @@ void DecodeProgressBar_(const Json &json, ProgressBarStyle *out) {
   const Json size = codec_common::QueryObjectAt_(json, {"Size"});
   (void)AMJson::QueryKey(size, {"totol_size_fixed_width"},
                          &out->size.totol_size_fixed_width);
-  // compatibility key
-  (void)AMJson::QueryKey(size, {"total_size_fixed_width"},
-                         &out->size.totol_size_fixed_width);
   (void)AMJson::QueryKey(size, {"totol_size_max_float_digits"},
-                         &out->size.totol_size_max_float_digits);
-  // compatibility key
-  (void)AMJson::QueryKey(size, {"total_size_max_float_digits"},
                          &out->size.totol_size_max_float_digits);
   (void)AMJson::QueryKey(size, {"transferred_size_fixed_width"},
                          &out->size.transferred_size_fixed_width);

@@ -1,20 +1,20 @@
 [package]
-name = "rust_toml_read"
+name = "amsftp_rust"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "rust_toml_read"
+name = "amsftp_rust"
 crate-type = ["staticlib"]
 
 [dependencies]
-toml_edit = "0.22"
-toml = "0.8"
+alacritty_terminal = "0.25.1"
+atomicwrites = "0.4"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-libc = "0.2"
-atomicwrites = "0.4"
-alacritty_terminal = "0.25.1"
+toml = "0.8"
+toml_edit = "0.22"
 
 [profile.dev]
 panic = "abort"

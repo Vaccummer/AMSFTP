@@ -1923,7 +1923,6 @@ public:
                   "Trace link is not supported in FTP Client"}};
     }
 
-    // Prefer MLST (modern method)
     if (mlst_state_ != CapabilityState::Unsupported) {
       auto mlst_res = MLST_libstat(args, control);
       if (mlst_res.rcm.code == EC::Success) {
@@ -1931,17 +1930,13 @@ public:
         return mlst_res;
       }
 
-      // MLST unsupported; mark and fall back
       if (mlst_res.rcm.code == EC::OperationUnsupported) {
         mlst_state_ = CapabilityState::Unsupported;
-        // Continue using legacy method
       } else if (mlst_res.rcm.code == EC::Terminate ||
                  mlst_res.rcm.code == EC::OperationTimeout ||
                  mlst_res.rcm.code == EC::PathNotExist) {
-        // Interrupted or timed out; return directly
         return {std::move(mlst_res.rcm)};
       }
-      // Other errors also fall back to legacy method
     }
     auto common_res = Common_libstat(args, control);
     if (common_res.rcm.code == EC::Success) {

@@ -969,9 +969,6 @@ listdir(const std::string &path, int timeout_ms = -1,
         result};
   }
   for (const auto &entry : dir_iter) {
-    // if (interrupt_flag && !interrupt_flag->IsRunning()) {
-    //   return {ECM{EC::Terminate, "", "", "Listdir interrupted by user"}, result};
-    // }
     if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
                               std::chrono::milliseconds(timeout_ms)) {
       return {ECM{EC::OperationTimeout, "path.listdir", pathf, "Listdir timeout"},

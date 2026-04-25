@@ -71,15 +71,6 @@ struct CliTermArgs {
   TermClearArgs clear = {};
 };
 
-struct CliChannelArgs {
-  ChannelAddArgs add = {};
-  ChannelListArgs ls = {};
-  ChannelRemoveArgs rm = {};
-  ChannelRenameArgs rn = {};
-  ChannelExportArgs export_history = {};
-  ChannelClearArgs clear = {};
-};
-
 struct CliClientArgs {
   ClientsArgs ls = {};
   CheckArgs check = {};
@@ -119,7 +110,6 @@ struct CliArgsPool {
   CliProfileArgs profile = {};
   CliFilesystemArgs fs = {};
   CliTermArgs term = {};
-  CliChannelArgs channel = {};
   CliClientArgs client = {};
   CliPoolArgs pool = {};
   CliVarArgs var = {};
