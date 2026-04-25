@@ -27,6 +27,7 @@
 #include "interface/cli/MainHelpFormatter.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include "interface/style/StyleManager.hpp"
+#include "infrastructure/config/FileConfigWriteLock.hpp"
 
 #include <atomic>
 #include <csignal>
@@ -143,6 +144,8 @@ ECM InitAndLoadConfigService_(AMApplication::config::ConfigAppService *service,
   }
   service->SetInitArg(
       AMDomain::config::BuildDefaultConfigStoreInitArg(root_dir));
+  service->SetWriteLock(AMInfra::config::CreateFileConfigWriteLockPort(
+      root_dir / "config" / ".write.lock"));
   ECM rcm = service->Init();
   if (!rcm) {
     return {rcm.code, "runtime init config", root_dir.string(),
@@ -301,6 +304,7 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
 }
 
 ECM BuildPromptApplicationServices_(const ConfigSnapshots &snapshots,
+                                    const fs::path &root_dir,
                                     ApplicationAssemblyState *state) {
   if (state == nullptr) {
     return {EC::InvalidArg, "runtime build prompt application", "<state>",
@@ -333,7 +337,7 @@ ECM BuildPromptApplicationServices_(const ConfigSnapshots &snapshots,
 
   state->prompt_history_manager =
       std::make_unique<AMApplication::prompt::PromptHistoryManager>(
-          snapshots.prompt_history_arg);
+          snapshots.prompt_history_arg, root_dir);
   {
     const ECM rcm = state->prompt_history_manager->Init();
     if (!rcm) {
@@ -448,7 +452,8 @@ BuildApplicationAssembly_(const fs::path &root_dir) {
   if (!rcm) {
     return {ApplicationAssemblyBundle{}, rcm};
   }
-  rcm = BuildPromptApplicationServices_(bundle.snapshots, &bundle.services);
+  rcm = BuildPromptApplicationServices_(bundle.snapshots, root_dir,
+                                        &bundle.services);
   if (!rcm) {
     return {ApplicationAssemblyBundle{}, rcm};
   }
@@ -550,7 +555,8 @@ ECM BuildInterfaceAssembly_(const ConfigSnapshots &snapshots,
 
   state->client_interface_service =
       std::make_unique<AMInterface::client::ClientInterfaceService>(
-          *app_state->client_service, *app_state->terminal_service,
+          *app_state->client_service, *app_state->config_service,
+          *app_state->terminal_service,
           *app_state->filesystem_service,
           *app_state->host_service, *app_state->known_hosts_service,
           *app_state->prompt_profile_manager, *state->prompt_io_manager,
@@ -1075,7 +1081,9 @@ ECM ShutdownRuntime_(AppRuntime &runtime) {
     runtime.managers.application.transfer_service.SetInstance(nullptr);
   }
   if (!runtime.run_ctx.force_exit &&
-      runtime.managers.interfaces.config_interface_service.IsReady()) {
+      runtime.managers.interfaces.config_interface_service.IsReady() &&
+      (!runtime.managers.application.config_service.IsReady() ||
+       runtime.managers.application.config_service->HasConfigWriteLock())) {
     const ECM save_rcm =
         runtime.managers.interfaces.config_interface_service->SaveAll();
     trace_runtime(save_rcm, "runtime.shutdown.save_config", "<config>");

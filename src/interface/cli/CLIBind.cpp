@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <initializer_list>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -43,6 +45,20 @@ std::string CommandTraceMode_(const CliRunContext &ctx) {
   const bool interactive =
       ctx.is_interactive && ctx.is_interactive->load(std::memory_order_relaxed);
   return interactive ? std::string("interactive") : std::string("single");
+}
+
+bool CommandEqualsAny_(std::string_view command,
+                       std::initializer_list<std::string_view> candidates) {
+  return std::find(candidates.begin(), candidates.end(), command) !=
+         candidates.end();
+}
+
+bool IsConfigWriteCommand_(std::string_view command) {
+  return CommandEqualsAny_(
+      command, {"config save", "config backup", "host add", "host edit",
+                "host rn", "host rm", "host set", "profile edit",
+                "profile clean", "var def", "var del", "sftp", "ftp",
+                "local"});
 }
 
 void TraceProgramCommand_(const CLIServices &managers, TraceLevel level,
@@ -566,16 +582,17 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
       });
 
   root->AddFunction(
-      "mv", "Move one source to destination directory", args,
+      "mv", "Move source paths to destination directory", args,
       &CliArgsPool::fs, &CliFilesystemArgs::mv,
       [&args](CommandNode &node) {
-        node.AddOption("src", args.fs.mv.src, 1, 1, "Source path", true);
-        node.AddOption("dst", args.fs.mv.dst, 0, 1,
+        node.AddOption("targets", args.fs.mv.targets, 0,
+                       static_cast<size_t>(-1),
+                       "Source paths and optional destination directory");
+        node.AddOption("-o", "--output", args.fs.mv.output, 1, 1, Sem::Path,
                        "Destination directory path");
         node.AddFlag("-f", "--force", args.fs.mv.force,
                      "Overwrite existing targets");
-        node.AddPositionalRule(0, Sem::Path, false);
-        node.AddPositionalRule(1, Sem::Path, false);
+        node.AddPositionalRule(0, Sem::Path, true);
       });
 
   root->AddFunction(
@@ -709,31 +726,31 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
       [&args](CommandNode &node) {
         node.AddOption(
             "target", args.fs.ssh.request.target, 0, 1,
-            "Optional term target: host@name or name");
-        node.AddPositionalRule(0, Sem::SshChannelTarget, false);
+            "Optional term target: client@term or term");
+        node.AddPositionalRule(0, Sem::SshTermTarget, false);
       });
 
   CommandNode *term_module_node = root->AddFunction("term", "Terminal manager");
   if (term_module_node) {
     term_module_node->AddFunction(
-        "add", "Add one term by host@name", args, &CliArgsPool::term,
+        "add", "Add one term by client@term", args, &CliArgsPool::term,
         &CliTermArgs::add, [&args](CommandNode &node) {
-          node.AddOption("nickname", args.term.add.request.nicknames, 1,
+          node.AddOption("target", args.term.add.request.nicknames, 1,
                          static_cast<size_t>(-1), "Term targets", true);
           node.AddFlag("-f", "--force", args.term.add.request.force,
                        "Recreate terminal if it already exists");
-          node.AddPositionalRule(0, Sem::TerminalName, true);
+          node.AddPositionalRule(0, Sem::TermTargetNew, true);
         });
 
     term_module_node->AddFunction("ls", "List terminals", args,
                                   &CliArgsPool::term, &CliTermArgs::ls);
 
     term_module_node->AddFunction(
-        "rm", "Remove one terminal by nickname", args, &CliArgsPool::term,
+        "rm", "Remove one terminal by term target", args, &CliArgsPool::term,
         &CliTermArgs::rm, [&args](CommandNode &node) {
-          node.AddOption("nickname", args.term.rm.request.nicknames, 1,
-                         static_cast<size_t>(-1), "Target nicknames", true);
-          node.AddPositionalRule(0, Sem::TerminalName, true);
+          node.AddOption("target", args.term.rm.request.nicknames, 1,
+                         static_cast<size_t>(-1), "Term targets", true);
+          node.AddPositionalRule(0, Sem::TermTargetExisting, true);
         });
 
     term_module_node->AddFunction(
@@ -968,9 +985,26 @@ void DispatchCliCommands(const CliCommands &cli_commands,
       "cli.dispatch.start",
       AMStr::fmt("mode={} async={}", CommandTraceMode_(ctx),
                  ctx.async ? "true" : "false"));
+  if (IsConfigWriteCommand_(command_name) &&
+      managers.application.config_service.IsReady()) {
+    const ECM lock_rcm =
+        managers.application.config_service->EnsureConfigWriteLock();
+    if (!(lock_rcm)) {
+      ctx.rcm = lock_rcm;
+      if (managers.interfaces.prompt_io_manager.IsReady()) {
+        managers.interfaces.prompt_io_manager->ErrorFormat(lock_rcm);
+      }
+      TraceProgramCommand_(managers, ctx.rcm, command_name,
+                           "cli.dispatch.end", "config write lock denied");
+      selected->reset();
+      args.ClearActive();
+      store_exit_code(static_cast<int>(ctx.rcm.code));
+      return;
+    }
+  }
   const ECM run_rcm = selected->Run(managers, ctx);
   const ECM sync_rcm =
-      managers.application.config_service->FlushDirtyParticipants();
+      managers.application.config_service->FlushAndDumpDirtyDocuments(false);
   ctx.rcm = run_rcm;
   if ((ctx.rcm) && !(sync_rcm)) {
     ctx.rcm = sync_rcm;
@@ -980,7 +1014,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
                         AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
   TraceProgramCommand_(
       managers, ctx.rcm, command_name, "cli.dispatch.end",
-      AMStr::fmt("duration_ms={} run={} sync={}", duration_ms,
+      AMStr::fmt("duration_ms={} run={} sync_dump={}", duration_ms,
                  AMStr::ToString(run_rcm.code),
                  AMStr::ToString(sync_rcm.code)));
   selected->reset();

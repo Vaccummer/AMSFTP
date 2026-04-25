@@ -339,32 +339,72 @@ struct CpArgs : BaseArgStruct {
 };
 
 struct MoveArgs : BaseArgStruct {
-  std::string src = {};
-  std::string dst = {};
+  std::vector<std::string> targets = {};
+  std::string output = {};
   bool force = false;
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    std::string src_token = src;
-    std::string dst_token = dst;
-    managers.interfaces.var_interface_service->VSubstitutePathLike(src_token);
-    managers.interfaces.var_interface_service->VSubstitutePathLike(dst_token);
+    std::vector<std::string> resolved_targets = targets;
+    std::string output_token = output;
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        resolved_targets);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        output_token);
 
-    src_token = AMStr::Strip(src_token);
-    if (src_token.empty()) {
-      return Err(EC::InvalidArg, "", "src", "mv requires one source path");
+    std::vector<std::string> normalized_targets = {};
+    normalized_targets.reserve(resolved_targets.size());
+    for (auto &target : resolved_targets) {
+      target = AMStr::Strip(target);
+      if (!target.empty()) {
+        normalized_targets.push_back(target);
+      }
     }
 
-    AMInterface::filesystem::FilesystemMoveArg arg = {};
-    arg.target = src_token;
-    arg.dst = AMStr::Strip(dst_token);
-    arg.mkdir = true;
-    arg.overwrite = force;
-    return managers.interfaces.filesystem_interface_service->Move(arg);
+    const auto fail = [&](const ECM &rcm) -> ECM {
+      managers.interfaces.prompt_io_manager->ErrorFormat(rcm);
+      return rcm;
+    };
+    if (normalized_targets.size() <= 1) {
+      return fail(Err(EC::InvalidArg, "", "targets",
+                      "mv requires at least one source and one destination "
+                      "directory"));
+    }
+
+    output_token = AMStr::Strip(output_token);
+    std::vector<std::string> sources = {};
+    std::string dst_dir = {};
+    if (output_token.empty()) {
+      if (normalized_targets.size() != 2) {
+        return fail(Err(EC::InvalidArg, "", "targets",
+                        "mv with 3+ paths requires --output to specify "
+                        "destination directory"));
+      }
+      sources.push_back(normalized_targets.front());
+      dst_dir = normalized_targets.back();
+    } else {
+      sources = normalized_targets;
+      dst_dir = output_token;
+    }
+
+    ECM status = OK;
+    for (const auto &source : sources) {
+      AMInterface::filesystem::FilesystemMoveArg arg = {};
+      arg.target = source;
+      arg.dst = dst_dir;
+      arg.mkdir = true;
+      arg.overwrite = force;
+      ECM move_rcm =
+          managers.interfaces.filesystem_interface_service->Move(arg);
+      if (!(move_rcm) && (status)) {
+        status = move_rcm;
+      }
+    }
+    return status;
   }
   void reset() override {
-    src.clear();
-    dst.clear();
+    targets.clear();
+    output.clear();
     force = false;
   }
 };

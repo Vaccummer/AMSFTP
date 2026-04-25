@@ -95,19 +95,7 @@ ECM ConfigInterfaceService::PrintPaths() const {
 
 ECM ConfigInterfaceService::SaveAll() const {
   prompt_io_manager_.SyncCurrentHistory();
-  ECM rcm = config_service_.FlushDirtyParticipants();
-  if (!(rcm)) {
-    return rcm;
-  }
-
-  ECM first_error = OK;
-  for (const ConfigDocumentState &doc : config_service_.ListDocuments()) {
-    const ECM dump_rcm = config_service_.Dump(doc.kind, "", false);
-    if (!(dump_rcm) && (first_error)) {
-      first_error = dump_rcm;
-    }
-  }
-  return first_error;
+  return config_service_.FlushAndDumpDirtyDocuments(true);
 }
 
 ECM ConfigInterfaceService::BackupAll() const {

@@ -43,16 +43,15 @@ public:
   [[nodiscard]] std::vector<std::string> ListPoolNames() const override;
   [[nodiscard]] std::vector<std::string> ListTerminalNames() const override;
   [[nodiscard]] std::vector<std::string>
-  ListChannelNames(const std::string &terminal_nickname) const override;
+  ListTermNames(const std::string &client_name) const override;
   [[nodiscard]] bool HostExists(const std::string &nickname) const override;
   [[nodiscard]] bool PoolExists(const std::string &nickname) const override;
   [[nodiscard]] bool TerminalExists(const std::string &nickname) const override;
   [[nodiscard]] TerminalNameState
-  QueryTerminalNameState(const std::string &nickname) const override;
-  [[nodiscard]] ChannelNameState
-  QueryChannelNameState(const std::string &terminal_nickname,
-                        const std::string &channel_name,
-                        bool allow_new) const override;
+  QueryTerminalClientNameState(const std::string &client_name) const override;
+  [[nodiscard]] TerminalNameState
+  QueryTermNameState(const std::string &client_name,
+                     const std::string &term_name, bool allow_new) const override;
 
   [[nodiscard]] std::vector<std::string> ListVarDomains() const override;
   [[nodiscard]] bool HasVarDomain(const std::string &zone) const override;
@@ -81,7 +80,6 @@ private:
     bool found = false;
     AMDomain::client::ClientStatus status =
         AMDomain::client::ClientStatus::NotInitialized;
-    std::unordered_map<std::string, bool> channel_ok = {};
     std::chrono::steady_clock::time_point updated_at =
         std::chrono::steady_clock::time_point::min();
   };

@@ -33,6 +33,11 @@ void ConfigAppService::SetLogger(AMApplication::log::LoggerAppService *logger) {
   logger_ = logger;
 }
 
+void ConfigAppService::SetWriteLock(
+    std::unique_ptr<AMDomain::config::IConfigWriteLockPort> lock) {
+  write_lock_ = std::move(lock);
+}
+
 /**
  * @brief Build one owned config store from init arg.
  */
@@ -54,6 +59,11 @@ ECM ConfigAppService::Init() {
         [this](const ECM &err) { dump_error_cb_(err); });
   } else {
     store_->SetDumpErrorCallback({});
+  }
+  if (write_lock_) {
+    const ECM lock_rcm = write_lock_->TryAcquire();
+    TraceConfig_(lock_rcm, write_lock_->LockPath().string(), "config.lock",
+                 lock_rcm ? "write lock acquired" : "readonly session");
   }
   return OK;
 }
@@ -96,12 +106,37 @@ ECM ConfigAppService::Dump(AMDomain::config::DocumentKind kind,
     TraceConfig_(rcm, AMStr::ToString(kind), "config.dump");
     return rcm;
   }
+  if (dst_path.empty() && kind != DocumentKind::History) {
+    const ECM lock_rcm = EnsureConfigWriteLock();
+    if (!(lock_rcm)) {
+      TraceConfig_(lock_rcm, AMStr::ToString(kind), "config.dump",
+                   "original config dump requires write lock");
+      return lock_rcm;
+    }
+  }
   const ECM rcm = store_->Dump(kind, std::filesystem::path(dst_path), async);
   TraceConfig_(rcm, AMStr::ToString(kind), "config.dump",
                AMStr::fmt("async={} dst={}", async ? "true" : "false",
                           dst_path.empty() ? std::string("<default>")
                                            : dst_path));
   return rcm;
+}
+
+ECM ConfigAppService::EnsureConfigWriteLock() {
+  if (!write_lock_) {
+    return OK;
+  }
+  if (write_lock_->IsHeld()) {
+    return OK;
+  }
+  const ECM rcm = write_lock_->TryAcquire();
+  TraceConfig_(rcm, write_lock_->LockPath().string(), "config.lock",
+               rcm ? "write lock acquired" : "failed to acquire write lock");
+  return rcm;
+}
+
+bool ConfigAppService::HasConfigWriteLock() const {
+  return !write_lock_ || write_lock_->IsHeld();
 }
 
 /**
@@ -112,6 +147,9 @@ void ConfigAppService::CloseHandles() {
     store_->Close();
   }
   store_.reset();
+  if (write_lock_) {
+    write_lock_->Release();
+  }
   auto backup_set = backup_set_.lock();
   backup_set.store(ConfigBackupSet{});
   {
@@ -155,6 +193,11 @@ ECM ConfigAppService::BackupIfNeeded() {
     TraceConfig_(rcm, "<policy>", "config.backup");
     return rcm;
   }
+  if (!HasConfigWriteLock()) {
+    TraceConfig_(OK, "<policy>", "config.backup",
+                 "skip auto backup in readonly session");
+    return OK;
+  }
 
   const BackupContext context = BuildBackupContext_();
   if (context.normalized_changed && !Write(context.backup_set)) {
@@ -185,6 +228,9 @@ ECM ConfigAppService::BackupIfNeeded() {
 
 bool ConfigAppService::IsBackupNeeded() const {
   if (!store_) {
+    return false;
+  }
+  if (!HasConfigWriteLock()) {
     return false;
   }
   return IsBackupDue_(BuildBackupContext_());
@@ -288,6 +334,28 @@ ECM ConfigAppService::FlushDirtyParticipants() {
 
   TraceConfig_(first_error, "<participants>", "config.flush_dirty",
                AMStr::fmt("participants={}", participants.size()));
+  return first_error;
+}
+
+ECM ConfigAppService::FlushAndDumpDirtyDocuments(bool include_history) {
+  ECM rcm = FlushDirtyParticipants();
+  if (!(rcm)) {
+    return rcm;
+  }
+
+  ECM first_error = OK;
+  for (const ConfigDocumentState &doc : ListDocuments()) {
+    if (doc.status != ConfigDocumentStatus::Dirty) {
+      continue;
+    }
+    if (!include_history && doc.kind == DocumentKind::History) {
+      continue;
+    }
+    const ECM dump_rcm = Dump(doc.kind, "", false);
+    if (!(dump_rcm) && (first_error)) {
+      first_error = dump_rcm;
+    }
+  }
   return first_error;
 }
 

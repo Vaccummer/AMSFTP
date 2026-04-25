@@ -835,6 +835,7 @@ PromptIOManager::PromptCore(const std::string &prompt) {
       io_state_.has_last_typein_result_ = true;
     }
   }
+  isocline_profile_manager_.PersistHistoryEntry(out);
   ClearActivePromptHeader_();
   return out;
 }

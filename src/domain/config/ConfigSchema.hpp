@@ -248,6 +248,23 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
             }
           },
           "additionalProperties": false
+        },
+        "PromptHistoryManager": {
+          "type": "object",
+          "properties": {
+            "history_dir": {
+              "type": "string"
+            },
+            "allow_continuous_duplicates": {
+              "type": "boolean"
+            },
+            "max_count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -577,24 +594,6 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
                   "type": "string"
                 },
                 "at": {
-                  "type": "string"
-                },
-                "disconnected": {
-                  "type": "string"
-                },
-                "unestablished": {
-                  "type": "string"
-                },
-                "nonexistent": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            },
-            "channelname": {
-              "type": "object",
-              "properties": {
-                "ok": {
                   "type": "string"
                 },
                 "disconnected": {

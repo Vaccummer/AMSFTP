@@ -66,6 +66,39 @@ std::string NormalizeNicknameOrDefault_(const std::string &nickname,
   return key;
 }
 
+struct TermKeyParts_ {
+  std::string client_name = "local";
+  std::string term_name = {};
+};
+
+TermKeyParts_ ParseTermKey_(const std::string &raw_key,
+                            const std::string &fallback_client) {
+  TermKeyParts_ out = {};
+  out.client_name = NormalizeNicknameOrDefault_(fallback_client, "local");
+  const std::string key = AMStr::Strip(raw_key);
+  const size_t at_pos = key.find('@');
+  if (at_pos == std::string::npos) {
+    out.term_name = key;
+    return out;
+  }
+  const std::string client_part = AMStr::Strip(key.substr(0, at_pos));
+  if (!client_part.empty()) {
+    out.client_name = NormalizeNicknameOrDefault_(client_part, "local");
+  }
+  out.term_name = AMStr::Strip(key.substr(at_pos + 1));
+  return out;
+}
+
+std::string BuildTermKey_(const std::string &client_name,
+                          const std::string &term_name) {
+  const std::string client = NormalizeNicknameOrDefault_(client_name, "local");
+  const std::string term = AMStr::Strip(term_name);
+  if (client.empty() || term.empty()) {
+    return "";
+  }
+  return client + "@" + term;
+}
+
 } // namespace
 
 AMDomain::client::ClientHandle InputSemanticRuntimeAdapter::CurrentClient() const {
@@ -109,18 +142,18 @@ std::vector<std::string> InputSemanticRuntimeAdapter::ListTerminalNames() const 
   return terminal_service_.ListTerminalNames();
 }
 
-std::vector<std::string> InputSemanticRuntimeAdapter::ListChannelNames(
-    const std::string &terminal_nickname) const {
+std::vector<std::string> InputSemanticRuntimeAdapter::ListTermNames(
+    const std::string &client_name) const {
   std::vector<std::string> out = {};
-  const auto snapshot = ResolveTerminalSnapshot_(terminal_nickname);
-  if (!snapshot.found) {
-    return out;
-  }
-  out.reserve(snapshot.channel_ok.size());
-  for (const auto &entry : snapshot.channel_ok) {
-    out.push_back(entry.first);
+  const std::string client = NormalizeNicknameOrDefault_(client_name, "local");
+  for (const auto &key : terminal_service_.ListTerminalNames()) {
+    const auto parts = ParseTermKey_(key, client);
+    if (parts.client_name == client && !parts.term_name.empty()) {
+      out.push_back(parts.term_name);
+    }
   }
   std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
   return out;
 }
 
@@ -143,61 +176,70 @@ bool InputSemanticRuntimeAdapter::TerminalExists(
 }
 
 IInputSemanticRuntime::TerminalNameState
-InputSemanticRuntimeAdapter::QueryTerminalNameState(
-    const std::string &nickname) const {
+InputSemanticRuntimeAdapter::QueryTerminalClientNameState(
+    const std::string &client_name) const {
   const std::string key =
-      NormalizeNicknameOrDefault_(nickname, CurrentNickname());
-  const auto snapshot = ResolveTerminalSnapshot_(key);
-  if (!snapshot.found) {
-    if (host_service_.HostExists(key)) {
-      return TerminalNameState::Unestablished;
+      NormalizeNicknameOrDefault_(client_name, CurrentNickname());
+  bool found_any = false;
+  bool found_ok = false;
+  for (const auto &term_key : terminal_service_.ListTerminalNames()) {
+    const auto parts = ParseTermKey_(term_key, key);
+    if (parts.client_name != key) {
+      continue;
     }
-    return TerminalNameState::Nonexistent;
+    const auto snapshot = ResolveTerminalSnapshot_(term_key);
+    if (!snapshot.found) {
+      continue;
+    }
+    found_any = true;
+    if (snapshot.status == AMDomain::client::ClientStatus::OK) {
+      found_ok = true;
+      break;
+    }
   }
-
-  if (snapshot.status == AMDomain::client::ClientStatus::OK) {
+  if (found_ok) {
     return TerminalNameState::OK;
   }
-  return TerminalNameState::Disconnected;
+  if (found_any) {
+    return TerminalNameState::Disconnected;
+  }
+
+  if (host_service_.HostExists(key)) {
+    return TerminalNameState::Unestablished;
+  }
+  return TerminalNameState::Nonexistent;
 }
 
-IInputSemanticRuntime::ChannelNameState
-InputSemanticRuntimeAdapter::QueryChannelNameState(
-    const std::string &terminal_nickname, const std::string &channel_name,
+IInputSemanticRuntime::TerminalNameState
+InputSemanticRuntimeAdapter::QueryTermNameState(
+    const std::string &client_name, const std::string &term_name,
     bool allow_new) const {
-  const std::string key =
-      NormalizeNicknameOrDefault_(terminal_nickname, CurrentNickname());
-  const std::string channel = AMStr::Strip(channel_name);
+  const std::string client =
+      NormalizeNicknameOrDefault_(client_name, CurrentNickname());
+  const std::string term = AMStr::Strip(term_name);
   const bool valid_literal =
-      AMDomain::host::HostService::ValidateNickname(channel);
-  if (channel.empty()) {
-    return allow_new ? ChannelNameState::InvalidNew
-                     : ChannelNameState::Nonexistent;
+      AMDomain::host::HostService::ValidateNickname(term);
+  if (term.empty()) {
+    return allow_new ? TerminalNameState::InvalidNew
+                     : TerminalNameState::Nonexistent;
   }
 
-  const auto snapshot = ResolveTerminalSnapshot_(key);
-  if (!snapshot.found) {
-    if (!allow_new) {
-      return ChannelNameState::Nonexistent;
-    }
-    if (!valid_literal ||
-        QueryTerminalNameState(key) == TerminalNameState::Nonexistent) {
-      return ChannelNameState::InvalidNew;
-    }
-    return ChannelNameState::ValidNew;
-  }
-
-  auto channel_it = snapshot.channel_ok.find(channel);
-  if (channel_it != snapshot.channel_ok.end()) {
-    return channel_it->second ? ChannelNameState::OK
-                              : ChannelNameState::Disconnected;
+  const std::string term_key = BuildTermKey_(client, term);
+  const auto snapshot = ResolveTerminalSnapshot_(term_key);
+  if (snapshot.found) {
+    return snapshot.status == AMDomain::client::ClientStatus::OK
+               ? TerminalNameState::OK
+               : TerminalNameState::Disconnected;
   }
 
   if (!allow_new) {
-    return ChannelNameState::Nonexistent;
+    return TerminalNameState::Nonexistent;
   }
-  return valid_literal ? ChannelNameState::ValidNew
-                       : ChannelNameState::InvalidNew;
+  if (!valid_literal ||
+      QueryTerminalClientNameState(client) == TerminalNameState::Nonexistent) {
+    return TerminalNameState::InvalidNew;
+  }
+  return TerminalNameState::ValidNew;
 }
 
 InputSemanticRuntimeAdapter::TerminalSnapshot_
@@ -224,13 +266,6 @@ InputSemanticRuntimeAdapter::ResolveTerminalSnapshot_(
   if ((terminal_result.rcm) && terminal_result.data) {
     snapshot.found = true;
     snapshot.status = terminal_result.data->GetSessionState().status;
-    auto channels_result = terminal_result.data->ListChannels({}, {});
-    if (channels_result.rcm) {
-      for (const auto &[channel, channel_port] : channels_result.data.channels) {
-        snapshot.channel_ok[channel] =
-            channel_port != nullptr && !channel_port->GetState().closed;
-      }
-    }
   }
   snapshot.updated_at = now;
 
