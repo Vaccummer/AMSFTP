@@ -6,6 +6,13 @@ build
 debug*
 *.dll
 *.pyd
+*.exe
+*.obj
+*.lib
+*.exp
+*.ilk
+*.log
+*.ipynb
 dll
 experience.md
 autosave
@@ -25,4 +32,10 @@ AMATrial*
 trashes/
 /task_md
 logs
+log/
 src/foreign/**/target/
+* copy.*
+tmp.*
+bak/
+bak.*
+data/backup/
