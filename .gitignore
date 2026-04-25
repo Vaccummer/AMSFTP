@@ -25,3 +25,4 @@ AMATrial*
 trashes/
 /task_md
 logs
+src/foreign/**/target/

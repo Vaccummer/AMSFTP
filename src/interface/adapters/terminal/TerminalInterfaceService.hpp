@@ -54,30 +54,6 @@ public:
       const TerminalClearArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
-  ECM AddChannel(
-      const ChannelAddArg &arg,
-      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
-
-  ECM ListChannels(
-      const ChannelListArg &arg,
-      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
-
-  ECM RemoveChannel(
-      const ChannelRemoveArg &arg,
-      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
-
-  ECM RenameChannel(
-      const ChannelRenameArg &arg,
-      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
-
-  ECM ExportChannelHistory(
-      const ChannelExportArg &arg,
-      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
-
-  ECM ClearChannels(
-      const ChannelClearArg &arg,
-      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
-
 private:
   struct SharedKeyboardMonitor_;
 

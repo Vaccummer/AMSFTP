@@ -1391,28 +1391,8 @@ protected:
     return known_host(entry);
   }
 
-  void LoadDefaultPrivateKeys() {
-    trace(TraceLevel::Debug, EC::Success, "~/.ssh", "LoadDefaultPrivateKeys",
-          "Shared private keys not provided, loading default private keys from "
-          "~/.ssh");
-    auto [error, listd] = AMPath::listdir(AMPath::abspath("~/.ssh"));
-    if (!error) {
-      return;
-    };
-    for (auto &info : listd) {
-      if (info.type == PathType::FILE) {
-        if (detail::IsValidKey(info.path)) {
-          this->private_keys.push_back(info.path);
-        }
-      }
-    }
-  }
-
-  virtual void OnBeforeDisconnect_() {};
-
   void Disconnect() {
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    OnBeforeDisconnect_();
     interrupt_wake_.Close();
     if (sftp) {
       libssh2_sftp_shutdown(sftp);
@@ -1519,9 +1499,6 @@ public:
     RegisterTraceCallback(std::move(trace_cb));
     interrupt_wake_.Ensure();
     RegisterKnownHostCallback(std::move(known_host_cb));
-    // if (private_keys.empty()) {
-    //   LoadDefaultPrivateKeys();
-    // }
   }
 
   template <typename Func>
@@ -1635,12 +1612,6 @@ public:
         return {rc, *kill_rcm};
       }
     }
-  }
-
-  std::vector<std::string> GetKeys() { return this->private_keys; }
-
-  void SetKeys(const std::vector<std::string> &keys) {
-    this->private_keys = keys;
   }
 
   ECM BaseConnect(bool force, const ControlComponent &control) {
@@ -2058,11 +2029,6 @@ private:
   }
 
 protected:
-  /*
-   * Deprecated orchestration internals were removed from the active class
-   * surface (walk/iwalk/remove/chmod helper chains).
-   */
-
   ECM _precheck(const std::string &path, const ControlComponent &control) {
     (void)control;
     if (path.empty()) {

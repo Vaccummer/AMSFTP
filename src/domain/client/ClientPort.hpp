@@ -460,30 +460,6 @@ public:
   rename(const AMDomain::filesystem::RenameArgs &args,
          const ControlComponent &control = {}) = 0;
 
-  /**
-   * Deprecated orchestration APIs (migration reference only):
-   * virtual AMDomain::filesystem::GetsizeResult
-   * getsize(const AMDomain::filesystem::GetsizeArgs &args,
-   *         const ControlComponent &control = {}) = 0;
-   * virtual AMDomain::filesystem::FindResult
-   * find(const AMDomain::filesystem::FindArgs &args,
-   *      const ControlComponent &control = {}) = 0;
-   * virtual AMDomain::filesystem::DeleteResult
-   * remove(const AMDomain::filesystem::RemoveArgs &args,
-   *        const ControlComponent &control = {}) = 0;
-   * virtual ECM
-   * saferm(const AMDomain::filesystem::SafermArgs &args,
-   *        const ControlComponent &control = {}) = 0;
-   * virtual ECM
-   * copy(const AMDomain::filesystem::CopyArgs &args,
-   *      const ControlComponent &control = {}) = 0;
-   * virtual AMDomain::filesystem::IWalkResult
-   * iwalk(const AMDomain::filesystem::IWalkArgs &args,
-   *       const ControlComponent &control = {}) = 0;
-   * virtual AMDomain::filesystem::WalkResult
-   * walk(const AMDomain::filesystem::WalkArgs &args,
-   *      const ControlComponent &control = {}) = 0;
-   */
 };
 
 /**

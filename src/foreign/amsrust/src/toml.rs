@@ -9,9 +9,6 @@ use std::{
 };
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
-#[path = "../../vt/src/lib.rs"]
-mod vt_exports;
-
 pub struct ConfigHandle {
     doc: DocumentMut,
     schema: J,
@@ -296,15 +293,16 @@ pub extern "C" fn RustTomlDebugOrder(
 /* Write file with an atomic replace to avoid partial writes on crash. */
 fn write_atomic(path: &str, content: String) -> std::io::Result<()> {
     let af = AtomicFile::new(path, AllowOverwrite);
-    let atomic_result = af.write(|f| {
-        f.write_all(content.as_bytes())?;
-        f.sync_all()?;
-        Ok(())
-    })
-    .map_err(|e: AtomicError<std::io::Error>| match e {
-        AtomicError::Internal(err) => err,
-        AtomicError::User(err) => err,
-    });
+    let atomic_result = af
+        .write(|f| {
+            f.write_all(content.as_bytes())?;
+            f.sync_all()?;
+            Ok(())
+        })
+        .map_err(|e: AtomicError<std::io::Error>| match e {
+            AtomicError::Internal(err) => err,
+            AtomicError::User(err) => err,
+        });
 
     match atomic_result {
         Ok(()) => Ok(()),
@@ -493,8 +491,7 @@ fn apply_json_updates_append_new(item: &mut Item, j: &J) {
     match j {
         J::Object(obj) => match item {
             Item::Table(t) => {
-                let existing_keys: Vec<String> =
-                    t.iter().map(|(k, _)| k.to_string()).collect();
+                let existing_keys: Vec<String> = t.iter().map(|(k, _)| k.to_string()).collect();
                 for key in existing_keys {
                     if !obj.contains_key(&key) {
                         t.remove(&key);

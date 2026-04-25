@@ -1,5 +1,5 @@
 #pragma once
-#include "foundation/core/RustTomlRead.h"
+#include "foreign/amsrust/include/RustTomlRead.h"
 #include "foundation/tools/json.hpp"
 #include "infrastructure/config/IConfigFileHandle.hpp"
 

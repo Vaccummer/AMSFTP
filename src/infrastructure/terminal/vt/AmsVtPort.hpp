@@ -10,7 +10,7 @@
 #include <string_view>
 #include <utility>
 
-#include "foreign\vt\include\AmsVt.h"
+#include "foreign/amsrust/include/AmsVt.h"
 
 namespace AMInfra::terminal::vt {
 namespace AMT = AMDomain::terminal;

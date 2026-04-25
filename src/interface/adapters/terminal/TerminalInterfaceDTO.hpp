@@ -30,32 +30,4 @@ struct TerminalClearArg {
   double timeout_s = 2.0;
 };
 
-struct ChannelAddArg {
-  std::string target = {};
-};
-
-struct ChannelListArg {
-  std::string nickname = {};
-};
-
-struct ChannelRemoveArg {
-  std::string target = {};
-  bool force = false;
-};
-
-struct ChannelRenameArg {
-  std::string src = {};
-  std::string dst = {};
-};
-
-struct ChannelExportArg {
-  std::string target = {};
-  std::string path = {};
-};
-
-struct ChannelClearArg {
-  std::string nickname = {};
-  double timeout_s = 1.5;
-};
-
 } // namespace AMInterface::terminal

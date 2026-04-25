@@ -725,10 +725,6 @@ std::optional<std::string> PromptIOManager::Prompt(
     highlighter_arg = options.highlighter_data.value();
   }
 
-  // ScopedPrintCacheLockGuard_ lock(*this);
-  // ScopedPromptHookGuard_ hooklock;
-  // ScopedPromptProcessedInputGuard_ processed_input_guard;
-  // (void)processed_input_guard;
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
   char *line = nullptr;
   ScopedAtomicFlag_ prompt_active_guard(&io_state_.prompt_active_);
@@ -804,8 +800,6 @@ PromptIOManager::PromptCore(const std::string &prompt) {
   }
   SetActivePromptHeader_(prompt_header);
 
-  // ScopedPrintCacheLockGuard_ lock(*this);
-  // ScopedPromptHookGuard_ hooklock;
   char *line = nullptr;
   ScopedAtomicFlag_ prompt_active_guard(&io_state_.prompt_active_);
   auto profile = isocline_profile_manager_.CurrentProfile();

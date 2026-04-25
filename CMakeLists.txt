@@ -83,25 +83,39 @@ target_compile_definitions(amsftp PRIVATE
 target_compile_options(amsftp PRIVATE /W4 /Zi)
 target_link_options(amsftp PRIVATE /DEBUG:FULL)
 
-set(AMSFTP_RUST_TOMLREAD_DIR "${PROJECT_SOURCE_DIR}/src/foreign/tomlread")
-set(AMSFTP_RUST_VT_DIR "${PROJECT_SOURCE_DIR}/src/foreign/vt")
-find_file(RUST_TOML_READ_STATIC_LIB
-  NAMES rust_toml_read.lib
-  PATHS "${AMSFTP_RUST_TOMLREAD_DIR}/target/release"
-  NO_DEFAULT_PATH
-)
-if (RUST_TOML_READ_STATIC_LIB)
-  target_link_libraries(amsftp PRIVATE
-    ${RUST_TOML_READ_STATIC_LIB}
-    ntdll
-    userenv
-    dbghelp
-    legacy_stdio_definitions
-  )
-  target_compile_definitions(amsftp PRIVATE
-    RUST_TOML_READ_STATIC
-    AMSFTP_VT_STATIC
-  )
-else()
-  message(WARNING "rust_toml_read static library not found; build may fail if not linked elsewhere.")
+set(AMSFTP_RUST_DIR "${PROJECT_SOURCE_DIR}/src/foreign/amsrust")
+find_program(CARGO_EXECUTABLE cargo)
+if (NOT CARGO_EXECUTABLE)
+  message(FATAL_ERROR "cargo executable not found; Rust FFI crate is required.")
 endif()
+if (WIN32)
+  set(AMSFTP_RUST_LIB_PATH "${AMSFTP_RUST_DIR}/target/release/amsftp_rust.lib")
+else()
+  set(AMSFTP_RUST_LIB_PATH "${AMSFTP_RUST_DIR}/target/release/libamsftp_rust.a")
+endif()
+add_custom_command(
+  OUTPUT "${AMSFTP_RUST_LIB_PATH}"
+  COMMAND "${CARGO_EXECUTABLE}" build --release --locked
+  WORKING_DIRECTORY "${AMSFTP_RUST_DIR}"
+  DEPENDS
+    "${AMSFTP_RUST_DIR}/Cargo.toml"
+    "${AMSFTP_RUST_DIR}/Cargo.lock"
+    "${AMSFTP_RUST_DIR}/src/lib.rs"
+    "${AMSFTP_RUST_DIR}/src/toml.rs"
+    "${AMSFTP_RUST_DIR}/src/vt.rs"
+  COMMENT "Building Rust FFI crate"
+  VERBATIM
+)
+add_custom_target(amsftp_rust_build DEPENDS "${AMSFTP_RUST_LIB_PATH}")
+add_library(amsftp_rust STATIC IMPORTED GLOBAL)
+set_target_properties(amsftp_rust PROPERTIES
+  IMPORTED_LOCATION "${AMSFTP_RUST_LIB_PATH}"
+)
+add_dependencies(amsftp_rust amsftp_rust_build)
+target_link_libraries(amsftp PRIVATE
+  amsftp_rust
+  ntdll
+  userenv
+  dbghelp
+  legacy_stdio_definitions
+)

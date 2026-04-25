@@ -1578,7 +1578,6 @@ public:
     return static_cast<size_t>(bytes_written);
   }
 
-  // Upload with ProgressData (legacy - for AMSFTPWorker)
   static void FTPUploadSet(AMFTPIOCore *client, const std::string &dst,
                            RuntimeProgress *pd,
                            curl_read_callback read_callback) {
@@ -1680,7 +1679,6 @@ public:
     return OK;
   }
 
-  // Download with ProgressData (legacy - for AMSFTPWorker)
   static void FTPDownloadSet(AMFTPIOCore *client, const std::string &src,
                              curl_write_callback write_callback,
                              RuntimeProgress *pd) {

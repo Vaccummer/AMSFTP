@@ -354,15 +354,7 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
                   "type": "integer",
                   "minimum": 0
                 },
-                "total_size_fixed_width": {
-                  "type": "integer",
-                  "minimum": 0
-                },
                 "totol_size_max_float_digits": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "total_size_max_float_digits": {
                   "type": "integer",
                   "minimum": 0
                 },
