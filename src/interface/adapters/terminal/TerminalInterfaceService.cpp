@@ -18,12 +18,16 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -78,14 +82,169 @@ BuildChannelOpenArgs_(const std::string &channel_name,
 }
 
 struct TerminalTargetSpec_ {
+  std::string client_name = "local";
+  std::string term_name = {};
+  std::string term_key = {};
+  bool use_last_entered = false;
+};
+
+[[nodiscard]] ECMData<TerminalTargetSpec_>
+ParseTermTargetSpec_(const std::string &target_spec,
+                     const std::string &default_client_name,
+                     bool allow_empty_as_last) {
+  TerminalTargetSpec_ out = {};
+  out.client_name =
+      default_client_name.empty() ? std::string("local") : default_client_name;
+
+  const std::string token = AMStr::Strip(target_spec);
+  if (token.empty()) {
+    out.use_last_entered = allow_empty_as_last;
+    return {out, OK};
+  }
+
+  const size_t at_pos = token.find('@');
+  if (at_pos == std::string::npos) {
+    out.term_name = token;
+  } else {
+    const std::string client_part = AMStr::Strip(token.substr(0, at_pos));
+    const std::string term_part = AMStr::Strip(token.substr(at_pos + 1));
+    if (!client_part.empty()) {
+      const std::string normalized =
+          AMDomain::host::HostService::NormalizeNickname(client_part);
+      if (!AMDomain::host::HostService::IsLocalNickname(normalized) &&
+          !AMDomain::host::HostService::ValidateNickname(normalized)) {
+        return {TerminalTargetSpec_{},
+                Err(EC::InvalidArg, "term.target.parse", client_part,
+                    "Invalid host nickname in term target")};
+      }
+      out.client_name = normalized.empty() ? out.client_name : normalized;
+    }
+    out.term_name = term_part;
+  }
+
+  out.client_name =
+      AMDomain::host::HostService::NormalizeNickname(out.client_name);
+  if (AMDomain::host::HostService::IsLocalNickname(out.client_name)) {
+    out.client_name = "local";
+  }
+  out.term_name = AMStr::Strip(out.term_name);
+  if (out.client_name.empty()) {
+    return {TerminalTargetSpec_{},
+            Err(EC::InvalidArg, "term.target.parse", "clientname",
+                "Term client name is empty")};
+  }
+  if (out.term_name.empty()) {
+    return {TerminalTargetSpec_{},
+            Err(EC::InvalidArg, "term.target.parse", "nickname",
+                "Term nickname is empty")};
+  }
+  if (!AMDomain::host::HostService::ValidateNickname(out.term_name)) {
+    return {TerminalTargetSpec_{},
+            Err(EC::InvalidArg, "term.target.parse", out.term_name,
+                "Invalid term nickname")};
+  }
+
+  out.term_key = out.client_name + "@" + out.term_name;
+  return {out, OK};
+}
+
+[[nodiscard]] std::vector<TerminalTargetSpec_>
+NormalizeTermTargets_(const std::vector<std::string> &raw_targets,
+                      const std::string &default_client_name, ECM *out_rcm) {
+  std::vector<TerminalTargetSpec_> out = {};
+  out.reserve(raw_targets.size());
+  std::unordered_set<std::string> seen = {};
+  ECM status = OK;
+
+  for (const auto &raw_target : raw_targets) {
+    auto parsed = ParseTermTargetSpec_(raw_target, default_client_name, false);
+    if (!(parsed.rcm)) {
+      if ((status)) {
+        status = parsed.rcm;
+      }
+      continue;
+    }
+    if (parsed.data.term_key.empty()) {
+      continue;
+    }
+    if (!seen.insert(parsed.data.term_key).second) {
+      continue;
+    }
+    out.push_back(std::move(parsed.data));
+  }
+  if (out_rcm != nullptr) {
+    *out_rcm = status;
+  }
+  return out;
+}
+
+[[nodiscard]] std::optional<std::string>
+AdjacentTermKey_(const AMApplication::terminal::TermAppService &service,
+                 const std::string &current_key, int direction) {
+  auto names = service.ListTerminalNames();
+  if (names.empty()) {
+    return std::nullopt;
+  }
+  std::ranges::sort(names);
+  auto it = std::ranges::find(names, current_key);
+  if (it == names.end()) {
+    return names.front();
+  }
+  if (names.size() == 1U) {
+    return *it;
+  }
+  const size_t pos = static_cast<size_t>(std::distance(names.begin(), it));
+  if (direction < 0) {
+    return names[(pos + names.size() - 1U) % names.size()];
+  }
+  return names[(pos + 1U) % names.size()];
+}
+
+[[nodiscard]] bool StartsWithAny_(const std::string &text,
+                                  std::initializer_list<std::string_view> seqs,
+                                  size_t *out_len = nullptr) {
+  for (std::string_view seq : seqs) {
+    if (text.size() >= seq.size() &&
+        std::string_view(text.data(), seq.size()) == seq) {
+      if (out_len != nullptr) {
+        *out_len = seq.size();
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] size_t CompleteEscapeSequenceLength_(const std::string &text) {
+  if (text.size() < 2U || text.front() != '\x1b') {
+    return 0U;
+  }
+  if (text[1] == '[') {
+    size_t final_pos = 2U;
+    while (final_pos < text.size()) {
+      const unsigned char ch = static_cast<unsigned char>(text[final_pos]);
+      if (ch >= 0x40U && ch <= 0x7eU) {
+        return final_pos + 1U;
+      }
+      ++final_pos;
+    }
+    return 0U;
+  }
+  if (text[1] == 'O') {
+    return text.size() >= 3U ? 3U : 0U;
+  }
+  return 1U;
+}
+
+struct LegacyTerminalChannelTarget_ {
   std::string nickname = "local";
   std::optional<std::string> channel_name = std::nullopt;
 };
 
-[[nodiscard]] ECMData<TerminalTargetSpec_>
+[[nodiscard]] ECMData<LegacyTerminalChannelTarget_>
 ParseTerminalTargetSpec_(const std::string &target_spec,
                          const std::string &default_nickname) {
-  TerminalTargetSpec_ out = {};
+  LegacyTerminalChannelTarget_ out = {};
   out.nickname =
       default_nickname.empty() ? std::string("local") : default_nickname;
 
@@ -102,64 +261,13 @@ ParseTerminalTargetSpec_(const std::string &target_spec,
 
   const std::string nickname_part = AMStr::Strip(token.substr(0, at_pos));
   const std::string channel_part = AMStr::Strip(token.substr(at_pos + 1));
-
   if (!nickname_part.empty()) {
-    const std::string normalized =
-        AMDomain::host::HostService::NormalizeNickname(nickname_part);
-    if (!AMDomain::host::HostService::IsLocalNickname(normalized) &&
-        !AMDomain::host::HostService::ValidateNickname(normalized)) {
-      return {TerminalTargetSpec_{},
-              Err(EC::InvalidArg, "launch_terminal.parse", nickname_part,
-                  "Invalid nickname in terminal target spec")};
-    }
-    out.nickname = normalized.empty() ? out.nickname : normalized;
+    out.nickname = AMDomain::host::HostService::NormalizeNickname(nickname_part);
   }
   if (!channel_part.empty()) {
     out.channel_name = channel_part;
-  } else {
-    out.channel_name = std::nullopt;
   }
-
   return {out, OK};
-}
-
-std::vector<std::string>
-NormalizeTerminalNicknames_(const std::vector<std::string> &raw_nicknames) {
-  std::vector<std::string> out = {};
-  out.reserve(raw_nicknames.size());
-  std::unordered_set<std::string> seen = {};
-
-  for (const auto &raw_nickname : raw_nicknames) {
-    const std::string stripped = AMStr::Strip(raw_nickname);
-    if (stripped.empty()) {
-      continue;
-    }
-    const std::string nickname =
-        AMDomain::host::HostService::NormalizeNickname(stripped);
-    if (nickname.empty()) {
-      continue;
-    }
-    if (!seen.insert(nickname).second) {
-      continue;
-    }
-    out.push_back(nickname);
-  }
-  return out;
-}
-
-[[nodiscard]] std::string
-JoinChannelSummary_(const std::vector<std::string> &channels) {
-  if (channels.empty()) {
-    return "(empty)";
-  }
-  std::string out = {};
-  for (size_t i = 0; i < channels.size(); ++i) {
-    if (i > 0) {
-      out += "   ";
-    }
-    out += channels[i];
-  }
-  return out;
 }
 
 [[nodiscard]] ECM TimeoutSecondsToMs_(double timeout_s, const char *operation,
@@ -207,26 +315,8 @@ BuildTerminalSummaryLine_(const std::string &terminal_name,
   const std::string styled_header =
       style_service.Format("[" + terminal_name + "]", terminal_style);
 
-  auto channels_result = terminal->ListChannels({}, control);
-  if (!(channels_result.rcm)) {
-    return {styled_header + ": (channel list unavailable)",
-            channels_result.rcm};
-  }
-
-  std::vector<std::string> styled_channels = {};
-  styled_channels.reserve(channels_result.data.channels.size());
-  for (const auto &[channel_name, channel_port] :
-       channels_result.data.channels) {
-    const bool channel_ok =
-        channel_port != nullptr && !channel_port->GetState().closed;
-    const auto channel_style =
-        channel_ok ? AMInterface::style::StyleIndex::ChannelName
-                   : AMInterface::style::StyleIndex::DisconnectedChannelName;
-    styled_channels.push_back(
-        style_service.Format(channel_name, channel_style));
-  }
-
-  return {styled_header + ": " + JoinChannelSummary_(styled_channels), OK};
+  const std::string state_text = terminal_ok ? "running" : "disconnected";
+  return {styled_header + ": " + state_text, OK};
 }
 
 void RestoreCliPromptStateAfterTerminalExit_() {
@@ -372,6 +462,45 @@ ResolveShellRunCommand_(const AMDomain::host::ConRequest &request,
   return {render.data, std::nullopt};
 }
 
+AMInterface::prompt::PromptVarMap
+BuildTerminalBannerLuaVars_(const TerminalTargetSpec_ &target,
+                            const AMDomain::host::ConRequest &request,
+                            AMDomain::client::OS_TYPE os_type) {
+  using AMInterface::prompt::PromptVarMap;
+  using AMInterface::prompt::PromptVarValue;
+
+  PromptVarMap vars = {};
+  vars["os_type"] =
+      PromptVarValue{AMStr::lowercase(AMStr::ToString(os_type))};
+  vars["clientname"] = PromptVarValue{target.client_name};
+  vars["termname"] = PromptVarValue{target.term_name};
+  vars["hostname"] = PromptVarValue{request.hostname};
+  vars["username"] = PromptVarValue{request.username};
+  vars["nickname"] = PromptVarValue{target.term_name};
+  vars["port"] = PromptVarValue{request.port};
+  return vars;
+}
+
+std::string ResolveTerminalBanner_(
+    const AMInterface::style::AMStyleService &style_service,
+    const TerminalTargetSpec_ &target,
+    const AMDomain::host::ConRequest &request,
+    AMDomain::client::OS_TYPE os_type) {
+  const std::string banner_template =
+      style_service.GetInitArg().style.terminal.banner_template;
+  if (AMStr::Strip(banner_template).empty()) {
+    return {};
+  }
+
+  const auto render = AMInterface::prompt::LUARender(
+      {banner_template},
+      BuildTerminalBannerLuaVars_(target, request, os_type));
+  if (!(render.rcm)) {
+    return banner_template;
+  }
+  return render.data;
+}
+
 enum class LocalInputPollStatus_ { Ready, Closed, Error };
 void WriteTerminalBytes_(std::string_view text) {
   if (text.empty()) {
@@ -403,6 +532,48 @@ SplitAnsiFrameLines_(std::string_view frame) {
     lines.emplace_back();
   }
   return lines;
+}
+
+[[nodiscard]] std::vector<std::string>
+SplitTerminalBannerLines_(std::string_view banner) {
+  std::vector<std::string> lines = {};
+  size_t start = 0;
+  while (start < banner.size()) {
+    const size_t cr = banner.find('\r', start);
+    const size_t lf = banner.find('\n', start);
+    size_t end = std::string_view::npos;
+    if (cr == std::string_view::npos) {
+      end = lf;
+    } else if (lf == std::string_view::npos) {
+      end = cr;
+    } else {
+      end = std::min(cr, lf);
+    }
+
+    if (end == std::string_view::npos) {
+      lines.emplace_back(banner.substr(start));
+      break;
+    }
+
+    lines.emplace_back(banner.substr(start, end - start));
+    start = end + 1U;
+    if (end + 1U < banner.size() && banner[end] == '\r' &&
+        banner[end + 1U] == '\n') {
+      start = end + 2U;
+    }
+  }
+  return lines;
+}
+
+void WriteTerminalBannerLines_(const std::vector<std::string> &lines) {
+  for (size_t i = 0; i < lines.size(); ++i) {
+    WriteTerminalBytes_(
+        AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", static_cast<int>(i + 1U)));
+    if (!lines[i].empty()) {
+      ic_term_write_bbcode(lines[i].c_str());
+    }
+  }
+  ic_term_flush();
 }
 
 constexpr const char *kTerminalEnterAlternateScreen_ = "\x1b[?1049h";
@@ -1573,57 +1744,77 @@ ECM TerminalInterfaceService::LaunchTerminal(
     default_nickname = AMDomain::host::klocalname;
   }
 
-  auto target_result = ParseTerminalTargetSpec_(arg.target, default_nickname);
+  auto target_result = ParseTermTargetSpec_(arg.target, default_nickname, true);
   if (!target_result.rcm) {
     prompt_io_manager_.ErrorFormat(target_result.rcm);
     return target_result.rcm;
   }
-  const TerminalTargetSpec_ target = target_result.data;
+  TerminalTargetSpec_ target = target_result.data;
+  if (target.use_last_entered) {
+    std::lock_guard<std::mutex> lock(last_entered_term_mutex_);
+    if (last_entered_term_key_.empty()) {
+      const ECM rcm = Err(EC::InvalidArg, "", "ssh",
+                          "No previous term in this program run");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return rcm;
+    }
+    auto last_target =
+        ParseTermTargetSpec_(last_entered_term_key_, default_nickname, false);
+    if (!(last_target.rcm)) {
+      prompt_io_manager_.ErrorFormat(last_target.rcm);
+      return last_target.rcm;
+    }
+    target = std::move(last_target.data);
+  }
 
   if (!shared_keyboard_monitor_) {
     shared_keyboard_monitor_ = std::make_shared<SharedKeyboardMonitor_>();
   }
   if (!shared_keyboard_monitor_) {
-    const ECM rcm = Err(EC::InvalidHandle, "", target.nickname,
+    const ECM rcm = Err(EC::InvalidHandle, "", target.term_key,
                         "Failed to initialize shared keyboard monitor");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
-  std::lock_guard<std::mutex> session_lock(
+  std::unique_lock<std::mutex> session_lock(
       shared_keyboard_monitor_->session_mutex);
   KeyboardInputMonitor_ *keyboard_monitor =
       &(shared_keyboard_monitor_->monitor);
 
   auto managed_terminal_result =
-      terminal_service_.GetTerminalByNickname(target.nickname, false);
+      terminal_service_.GetTerminalByNickname(target.term_key, true);
 
   AMDomain::terminal::TerminalHandle terminal_handle = nullptr;
+  AMDomain::client::OS_TYPE terminal_os_type =
+      AMDomain::client::OS_TYPE::Unknown;
   if (managed_terminal_result.rcm && managed_terminal_result.data) {
     terminal_handle = managed_terminal_result.data;
   } else if (managed_terminal_result.rcm && !managed_terminal_result.data) {
-    const ECM rcm = Err(EC::InvalidHandle, "", target.nickname,
+    const ECM rcm = Err(EC::InvalidHandle, "", target.term_key,
                         "Managed terminal handle is null");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   } else if (managed_terminal_result.rcm.code == EC::ClientNotFound) {
     auto temp_client_result =
-        client_service_.CreateClient(target.nickname, control, false, false);
+        client_service_.CreateClient(target.client_name, control, false, false);
     if (!temp_client_result.rcm || !temp_client_result.data) {
       const ECM rcm = temp_client_result.rcm
-                          ? Err(EC::InvalidHandle, "", target.nickname,
+                          ? Err(EC::InvalidHandle, "", target.client_name,
                                 "Temporary client is null")
                           : temp_client_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
       return rcm;
     }
+    terminal_os_type = temp_client_result.data->ConfigPort().GetOSType();
+    temp_client_result.data->ConfigPort().SetNickname(target.term_key);
 
     auto temp_terminal_result =
         terminal_service_.CreateTerminal(temp_client_result.data, false);
     if (!temp_terminal_result.rcm || !temp_terminal_result.data) {
       const ECM rcm =
           (temp_terminal_result.rcm.code == EC::OperationUnsupported)
-              ? BuildTerminalUnsupportedError_(target.nickname)
+              ? BuildTerminalUnsupportedError_(target.client_name)
               : temp_terminal_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
       return rcm;
@@ -1635,21 +1826,27 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
 
   if (!terminal_handle) {
-    const ECM rcm = Err(EC::InvalidHandle, "", target.nickname,
+    const ECM rcm = Err(EC::InvalidHandle, "", target.term_key,
                         "Resolved terminal handle is null");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
-  const auto protocol = terminal_handle->GetRequest().protocol;
+  const auto terminal_request = terminal_handle->GetRequest();
+  const auto protocol = terminal_request.protocol;
   if (protocol != AMDomain::host::ClientProtocol::SFTP &&
       protocol != AMDomain::host::ClientProtocol::LOCAL) {
     const ECM rcm =
-        Err(EC::OperationUnsupported, "", target.nickname,
+        Err(EC::OperationUnsupported, "", target.client_name,
             "Windows realtime terminal launch currently supports SFTP and "
             "LOCAL channels only");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(last_entered_term_mutex_);
+    last_entered_term_key_ = target.term_key;
   }
 
   const auto status_result = terminal_handle->CheckSession({}, control);
@@ -1660,78 +1857,49 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
   const AMTerminalTools::TerminalViewportInfo geometry =
       AMTerminalTools::GetTerminalViewportInfo();
-  const std::string requested_channel =
-      target.channel_name.has_value() ? *target.channel_name : "";
-  std::string channel_name = {};
-  bool refresh_prompt_on_enter = false;
-
-  if (!requested_channel.empty()) {
-    auto channel_port_result = terminal_handle->GetChannelPort(
-        std::optional<std::string>(requested_channel), control);
-    if (!(channel_port_result.rcm)) {
-      if (channel_port_result.rcm.code != EC::ClientNotFound) {
-        prompt_io_manager_.ErrorFormat(channel_port_result.rcm);
-        return channel_port_result.rcm;
-      }
-      auto open_result = terminal_handle->OpenChannel(
-          BuildChannelOpenArgs_(requested_channel, geometry), control);
-      if (!(open_result.rcm) &&
-          open_result.rcm.code != EC::TargetAlreadyExists) {
-        prompt_io_manager_.ErrorFormat(open_result.rcm);
-        return open_result.rcm;
-      }
-    } else {
-      if (!channel_port_result.data ||
-          channel_port_result.data->GetState().closed) {
-        const ECM rcm = Err(EC::NoConnection, "", requested_channel,
-                            "Target channel is not available");
-        prompt_io_manager_.ErrorFormat(rcm);
-        return rcm;
-      }
-      refresh_prompt_on_enter = true;
-    }
-
-    auto active_result =
-        terminal_handle->ActiveChannel({requested_channel}, control);
-    if (!(active_result.rcm) || !active_result.data.activated) {
-      const ECM rcm = active_result.rcm
-                          ? Err(EC::CommonFailure, "", requested_channel,
-                                "Failed to activate target channel")
-                          : active_result.rcm;
-      prompt_io_manager_.ErrorFormat(rcm);
-      return rcm;
-    }
-    channel_name = requested_channel;
-  } else {
-    const std::string current_channel =
-        AMStr::Strip(status_result.data.current_channel);
-    if (current_channel.empty()) {
-      const ECM rcm = Err(EC::InvalidArg, "", target.nickname,
-                          "No active channel in terminal");
-      prompt_io_manager_.ErrorFormat(rcm);
-      return rcm;
-    }
-
-    auto channel_port_result =
-        terminal_handle->GetChannelPort(std::nullopt, control);
-    if (!(channel_port_result.rcm)) {
-      prompt_io_manager_.ErrorFormat(channel_port_result.rcm);
-      return channel_port_result.rcm;
-    }
-    if (!channel_port_result.data ||
-        channel_port_result.data->GetState().closed) {
-      const ECM rcm = Err(EC::NoConnection, "", current_channel,
-                          "Current channel is not available");
-      prompt_io_manager_.ErrorFormat(rcm);
-      return rcm;
-    }
-
-    refresh_prompt_on_enter = true;
-    channel_name = current_channel;
+  std::string channel_name = AMStr::Strip(status_result.data.current_channel);
+  if (channel_name.empty()) {
+    channel_name = AMDomain::terminal::kDefaultTerminalChannelName;
   }
 
+  auto current_channel_result = terminal_handle->GetChannelPort(
+      std::optional<std::string>(channel_name), control);
+  if (!(current_channel_result.rcm) ||
+      (current_channel_result.data &&
+       current_channel_result.data->GetState().closed)) {
+    auto open_result =
+        terminal_handle->OpenChannel(BuildChannelOpenArgs_(channel_name, geometry),
+                                     control);
+    if (!(open_result.rcm) && open_result.rcm.code != EC::TargetAlreadyExists) {
+      prompt_io_manager_.ErrorFormat(open_result.rcm);
+      return open_result.rcm;
+    }
+    current_channel_result = terminal_handle->GetChannelPort(
+        std::optional<std::string>(channel_name), control);
+  }
+  if (!(current_channel_result.rcm) || !current_channel_result.data ||
+      current_channel_result.data->GetState().closed) {
+    const ECM rcm = current_channel_result.rcm
+                        ? Err(EC::NoConnection, "", channel_name,
+                              "Term channel is not available")
+                        : current_channel_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto active_result = terminal_handle->ActiveChannel({channel_name}, control);
+  if (!(active_result.rcm) || !active_result.data.activated) {
+    const ECM rcm = active_result.rcm
+                        ? Err(EC::CommonFailure, "", channel_name,
+                              "Failed to activate term channel")
+                        : active_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+  bool refresh_prompt_on_enter = true;
+
   auto channel_port_result = terminal_service_.EnsureChannelPort(
-      target.nickname, channel_name, control);
+      target.term_key, channel_name, control);
   if (!(channel_port_result.rcm) || !channel_port_result.data) {
     const ECM rcm = channel_port_result.rcm
                         ? Err(EC::InvalidHandle, "", channel_name,
@@ -1787,10 +1955,17 @@ ECM TerminalInterfaceService::LaunchTerminal(
   std::vector<std::string> last_rendered_lines = {};
   bool have_last_vt_snapshot = false;
   AMDomain::terminal::ChannelVtSnapshot last_vt_snapshot = {};
+  bool last_god_mode = false;
   std::atomic<uint64_t> local_viewport_offset = 0;
   std::atomic<bool> local_browse_active = false;
+  std::atomic<bool> god_mode_active{arg.start_in_god_mode};
   std::string pending_local_input = {};
+  std::mutex requested_switch_mutex = {};
+  std::string requested_switch_key = {};
   AMTerminalTools::TerminalViewportInfo last_geometry = geometry;
+  const std::vector<std::string> god_mode_banner_lines =
+      SplitTerminalBannerLines_(ResolveTerminalBanner_(
+          style_service_, target, terminal_request, terminal_os_type));
 #ifdef _WIN32
   MouseWheelMonitor_ mouse_wheel_monitor = {};
   HWND const terminal_foreground_window =
@@ -1859,9 +2034,11 @@ ECM TerminalInterfaceService::LaunchTerminal(
       last_rendered_lines.clear();
       have_last_vt_snapshot = false;
       last_vt_snapshot = {};
+      last_god_mode = false;
     }
     local_viewport_offset.store(0, std::memory_order_release);
     local_browse_active.store(false, std::memory_order_release);
+    god_mode_active.store(false, std::memory_order_release);
     {
       std::lock_guard<std::mutex> input_guard(local_input_mutex);
       pending_local_input.clear();
@@ -1881,6 +2058,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     if (browse_active || viewport_offset != 0U) {
       vt_snapshot.cursor_visible = false;
     }
+    const bool god_mode = god_mode_active.load(std::memory_order_acquire);
     std::lock_guard<std::mutex> guard(render_mutex);
     if (!physical_alt_screen_active) {
       return;
@@ -1898,7 +2076,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
         !have_last_server_screen_state ||
         current_geometry.cols != last_render_geometry.cols ||
         current_geometry.rows != last_render_geometry.rows ||
-        last_server_in_alternate_screen != vt_snapshot.in_alternate_screen;
+        last_server_in_alternate_screen != vt_snapshot.in_alternate_screen ||
+        last_god_mode != god_mode;
     const bool lines_changed = force_full_clear || current_lines != last_rendered_lines;
     const bool input_protocol_changed =
         !have_last_vt_snapshot ||
@@ -1918,8 +2097,10 @@ ECM TerminalInterfaceService::LaunchTerminal(
       if (input_protocol_changed) {
         cursor_only += input_protocol_ansi;
       }
+      const int row_offset =
+          god_mode ? static_cast<int>(god_mode_banner_lines.size()) : 0;
       const int cursor_row =
-          std::clamp(vt_snapshot.cursor_row + 1, 1,
+          std::clamp(vt_snapshot.cursor_row + 1 + row_offset, 1,
                      std::max(1, current_geometry.rows));
       const int cursor_col =
           std::clamp(vt_snapshot.cursor_col + 1, 1,
@@ -1939,10 +2120,13 @@ ECM TerminalInterfaceService::LaunchTerminal(
     repaint += input_protocol_ansi;
     repaint += "\x1b[?25l";
     repaint += "\x1b[0m";
+    const int row_offset =
+        god_mode ? static_cast<int>(god_mode_banner_lines.size()) : 0;
     if (force_full_clear) {
       repaint += kTerminalClearAndHome_;
       for (size_t i = 0; i < current_lines.size(); ++i) {
-        repaint += AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U));
+        repaint +=
+            AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U + row_offset));
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
       }
@@ -1952,41 +2136,54 @@ ECM TerminalInterfaceService::LaunchTerminal(
         if (last_rendered_lines[i] == current_lines[i]) {
           continue;
         }
-        repaint += AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U));
+        repaint +=
+            AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U + row_offset));
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
       }
       for (size_t i = overlap; i < current_lines.size(); ++i) {
-        repaint += AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U));
+        repaint +=
+            AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U + row_offset));
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
       }
       for (size_t i = current_lines.size(); i < last_rendered_lines.size(); ++i) {
-        repaint += AMStr::fmt("\x1b[{};1H\x1b[2K", static_cast<int>(i + 1U));
+        repaint += AMStr::fmt("\x1b[{};1H\x1b[2K",
+                              static_cast<int>(i + 1U + row_offset));
       }
     }
+    std::string restore_cursor_after_banner = {};
     if (vt_snapshot.available) {
       const int cursor_row =
-          std::clamp(vt_snapshot.cursor_row + 1, 1,
+          std::clamp(vt_snapshot.cursor_row + 1 + row_offset, 1,
                      std::max(1, current_geometry.rows));
       const int cursor_col =
           std::clamp(vt_snapshot.cursor_col + 1, 1,
                      std::max(1, current_geometry.cols));
-      repaint += AMStr::fmt("\x1b[{};{}H", cursor_row, cursor_col);
-      repaint += vt_snapshot.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
+      restore_cursor_after_banner =
+          AMStr::fmt("\x1b[{};{}H", cursor_row, cursor_col);
+      restore_cursor_after_banner +=
+          vt_snapshot.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
+      repaint += restore_cursor_after_banner;
       have_last_server_screen_state = true;
       last_server_in_alternate_screen = vt_snapshot.in_alternate_screen;
     } else {
-      repaint += "\x1b[?25h";
+      restore_cursor_after_banner = "\x1b[?25h";
+      repaint += restore_cursor_after_banner;
       have_last_server_screen_state = false;
       last_server_in_alternate_screen = false;
     }
     WriteTerminalBytes_(repaint);
+    if (god_mode && !god_mode_banner_lines.empty()) {
+      WriteTerminalBannerLines_(god_mode_banner_lines);
+      WriteTerminalBytes_(restore_cursor_after_banner);
+    }
     last_rendered_lines = current_lines;
     last_local_browse_active = browse_active;
     last_render_geometry = current_geometry;
     have_last_vt_snapshot = vt_snapshot.available;
     last_vt_snapshot = vt_snapshot;
+    last_god_mode = god_mode;
   };
   std::function<void()> render_current_frame = [&]() {
     AMDomain::terminal::ChannelRenderFrameResult frame_result = {};
@@ -2165,8 +2362,82 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
       return true;
     };
+    auto request_term_switch = [&](int direction) {
+      auto next_key = AdjacentTermKey_(terminal_service_, target.term_key,
+                                      direction);
+      if (!next_key.has_value() || next_key->empty() ||
+          *next_key == target.term_key) {
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> switch_guard(requested_switch_mutex);
+        requested_switch_key = *next_key;
+      }
+      (void)channel_port->RequestForegroundDetach();
+    };
 
     while (!pending_local_input.empty()) {
+      if (god_mode_active.load(std::memory_order_acquire)) {
+        size_t seq_len = 0U;
+        if (pending_local_input.front() == '\x1d') {
+          passthrough.push_back('\x1d');
+          pending_local_input.erase(0, 1U);
+          god_mode_active.store(false, std::memory_order_release);
+          render_current_frame();
+          continue;
+        }
+        if (pending_local_input.front() == '\t') {
+          pending_local_input.erase(0, 1U);
+          request_term_switch(1);
+          continue;
+        }
+        if (pending_local_input.front() == 'q') {
+          pending_local_input.erase(0, 1U);
+          god_mode_active.store(false, std::memory_order_release);
+          (void)channel_port->RequestForegroundDetach();
+          continue;
+        }
+        if (StartsWithAny_(pending_local_input,
+                           {"\x1b[D", "\x1bOD", "\x1b[1;2D"}, &seq_len)) {
+          pending_local_input.erase(0, seq_len);
+          request_term_switch(-1);
+          continue;
+        }
+        if (StartsWithAny_(pending_local_input,
+                           {"\x1b[C", "\x1bOC", "\x1b[1;2C"}, &seq_len)) {
+          pending_local_input.erase(0, seq_len);
+          request_term_switch(1);
+          continue;
+        }
+        if (StartsWithAny_(pending_local_input, {"\x1b[Z"}, &seq_len)) {
+          pending_local_input.erase(0, seq_len);
+          request_term_switch(-1);
+          continue;
+        }
+        if (pending_local_input.front() == '\x1b') {
+          if (pending_local_input.size() == 1U) {
+            pending_local_input.erase(0, 1U);
+            god_mode_active.store(false, std::memory_order_release);
+            render_current_frame();
+            continue;
+          }
+          const size_t esc_len = CompleteEscapeSequenceLength_(pending_local_input);
+          if (esc_len == 0U) {
+            break;
+          }
+          if (esc_len == 1U) {
+            pending_local_input.erase(0, 1U);
+            god_mode_active.store(false, std::memory_order_release);
+            render_current_frame();
+            continue;
+          }
+          pending_local_input.erase(0, esc_len);
+          continue;
+        }
+        pending_local_input.erase(0, 1U);
+        continue;
+      }
+
       if (pending_local_input.starts_with(kLocalWheelUpInput_)) {
         local_browse_active.store(true, std::memory_order_release);
         uint64_t const current =
@@ -2191,6 +2462,15 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
       unsigned char const first =
           static_cast<unsigned char>(pending_local_input.front());
+      if (first == 0x1dU) {
+        if (local_browse_active.load(std::memory_order_acquire)) {
+          (void)exit_local_scrollback();
+        }
+        pending_local_input.erase(0, 1U);
+        god_mode_active.store(true, std::memory_order_release);
+        render_current_frame();
+        continue;
+      }
       if (first != 0x1bU) {
         if (local_browse_active.load(std::memory_order_acquire)) {
           (void)exit_local_scrollback();
@@ -2446,6 +2726,10 @@ ECM TerminalInterfaceService::LaunchTerminal(
     if (!(close_result.rcm) && (wait_rcm)) {
       wait_rcm = close_result.rcm;
     }
+    const ECM remove_rcm = terminal_service_.RemoveTerminal(target.term_key, control);
+    if (!(remove_rcm) && (wait_rcm)) {
+      wait_rcm = remove_rcm;
+    }
   } else {
     (void)channel_port->UnbindForeground();
   }
@@ -2458,6 +2742,19 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
 #endif
 
+  std::string switch_key = {};
+  {
+    std::lock_guard<std::mutex> switch_guard(requested_switch_mutex);
+    switch_key = requested_switch_key;
+  }
+  if (!switch_key.empty() && (wait_rcm)) {
+    session_lock.unlock();
+    TerminalLaunchArg switch_arg = {};
+    switch_arg.target = switch_key;
+    switch_arg.start_in_god_mode = true;
+    return LaunchTerminal(switch_arg, control_opt);
+  }
+
   if (!(wait_rcm)) {
     prompt_io_manager_.ErrorFormat(wait_rcm);
     return wait_rcm;
@@ -2468,24 +2765,31 @@ ECM TerminalInterfaceService::AddTerminal(
     const TerminalAddArg &arg,
     const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  const auto nicknames = NormalizeTerminalNicknames_(arg.nicknames);
-  if (nicknames.empty()) {
+  std::string default_client = filesystem_service_.CurrentNickname();
+  if (default_client.empty()) {
+    default_client = AMDomain::host::klocalname;
+  }
+  ECM normalize_status = OK;
+  const auto targets =
+      NormalizeTermTargets_(arg.nicknames, default_client, &normalize_status);
+  if (targets.empty()) {
     const ECM rcm = Err(EC::InvalidArg, "", "<targets>",
-                        "term add requires at least one target nickname");
+                        "term add requires at least one target: host@name");
     prompt_io_manager_.ErrorFormat(rcm);
-    return rcm;
+    return normalize_status ? rcm : normalize_status;
   }
 
-  ECM status = OK;
-  for (const auto &nickname : nicknames) {
+  ECM status = normalize_status;
+  for (const auto &target : targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "", nickname, "Interrupted by user");
+      return Err(EC::Terminate, "", target.term_key, "Interrupted by user");
     }
 
-    auto existing = terminal_service_.GetTerminalByNickname(nickname, false);
+    auto existing =
+        terminal_service_.GetTerminalByNickname(target.term_key, true);
     if (existing.rcm && existing.data) {
       if (!arg.force) {
-        const ECM rcm = Err(EC::TargetAlreadyExists, "", nickname,
+        const ECM rcm = Err(EC::TargetAlreadyExists, "", target.term_key,
                             "Terminal already exists");
         prompt_io_manager_.ErrorFormat(rcm);
         if ((status)) {
@@ -2493,7 +2797,8 @@ ECM TerminalInterfaceService::AddTerminal(
         }
         continue;
       }
-      const ECM rm_rcm = terminal_service_.RemoveTerminal(nickname, control);
+      const ECM rm_rcm =
+          terminal_service_.RemoveTerminal(target.term_key, control);
       if (!(rm_rcm)) {
         prompt_io_manager_.ErrorFormat(rm_rcm);
         if ((status)) {
@@ -2509,23 +2814,26 @@ ECM TerminalInterfaceService::AddTerminal(
       continue;
     }
 
-    auto client_result = client_service_.CreateClient(nickname, control, false);
+    auto client_result =
+        client_service_.CreateClient(target.client_name, control, false);
     if (!(client_result.rcm) || !client_result.data) {
-      const ECM rcm = (client_result.rcm) ? Err(EC::InvalidHandle, "", nickname,
-                                                "Created client is null")
-                                          : client_result.rcm;
+      const ECM rcm =
+          (client_result.rcm) ? Err(EC::InvalidHandle, "", target.client_name,
+                                    "Created client is null")
+                              : client_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
       if ((status)) {
         status = rcm;
       }
       continue;
     }
+    client_result.data->ConfigPort().SetNickname(target.term_key);
 
     auto terminal_result =
         terminal_service_.CreateTerminal(client_result.data, false);
     if (!(terminal_result.rcm) || !terminal_result.data) {
       const ECM rcm = (terminal_result.rcm.code == EC::OperationUnsupported)
-                          ? BuildTerminalUnsupportedError_(nickname)
+                          ? BuildTerminalUnsupportedError_(target.client_name)
                           : terminal_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
       if ((status)) {
@@ -2534,7 +2842,7 @@ ECM TerminalInterfaceService::AddTerminal(
       continue;
     }
 
-    prompt_io_manager_.FmtPrint("✅ Terminal added: {}", nickname);
+    prompt_io_manager_.FmtPrint("✅ Term added: {}", target.term_key);
   }
   return status;
 }
@@ -2570,56 +2878,25 @@ ECM TerminalInterfaceService::RemoveTerminal(
     return rcm;
   }
 
+  std::string default_client = filesystem_service_.CurrentNickname();
+  if (default_client.empty()) {
+    default_client = AMDomain::host::klocalname;
+  }
+  ECM status = OK;
+  const auto parsed_targets =
+      NormalizeTermTargets_(arg.nicknames, default_client, &status);
   std::vector<std::string> valid_targets = {};
-  valid_targets.reserve(arg.nicknames.size());
-  std::unordered_set<std::string> seen = {};
+  valid_targets.reserve(parsed_targets.size());
   std::unordered_map<std::string, AMDomain::terminal::TerminalHandle> targets =
       {};
-  ECM status = OK;
-  for (const auto &raw_nickname : arg.nicknames) {
-    if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "", "", "Interrupted by user");
-    }
-    if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "", "", "Operation timed out");
-    }
-
-    const std::string stripped = AMStr::Strip(raw_nickname);
-    if (stripped.empty()) {
-      const ECM rcm =
-          Err(EC::InvalidArg, "", "", "invalid empty terminal nickname");
-      prompt_io_manager_.ErrorFormat(rcm);
-      if ((status)) {
-        status = rcm;
-      }
-      continue;
-    }
-
-    const std::string normalized =
-        AMDomain::host::HostService::NormalizeNickname(stripped);
-    if (normalized.empty() ||
-        (!AMDomain::host::HostService::IsLocalNickname(normalized) &&
-         !AMDomain::host::HostService::ValidateNickname(normalized))) {
-      const ECM rcm =
-          Err(EC::InvalidArg, "", "",
-              AMStr::fmt("invalid terminal nickname literal: {}", stripped));
-      prompt_io_manager_.ErrorFormat(rcm);
-      if ((status)) {
-        status = rcm;
-      }
-      continue;
-    }
-
-    if (!seen.insert(normalized).second) {
-      continue;
-    }
-
+  for (const auto &target : parsed_targets) {
     auto terminal_result =
-        terminal_service_.GetTerminalByNickname(normalized, true);
+        terminal_service_.GetTerminalByNickname(target.term_key, true);
     if (!(terminal_result.rcm) || !terminal_result.data) {
       const ECM rcm =
           terminal_result.rcm
-              ? Err(EC::ClientNotFound, "", normalized, "terminal not found")
+              ? Err(EC::ClientNotFound, "", target.term_key,
+                    "terminal not found")
               : terminal_result.rcm;
       prompt_io_manager_.ErrorFormat(rcm);
       if ((status)) {
@@ -2627,8 +2904,8 @@ ECM TerminalInterfaceService::RemoveTerminal(
       }
       continue;
     }
-    valid_targets.push_back(normalized);
-    targets[normalized] = terminal_result.data;
+    valid_targets.push_back(target.term_key);
+    targets[target.term_key] = terminal_result.data;
   }
 
   if (valid_targets.empty()) {
@@ -2646,7 +2923,7 @@ ECM TerminalInterfaceService::RemoveTerminal(
 
   bool canceled = false;
   const bool confirmed = prompt_io_manager_.PromptYesNo(
-      "Are you sure to remove these clients? (y/n): ", &canceled);
+      "Are you sure to remove these terms? (y/n): ", &canceled);
   if (canceled || !confirmed) {
     prompt_io_manager_.PrintOperationAbort();
     return OK;
@@ -2668,7 +2945,7 @@ ECM TerminalInterfaceService::RemoveTerminal(
       }
       continue;
     }
-    prompt_io_manager_.FmtPrint("✅ Terminal removed: {}", nickname);
+    prompt_io_manager_.FmtPrint("✅ Term removed: {}", nickname);
   }
   return status;
 }
@@ -2766,7 +3043,7 @@ ECM TerminalInterfaceService::AddChannel(
     prompt_io_manager_.ErrorFormat(target_result.rcm);
     return target_result.rcm;
   }
-  const TerminalTargetSpec_ target = target_result.data;
+  const LegacyTerminalChannelTarget_ target = target_result.data;
   const std::string channel_name =
       target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
   if (channel_name.empty()) {
@@ -2852,7 +3129,7 @@ ECM TerminalInterfaceService::RemoveChannel(
     prompt_io_manager_.ErrorFormat(target_result.rcm);
     return target_result.rcm;
   }
-  const TerminalTargetSpec_ target = target_result.data;
+  const LegacyTerminalChannelTarget_ target = target_result.data;
   const std::string channel_name =
       target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
   if (channel_name.empty()) {
@@ -2918,8 +3195,8 @@ ECM TerminalInterfaceService::RenameChannel(
     return dst_result.rcm;
   }
 
-  const TerminalTargetSpec_ src_target = src_result.data;
-  const TerminalTargetSpec_ dst_target = dst_result.data;
+  const LegacyTerminalChannelTarget_ src_target = src_result.data;
+  const LegacyTerminalChannelTarget_ dst_target = dst_result.data;
   const std::string src_channel = src_target.channel_name.has_value()
                                       ? AMStr::Strip(*src_target.channel_name)
                                       : "";
@@ -2990,7 +3267,7 @@ ECM TerminalInterfaceService::ExportChannelHistory(
     prompt_io_manager_.ErrorFormat(target_result.rcm);
     return target_result.rcm;
   }
-  const TerminalTargetSpec_ target = target_result.data;
+  const LegacyTerminalChannelTarget_ target = target_result.data;
   const std::string channel_name =
       target.channel_name.has_value() ? AMStr::Strip(*target.channel_name) : "";
   if (channel_name.empty()) {

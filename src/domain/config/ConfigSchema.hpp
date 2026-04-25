@@ -710,6 +710,15 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
             }
           },
           "additionalProperties": false
+        },
+        "Terminal": {
+          "type": "object",
+          "properties": {
+            "banner_template": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

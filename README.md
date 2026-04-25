@@ -13,7 +13,7 @@ Current code in this repository provides:
 - Local, SFTP, and FTP client switching
 - Host, profile, config, client, pool, and variable management
 - File operations such as `stat`, `ls`, `size`, `find`, `mkdir`, `rm`, `tree`, `realpath`, `cp`, `mv`, `clone`, and `wget`
-- Terminal workflows such as `ssh`, `term`, and `channel`
+- Terminal workflows such as `ssh` and `term`
 - Asynchronous transfer task control with `task ls`, `task inspect`, `task pause`, `task resume`, and `task terminate`
 - Interactive mode via `bash`, with Isocline-based completion, highlighting, and history
 
@@ -232,30 +232,27 @@ Important escaping rules:
 ### Terminal Sessions
 
 ```text
+term add dev@main
 ssh dev@main
+ssh main
+ssh
 term ls
-channel add dev@main
-channel ls dev
-channel export dev@main D:\logs\dev-main.txt
-channel rm dev@main
+term rm dev@main
 ```
 
-Terminal target syntax is `[terminal]@[channel]` or just `channel`. For example, `ssh dev@main` opens channel `main` in terminal/client `dev`.
-
-`channel export <terminal>@<channel> <local-file>` appends the channel's VT history to a local text file. Formatting such as colors and bold text is ignored, missing parent directories are created automatically, and relative paths are resolved to an absolute local path before writing and printing.
+Term target syntax is `host@name` or just `name`. `ssh name` resolves the term under the current client, while bare `ssh` re-enters the last term used during the current program run.
 
 Terminal shortcuts:
 
-- `Ctrl+]`, then `q` or `Q`: detach from the foreground terminal and return to the AMSFTP prompt.
-- Exiting the remote or local shell closes the foreground session normally.
-- `term ls` and `channel ls` show reusable terminal/channel state after detaching.
+- `Ctrl+]`: enter God Mode.
+- In God Mode, `Esc` returns to the current term, `Ctrl+]` sends a literal `Ctrl+]`, `Left` or `Shift+Tab` switches to the previous term, `Right` or `Tab` switches to the next term, and `q` detaches back to the AMSFTP prompt.
+- Exiting the remote or local shell closes the term normally.
+- `term ls` shows reusable terms after detaching.
 
 Terminal prompt templates in `config/settings.toml` can also use these Lua globals:
 
-- `channel_num`, `term_num`: total managed channels and terminals
-- `channel_ok`, `channel_disconnected`: channel counts for the current terminal/client
-- `term_ok`, `term_disconnected`: terminal session state counts
-- `channel_name`: current channel name for the current terminal/client, or an empty string when none is active
+- `term_num`: total managed terms
+- `term_ok`, `term_disconnected`: term session state counts
 
 ### Interactive Shortcuts
 

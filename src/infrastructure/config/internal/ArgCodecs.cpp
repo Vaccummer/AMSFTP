@@ -1155,6 +1155,7 @@ using AMDomain::style::InternalStyle;
 using AMDomain::style::PathHighlightStyle;
 using AMDomain::style::ProgressBarStyle;
 using AMDomain::style::StyleConfigArg;
+using AMDomain::style::TerminalStyle;
 using AMDomain::style::ValueQueryHighlightStyle;
 
 void DecodeCompleteMenu_(const Json &json, CompleteMenuStyle *out) {
@@ -1499,6 +1500,19 @@ Json EncodePathHighlight_(const PathHighlightStyle &in) {
   return out;
 }
 
+void DecodeTerminalStyle_(const Json &json, TerminalStyle *out) {
+  if (!out || !json.is_object()) {
+    return;
+  }
+  (void)AMJson::QueryKey(json, {"banner_template"}, &out->banner_template);
+}
+
+Json EncodeTerminalStyle_(const TerminalStyle &in) {
+  Json out = Json::object();
+  out["banner_template"] = in.banner_template;
+  return out;
+}
+
 class StyleSnapshotCodec final : public AMInfra::config::IArgCodec {
 public:
   [[nodiscard]] std::type_index TypeKey() const override {
@@ -1543,6 +1557,8 @@ public:
                          &typed->style.internal_style);
     DecodePathHighlight_(codec_common::QueryObjectAt_(style, {"Path"}),
                          &typed->style.path);
+    DecodeTerminalStyle_(codec_common::QueryObjectAt_(style, {"Terminal"}),
+                         &typed->style.terminal);
 
     AMDomain::style::service::NormalizeStyleConfigArg(typed);
     return true;
@@ -1570,6 +1586,7 @@ public:
         EncodeValueQueryHighlight_(typed->style.value_query_highlight);
     style["InternalStyle"] = EncodeInternalStyle_(typed->style.internal_style);
     style["Path"] = EncodePathHighlight_(typed->style.path);
+    style["Terminal"] = EncodeTerminalStyle_(typed->style.terminal);
     (*root)["Style"] = std::move(style);
     return true;
   }

@@ -374,6 +374,16 @@ void NormalizePathHighlight(PathHighlightStyle *style) {
   }
 }
 
+void NormalizeTerminalStyle(TerminalStyle *style) {
+  if (!style) {
+    return;
+  }
+  const TerminalStyle defaults = {};
+  if (style->banner_template.empty()) {
+    style->banner_template = defaults.banner_template;
+  }
+}
+
 void NormalizeStyleConfig(StyleConfig *config) {
   if (!config) {
     return;
@@ -385,6 +395,7 @@ void NormalizeStyleConfig(StyleConfig *config) {
   NormalizeValueQueryHighlight(&config->value_query_highlight);
   NormalizeInternalStyle(&config->internal_style);
   NormalizePathHighlight(&config->path);
+  NormalizeTerminalStyle(&config->terminal);
 }
 
 void NormalizeStyleConfigArg(StyleConfigArg *arg) {

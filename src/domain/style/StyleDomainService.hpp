@@ -19,6 +19,7 @@ void NormalizeInputHighlight(InputHighlightStyle *style);
 void NormalizeValueQueryHighlight(ValueQueryHighlightStyle *style);
 void NormalizeInternalStyle(InternalStyle *style);
 void NormalizePathHighlight(PathHighlightStyle *style);
+void NormalizeTerminalStyle(TerminalStyle *style);
 void NormalizeStyleConfig(StyleConfig *config);
 void NormalizeStyleConfigArg(StyleConfigArg *arg);
 
