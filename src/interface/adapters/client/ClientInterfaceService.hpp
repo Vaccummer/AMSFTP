@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/client/ClientAppService.hpp"
+#include "application/config/ConfigAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
 #include "application/prompt/PromptProfileManager.hpp"
@@ -17,6 +18,7 @@
 
 namespace AMInterface::client {
 using ClientAppService = AMApplication::client::ClientAppService;
+using ConfigAppService = AMApplication::config::ConfigAppService;
 using TermAppService = AMApplication::terminal::TermAppService;
 using FilesystemAppService = AMApplication::filesystem::FilesystemAppService;
 using AMApplication::host::HostAppService;
@@ -33,6 +35,7 @@ class ClientConnectSpinner;
 class ClientInterfaceService final : public NonCopyableNonMovable {
 public:
   ClientInterfaceService(ClientAppService &client_service,
+                         ConfigAppService &config_service,
                          TermAppService &terminal_service,
                          FilesystemAppService &filesystem_service,
                          HostAppService &host_config_manager,
@@ -99,6 +102,7 @@ private:
                    const std::optional<ControlComponent> &component);
 
   ClientAppService &client_service_;
+  ConfigAppService &config_service_;
   TermAppService &terminal_service_;
   FilesystemAppService &filesystem_service_;
   HostAppService &host_config_manager_;

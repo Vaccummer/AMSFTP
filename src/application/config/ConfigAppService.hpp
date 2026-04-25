@@ -3,6 +3,7 @@
 #include "domain/config/ConfigModel.hpp"
 #include "domain/config/ConfigSyncPort.hpp"
 #include "domain/config/ConfigStorePort.hpp"
+#include "domain/config/ConfigWriteLockPort.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <atomic>
 #include <cstdint>
@@ -74,6 +75,12 @@ public:
   void SetLogger(AMApplication::log::LoggerAppService *logger);
 
   /**
+   * @brief Bind the process-level write lock used for original config dumps.
+   */
+  void SetWriteLock(
+      std::unique_ptr<AMDomain::config::IConfigWriteLockPort> lock);
+
+  /**
    * @brief Build one owned config store from init arg.
    */
   ECM Init();
@@ -99,6 +106,16 @@ public:
    */
   ECM Dump(AMDomain::config::DocumentKind kind,
            const std::string &dst_path = "", bool async = false);
+
+  /**
+   * @brief Ensure this process owns the config write lease.
+   */
+  [[nodiscard]] ECM EnsureConfigWriteLock();
+
+  /**
+   * @brief Return whether this process currently owns the config write lease.
+   */
+  [[nodiscard]] bool HasConfigWriteLock() const;
 
   /**
    * @brief Close store resources and reset app state.
@@ -140,6 +157,12 @@ public:
    * @brief Flush all dirty sync participants into config JSON.
    */
   ECM FlushDirtyParticipants();
+
+  /**
+   * @brief Flush dirty sync participants and dump dirty documents in one
+   * command-boundary transaction.
+   */
+  ECM FlushAndDumpDirtyDocuments(bool include_history = false);
 
   /**
    * @brief Return all configured document kinds with current status.
@@ -253,6 +276,8 @@ private:
   mutable AMAtomic<ConfigStoreInitArg> init_arg_ = {};
   mutable AMAtomic<ConfigBackupSet> backup_set_ = {};
   std::unique_ptr<IConfigStorePort> store_ = nullptr;
+  std::unique_ptr<AMDomain::config::IConfigWriteLockPort> write_lock_ =
+      nullptr;
   DumpErrorCallback dump_error_cb_;
   AMApplication::log::LoggerAppService *logger_ = nullptr;
   mutable AMAtomic<std::vector<SyncParticipant>> sync_participants_ = {};

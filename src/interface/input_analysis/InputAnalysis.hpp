@@ -35,7 +35,6 @@ enum class TokenRole {
   ShellCommand,
   Nickname,
   TerminalName,
-  ChannelName,
   BuiltinArg,
   ValidatedValue,
   VariableReference,
@@ -80,6 +79,7 @@ struct AnalyzedToken {
   TokenShape shape = TokenShape::Plain;
   TokenRole role = TokenRole::None;
   TokenState state = TokenState::Neutral;
+  TokenState qualifier_state = TokenState::Neutral;
   PathKind path_kind = PathKind::None;
   std::optional<AMInterface::parser::AMCommandArgSemantic> semantic_hint =
       std::nullopt;

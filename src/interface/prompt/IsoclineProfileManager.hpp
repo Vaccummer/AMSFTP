@@ -37,6 +37,7 @@ public:
 
   ECM Init();
   void AddHistoryEntry(const std::string &line);
+  void PersistHistoryEntry(const std::string &line);
   void RemoveLastHistoryEntry();
   void SyncCurrentHistory();
   ECM ChangeClient(const std::string &nickname);
@@ -55,8 +56,8 @@ private:
                 const PromptProfileSettings &profile_args,
                 const AMDomain::style::StyleConfigArg &style_arg,
                 const std::vector<std::string> &history_records) const;
-  void ApplyDefaultBindings_(const std::shared_ptr<IsoclineProfile> &profile) const;
-  void WriteBackCurrentProfile_();
+  void
+  ApplyDefaultBindings_(const std::shared_ptr<IsoclineProfile> &profile) const;
 
   struct DefaultReadlineBindings {
     ic_completer_fun_t *completer = nullptr;

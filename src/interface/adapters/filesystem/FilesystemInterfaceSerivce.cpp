@@ -656,17 +656,19 @@ ECM FilesystemInterfaceSerivce::Find(
       });
 
   if (!(result.rcm)) {
-    if (result.rcm.code == EC::Terminate ||
-        result.rcm.code == EC::OperationTimeout) {
-      return result.rcm;
-    }
-    status = MergeStatus_(status, result.rcm);
+    return result.rcm;
   }
 
   const std::string pattern_label =
       recursive_pattern_mode ? raw_pattern : raw_path;
-  prompt_io_manager_.FmtPrint("Find {} Result for pattern \"{}\"",
-                              result.data.size(), pattern_label);
+  const std::string styled_count = style_service_.Format(
+      std::to_string(result.data.size()),
+      AMInterface::style::StyleIndex::Number);
+  const std::string styled_pattern = style_service_.Format(
+      pattern_label, AMInterface::style::StyleIndex::FindPattern);
+  prompt_io_manager_.Print(
+      AMStr::fmt("Find {} Result for pattern {}", styled_count,
+                 styled_pattern));
   for (const auto &entry : result.data) {
     prompt_io_manager_.Print(style_service_.Format(
         entry.path, AMInterface::style::StyleIndex::None, &entry));

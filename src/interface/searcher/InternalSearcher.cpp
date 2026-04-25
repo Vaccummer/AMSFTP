@@ -97,7 +97,9 @@ std::vector<HostLikeNameInfo> CollectTerminalLikeNames_(
   std::vector<std::string> terminal_names = runtime->ListTerminalNames();
   std::ranges::sort(terminal_names.begin(), terminal_names.end());
   for (const auto &name : terminal_names) {
-    add_name(name, true);
+    const size_t at_pos = name.find('@');
+    add_name(at_pos == std::string::npos ? name : name.substr(0, at_pos),
+             true);
   }
 
   std::vector<std::string> host_names = runtime->ListHostNames();
@@ -114,20 +116,20 @@ enum class TargetSemantics_ {
   ExistingOrNew = 2,
 };
 
-struct TerminalChannelTarget_ {
-  std::string terminal_name = "local";
-  std::string channel_prefix = "";
+struct TermTargetPrefix_ {
+  std::string client_name = "local";
+  std::string term_prefix = "";
   std::string insert_header = "";
+  bool has_explicit_client = false;
 };
 
-TerminalChannelTarget_
-ParseTerminalChannelTarget_(const std::string &raw_prefix,
-                            const std::string &current_nickname) {
-  TerminalChannelTarget_ out = {};
-  out.terminal_name = AMDomain::host::HostService::NormalizeNickname(
+TermTargetPrefix_ ParseTermTargetPrefix_(const std::string &raw_prefix,
+                                         const std::string &current_nickname) {
+  TermTargetPrefix_ out = {};
+  out.client_name = AMDomain::host::HostService::NormalizeNickname(
       AMStr::Strip(current_nickname));
-  if (out.terminal_name.empty()) {
-    out.terminal_name = "local";
+  if (out.client_name.empty()) {
+    out.client_name = "local";
   }
 
   const std::string text = AMStr::Strip(raw_prefix);
@@ -137,18 +139,18 @@ ParseTerminalChannelTarget_(const std::string &raw_prefix,
 
   const size_t at_pos = text.find('@');
   if (at_pos == std::string::npos) {
-    out.channel_prefix = text;
+    out.term_prefix = text;
     return out;
   }
 
-  const std::string terminal_part = AMStr::Strip(text.substr(0, at_pos));
-  if (!terminal_part.empty()) {
-    out.terminal_name =
-        AMDomain::host::HostService::NormalizeNickname(terminal_part);
+  out.has_explicit_client = true;
+  const std::string client_part = AMStr::Strip(text.substr(0, at_pos));
+  if (!client_part.empty()) {
+    out.client_name =
+        AMDomain::host::HostService::NormalizeNickname(client_part);
   }
-  out.channel_prefix = AMStr::Strip(text.substr(at_pos + 1));
-  out.insert_header =
-      terminal_part.empty() ? std::string("@") : (terminal_part + "@");
+  out.term_prefix = AMStr::Strip(text.substr(at_pos + 1));
+  out.insert_header = client_part.empty() ? std::string("@") : (client_part + "@");
   return out;
 }
 
@@ -231,32 +233,32 @@ AMInterface::style::StyleIndex TerminalStyleKey_(
       Disconnected:
     return AMInterface::style::StyleIndex::DisconnectedTerminalName;
   case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
-      Unestablished:
-    return AMInterface::style::StyleIndex::UnestablishedTerminalName;
-  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Nonexistent:
-  default:
     return AMInterface::style::StyleIndex::NonexistentTerminalName;
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::ValidNew:
+    return AMInterface::style::StyleIndex::ValidNewTerminalName;
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
+      InvalidNew:
+  default:
+    return AMInterface::style::StyleIndex::InvalidNewTerminalName;
   }
 }
 
-AMInterface::style::StyleIndex ChannelStyleKey_(
-    AMInterface::input::IInputSemanticRuntime::ChannelNameState state) {
+AMInterface::style::StyleIndex TerminalClientStyleKey_(
+    AMInterface::input::IInputSemanticRuntime::TerminalNameState state) {
   switch (state) {
-  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::OK:
-    return AMInterface::style::StyleIndex::ChannelName;
-  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::OK:
+    return AMInterface::style::StyleIndex::Nickname;
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Disconnected:
-    return AMInterface::style::StyleIndex::DisconnectedChannelName;
-  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::
+    return AMInterface::style::StyleIndex::DisconnectedNickname;
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
+      Unestablished:
+    return AMInterface::style::StyleIndex::UnestablishedNickname;
+  case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Nonexistent:
-    return AMInterface::style::StyleIndex::NonexistentChannelName;
-  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::ValidNew:
-    return AMInterface::style::StyleIndex::ValidNewChannelName;
-  case AMInterface::input::IInputSemanticRuntime::ChannelNameState::
-      InvalidNew:
   default:
-    return AMInterface::style::StyleIndex::InvalidNewChannelName;
+    return AMInterface::style::StyleIndex::NonexistentNickname;
   }
 }
 } // namespace
@@ -488,9 +490,9 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       const auto &name_item = names[match.index];
       AMCompletionCandidate candidate;
       candidate.insert_text = name_item.name;
-      const auto state = runtime->QueryTerminalNameState(name_item.name);
+      const auto state = runtime->QueryTerminalClientNameState(name_item.name);
       candidate.display = FormatWithStyle_(ctx, name_item.name,
-                                           TerminalStyleKey_(state));
+                                           TerminalClientStyleKey_(state));
       candidate.kind = AMCompletionKind::TerminalName;
       const int host_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + host_bias;
@@ -502,73 +504,70 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  const bool channel_existing_target =
-      HasTarget(ctx, AMCompletionTarget::ChannelTargetExisting);
-  const bool channel_new_target =
-      HasTarget(ctx, AMCompletionTarget::ChannelTargetNew);
-  const bool channel_create_or_use_target =
-      HasTarget(ctx, AMCompletionTarget::SshChannelTarget);
-  if (channel_existing_target || channel_new_target ||
-      channel_create_or_use_target) {
-    if (channel_create_or_use_target && !channel_existing_target &&
-        !channel_new_target) {
-      std::vector<HostLikeNameInfo> names = CollectTerminalLikeNames_(runtime);
+  const bool term_existing_target =
+      HasTarget(ctx, AMCompletionTarget::TermTargetExisting);
+  const bool term_new_target = HasTarget(ctx, AMCompletionTarget::TermTargetNew);
+  const bool term_create_or_use_target =
+      HasTarget(ctx, AMCompletionTarget::SshTermTarget);
+  if (term_existing_target || term_new_target || term_create_or_use_target) {
+    const TargetSemantics_ semantics =
+        term_existing_target
+            ? TargetSemantics_::ExistingOnly
+            : (term_new_target ? TargetSemantics_::NewOnly
+                               : TargetSemantics_::ExistingOrNew);
+    const TermTargetPrefix_ target =
+        ParseTermTargetPrefix_(prefix, runtime->CurrentNickname());
+
+    if (!target.has_explicit_client &&
+        semantics != TargetSemantics_::ExistingOnly) {
+      std::vector<HostLikeNameInfo> clients = CollectTerminalLikeNames_(runtime);
       std::vector<std::string> keys;
-      keys.reserve(names.size());
-      for (const auto &item : names) {
+      keys.reserve(clients.size());
+      for (const auto &item : clients) {
         keys.push_back(item.name);
       }
-      for (const auto &match : BuildGeneralMatch(keys, prefix)) {
-        const auto &name_item = names[match.index];
+
+      for (const auto &match : BuildGeneralMatch(keys, target.term_prefix)) {
+        const auto &client = clients[match.index];
         AMCompletionCandidate candidate;
-        candidate.insert_text = name_item.name;
-        const auto state = runtime->QueryTerminalNameState(name_item.name);
+        candidate.insert_text = client.name + "@";
+        const auto state = runtime->QueryTerminalClientNameState(client.name);
         candidate.display =
-            FormatWithStyle_(ctx, name_item.name, TerminalStyleKey_(state));
+            FormatWithStyle_(ctx, client.name, TerminalClientStyleKey_(state));
         candidate.kind = AMCompletionKind::TerminalName;
-        const int host_bias = name_item.created ? 0 : 100;
+        const int host_bias = client.created ? 50 : 100;
         candidate.score = match.score_bias + host_bias;
         result.items.push_back(std::move(candidate));
       }
-      if (!result.items.empty()) {
-        SortCandidates(ctx, result.items);
+    }
+
+    if (semantics != TargetSemantics_::NewOnly) {
+      const std::vector<std::string> terms =
+          runtime->ListTermNames(target.client_name);
+      std::vector<std::string> keys;
+      keys.reserve(terms.size());
+      for (const auto &name : terms) {
+        keys.push_back(name);
       }
-      return result;
-    }
 
-    const TargetSemantics_ semantics =
-        channel_existing_target
-            ? TargetSemantics_::ExistingOnly
-            : (channel_new_target ? TargetSemantics_::NewOnly
-                                  : TargetSemantics_::ExistingOrNew);
-    const TerminalChannelTarget_ target =
-        ParseTerminalChannelTarget_(prefix, runtime->CurrentNickname());
-
-    const std::vector<std::string> channels =
-        runtime->ListChannelNames(target.terminal_name);
-    std::vector<std::string> keys;
-    keys.reserve(channels.size());
-    for (const auto &name : channels) {
-      keys.push_back(name);
-    }
-
-    for (const auto &match : BuildGeneralMatch(keys, target.channel_prefix)) {
-      const std::string &channel_name = channels[match.index];
-      auto state = runtime->QueryChannelNameState(target.terminal_name,
-                                                  channel_name, false);
-      if (semantics == TargetSemantics_::ExistingOnly &&
-          state == AMInterface::input::IInputSemanticRuntime::
-                       ChannelNameState::Nonexistent) {
-        continue;
+      for (const auto &match : BuildGeneralMatch(keys, target.term_prefix)) {
+        const std::string &term_name = terms[match.index];
+        const auto state =
+            runtime->QueryTermNameState(target.client_name, term_name, false);
+        if (state == AMInterface::input::IInputSemanticRuntime::
+                         TerminalNameState::Nonexistent) {
+          continue;
+        }
+        AMCompletionCandidate candidate;
+        candidate.insert_text = target.insert_header + term_name;
+        candidate.display =
+            FormatWithStyle_(ctx, term_name, TerminalStyleKey_(state));
+        candidate.kind = AMCompletionKind::TerminalName;
+        candidate.score = match.score_bias;
+        result.items.push_back(std::move(candidate));
       }
-      AMCompletionCandidate candidate;
-      candidate.insert_text = target.insert_header + channel_name;
-      candidate.display =
-          FormatWithStyle_(ctx, channel_name, ChannelStyleKey_(state));
-      candidate.kind = AMCompletionKind::ChannelName;
-      candidate.score = match.score_bias;
-      result.items.push_back(std::move(candidate));
     }
+
     if (!result.items.empty()) {
       SortCandidates(ctx, result.items);
     }

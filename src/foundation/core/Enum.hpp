@@ -202,13 +202,9 @@ enum class AMTokenType {
   DisconnectedNickname = 33,
   TerminalName = 34,
   DisconnectedTerminalName = 35,
-  UnestablishedTerminalName = 36,
-  NonexistentTerminalName = 37,
-  ChannelName = 38,
-  DisconnectedChannelName = 39,
-  NonexistentChannelName = 40,
-  ValidNewChannelName = 41,
-  InvalidNewChannelName = 42
+  NonexistentTerminalName = 36,
+  ValidNewTerminalName = 37,
+  InvalidNewTerminalName = 38
 };
 
 using EC = ErrorCode;

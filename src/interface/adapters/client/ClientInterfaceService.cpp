@@ -1352,13 +1352,15 @@ ECM PromptModifyHostConfig_(PromptIOManager &prompt,
 } // namespace
 
 ClientInterfaceService::ClientInterfaceService(
-    ClientAppService &client_service, TermAppService &terminal_service,
+    ClientAppService &client_service, ConfigAppService &config_service,
+    TermAppService &terminal_service,
     FilesystemAppService &filesystem_service,
     HostAppService &host_config_manager,
     KnownHostsAppService &known_hosts_manager,
     PromptProfileManager &prompt_profile_manager,
     PromptIOManager &prompt_io_manager, AMStyleService &style_service)
-    : client_service_(client_service), terminal_service_(terminal_service),
+    : client_service_(client_service), config_service_(config_service),
+      terminal_service_(terminal_service),
       filesystem_service_(filesystem_service),
       host_config_manager_(host_config_manager),
       known_hosts_manager_(known_hosts_manager),
@@ -1473,6 +1475,10 @@ void ClientInterfaceService::BindInteractionCallbacks() {
         return Err(EC::ConfigCanceled, "", "",
                    "Known host fingerprint add canceled");
       }
+      const ECM lock_rcm = config_service_.EnsureConfigWriteLock();
+      if (!(lock_rcm)) {
+        return lock_rcm;
+      }
       return known_hosts_manager_.UpsertKnownHost(query, true);
     }
 
@@ -1512,6 +1518,10 @@ void ClientInterfaceService::BindInteractionCallbacks() {
 
     auto cfg = host_config_manager_.GetClientConfig(client_name, true);
     if ((cfg.rcm)) {
+      const ECM lock_rcm = config_service_.EnsureConfigWriteLock();
+      if (!(lock_rcm)) {
+        return std::nullopt;
+      }
       std::string password = info.password_n;
       if (!password.empty() && !AMAuth::IsEncrypted(password)) {
         password = AMAuth::EncryptPassword(password);
@@ -1786,6 +1796,11 @@ ECM ClientInterfaceService::ConnectProtocol_(
   ECM validate_rcm = AMDomain::host::HostService::ValidateConfig(cfg);
   if (!(validate_rcm)) {
     return validate_rcm;
+  }
+
+  ECM lock_rcm = config_service_.EnsureConfigWriteLock();
+  if (!(lock_rcm)) {
+    return lock_rcm;
   }
 
   auto created = client_service_.CreateClient(cfg, control, false);

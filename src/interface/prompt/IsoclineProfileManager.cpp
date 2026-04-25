@@ -40,22 +40,6 @@ std::shared_ptr<IsoclineProfile> IsoclineProfileManager::BuildProfile_(
   return profile;
 }
 
-void IsoclineProfileManager::WriteBackCurrentProfile_() {
-  std::shared_ptr<IsoclineProfile> profile;
-  std::string nickname;
-  {
-    std::lock_guard<std::mutex> lock(profiles_mtx_);
-    profile = current_profile_;
-    nickname = current_nickname_;
-  }
-  if (!profile || !profile->IsValid() || nickname.empty()) {
-    return;
-  }
-
-  auto profile_arg = profile_manager_.GetInitArg();
-  (void)history_manager_.SetZoneHistory(nickname, profile->CollectHistory());
-}
-
 ECM IsoclineProfileManager::Init() {
   return ChangeClient(kvars::default_profile_name);
 }
@@ -80,6 +64,9 @@ IsoclineProfileManager::CurrentProfile() const {
   auto history_result =
       history_manager_.GetZoneHistory(kvars::default_profile_name);
   if (history_result) {
+    profile_args.history.enable_duplicates =
+        history_result.data.allow_continuous_duplicates;
+    profile_args.history.max_count = history_result.data.max_count;
     history_records = history_result.data.history;
   }
 
@@ -125,6 +112,13 @@ void IsoclineProfileManager::AddHistoryEntry(const std::string &line) {
   (void)profile->AddHistoryEntry(line);
 }
 
+void IsoclineProfileManager::PersistHistoryEntry(const std::string &line) {
+  if (line.empty()) {
+    return;
+  }
+  (void)history_manager_.AppendZoneHistory(CurrentNickname(), line);
+}
+
 void IsoclineProfileManager::RemoveLastHistoryEntry() {
   auto profile = CurrentProfile();
   if (!profile) {
@@ -134,7 +128,7 @@ void IsoclineProfileManager::RemoveLastHistoryEntry() {
 }
 
 void IsoclineProfileManager::SyncCurrentHistory() {
-  WriteBackCurrentProfile_();
+  // Prompt history is append-only and is persisted when each line is accepted.
 }
 
 void IsoclineProfileManager::SetDefaultCompleter(ic_completer_fun_t *callback,
@@ -187,14 +181,15 @@ ECM IsoclineProfileManager::ChangeClient(const std::string &nickname) {
   const AMDomain::style::StyleConfigArg style_arg =
       style_config_manager_.GetStyleRef().lock().load();
 
-  WriteBackCurrentProfile_();
-
   std::string active_nickname = nickname;
   PromptProfileSettings profile_args =
       profile_manager_.GetZoneProfile(active_nickname).profile;
   std::vector<std::string> history_records = {};
   auto history_result = history_manager_.GetZoneHistory(active_nickname);
   if (history_result) {
+    profile_args.history.enable_duplicates =
+        history_result.data.allow_continuous_duplicates;
+    profile_args.history.max_count = history_result.data.max_count;
     history_records = history_result.data.history;
   }
 
@@ -207,6 +202,9 @@ ECM IsoclineProfileManager::ChangeClient(const std::string &nickname) {
     history_records.clear();
     history_result = history_manager_.GetZoneHistory(active_nickname);
     if (history_result) {
+      profile_args.history.enable_duplicates =
+          history_result.data.allow_continuous_duplicates;
+      profile_args.history.max_count = history_result.data.max_count;
       history_records = history_result.data.history;
     }
 

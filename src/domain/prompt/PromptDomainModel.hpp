@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <map>
 #include <string>
-#include <vector>
 
 namespace AMDomain::prompt {
 inline constexpr const char *kPromptProfileRoot = "PromptProfile";
@@ -69,10 +68,10 @@ struct PromptProfileArg {
   PromptProfileSet set = {};
 };
 
-using PromptHistorySet = std::map<std::string, std::vector<std::string>>;
-
-// Arg for config/internal/history.toml with unstable section keys.
+// Arg for Options.PromptHistoryManager.
 struct PromptHistoryArg {
-  PromptHistorySet set = {};
+  std::string history_dir = "./history";
+  bool allow_continuous_duplicates = false;
+  int max_count = 50;
 };
 } // namespace AMDomain::prompt

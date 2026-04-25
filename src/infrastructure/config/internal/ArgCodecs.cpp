@@ -1090,7 +1090,7 @@ public:
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
-    return DocumentKind::History;
+    return DocumentKind::Settings;
   }
 
   [[nodiscard]] bool Decode(const Json &root, void *out,
@@ -1099,23 +1099,21 @@ public:
       return codec_common::Fail_(error, "null output PromptHistoryArg");
     }
     auto *typed = static_cast<PromptHistoryArg *>(out);
-    typed->set.clear();
+    *typed = PromptHistoryArg{};
     if (!root.is_object()) {
       return true;
     }
-    for (auto it = root.begin(); it != root.end(); ++it) {
-      Json commands = Json::array();
-      if (!AMJson::QueryKey(it.value(), {"commands"}, &commands) ||
-          !commands.is_array()) {
-        continue;
-      }
-      std::vector<std::string> out_commands = {};
-      for (const auto &item : commands) {
-        if (item.is_string()) {
-          out_commands.push_back(item.get<std::string>());
-        }
-      }
-      typed->set[it.key()] = std::move(out_commands);
+    const Json options = settings_codec::OptionsRoot_(root);
+    (void)AMJson::QueryKey(options, {"PromptHistoryManager", "history_dir"},
+                           &typed->history_dir);
+    (void)AMJson::QueryKey(
+        options, {"PromptHistoryManager", "allow_continuous_duplicates"},
+        &typed->allow_continuous_duplicates);
+    (void)AMJson::QueryKey(options, {"PromptHistoryManager", "max_count"},
+                           &typed->max_count);
+    typed->max_count = std::clamp(typed->max_count, 1, 200);
+    if (AMStr::Strip(typed->history_dir).empty()) {
+      typed->history_dir = "./history";
     }
     return true;
   }
@@ -1126,12 +1124,20 @@ public:
       return codec_common::Fail_(error,
                                  "null input PromptHistoryArg or root json");
     }
-    const auto *typed = static_cast<const PromptHistoryArg *>(in);
-    Json out = Json::object();
-    for (const auto &[name, commands] : typed->set) {
-      out[name]["commands"] = commands;
+    auto typed = *static_cast<const PromptHistoryArg *>(in);
+    typed.max_count = std::clamp(typed.max_count, 1, 200);
+    if (AMStr::Strip(typed.history_dir).empty()) {
+      typed.history_dir = "./history";
     }
-    *root = std::move(out);
+    if (!root->is_object()) {
+      *root = Json::object();
+    }
+    (*root)["Options"]["PromptHistoryManager"]["history_dir"] =
+        typed.history_dir;
+    (*root)["Options"]["PromptHistoryManager"]
+           ["allow_continuous_duplicates"] =
+        typed.allow_continuous_duplicates;
+    (*root)["Options"]["PromptHistoryManager"]["max_count"] = typed.max_count;
     return true;
   }
 
@@ -1141,7 +1147,7 @@ public:
     if (!root) {
       return codec_common::Fail_(error, "null root json");
     }
-    *root = Json::object();
+    (void)AMJson::DelKey(*root, {"Options", "PromptHistoryManager"});
     return true;
   }
 };
@@ -1343,20 +1349,12 @@ void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
   (void)AMJson::QueryKey(json, {"termname", "at"}, &out->termname_at);
   (void)AMJson::QueryKey(json, {"termname", "disconnected"},
                          &out->termname_disconnected);
-  (void)AMJson::QueryKey(json, {"termname", "unestablished"},
-                         &out->termname_unestablished);
   (void)AMJson::QueryKey(json, {"termname", "nonexistent"},
                          &out->termname_nonexistent);
-
-  (void)AMJson::QueryKey(json, {"channelname", "ok"}, &out->channelname_ok);
-  (void)AMJson::QueryKey(json, {"channelname", "disconnected"},
-                         &out->channelname_disconnected);
-  (void)AMJson::QueryKey(json, {"channelname", "nonexistent"},
-                         &out->channelname_nonexistent);
-  (void)AMJson::QueryKey(json, {"channelname", "new", "valid"},
-                         &out->channelname_new_valid);
-  (void)AMJson::QueryKey(json, {"channelname", "new", "invalid"},
-                         &out->channelname_new_invalid);
+  (void)AMJson::QueryKey(json, {"termname", "new", "valid"},
+                         &out->termname_new_valid);
+  (void)AMJson::QueryKey(json, {"termname", "new", "invalid"},
+                         &out->termname_new_invalid);
 
   (void)AMJson::QueryKey(json, {"attr", "valid"}, &out->attr_valid);
   (void)AMJson::QueryKey(json, {"attr", "invalid"},
@@ -1410,14 +1408,9 @@ Json EncodeCommon_(const InputHighlightStyle &in) {
   out["termname"]["ok"] = in.termname_ok;
   out["termname"]["at"] = in.termname_at;
   out["termname"]["disconnected"] = in.termname_disconnected;
-  out["termname"]["unestablished"] = in.termname_unestablished;
   out["termname"]["nonexistent"] = in.termname_nonexistent;
-
-  out["channelname"]["ok"] = in.channelname_ok;
-  out["channelname"]["disconnected"] = in.channelname_disconnected;
-  out["channelname"]["nonexistent"] = in.channelname_nonexistent;
-  out["channelname"]["new"]["valid"] = in.channelname_new_valid;
-  out["channelname"]["new"]["invalid"] = in.channelname_new_invalid;
+  out["termname"]["new"]["valid"] = in.termname_new_valid;
+  out["termname"]["new"]["invalid"] = in.termname_new_invalid;
 
   out["attr"]["valid"] = in.attr_valid;
   out["attr"]["invalid"] = in.attr_invalid;

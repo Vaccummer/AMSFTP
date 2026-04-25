@@ -61,28 +61,15 @@ std::optional<StyleIndex> ResolveStyleIndex_(TokenRole role, TokenState state) {
       return StyleIndex::TerminalName;
     case TokenState::Disconnected:
       return StyleIndex::DisconnectedTerminalName;
-    case TokenState::Unestablished:
-      return StyleIndex::UnestablishedTerminalName;
     case TokenState::Nonexistent:
       return StyleIndex::NonexistentTerminalName;
-    default:
-      return StyleIndex::TerminalName;
-    }
-  case TokenRole::ChannelName:
-    switch (state) {
-    case TokenState::Valid:
-      return StyleIndex::ChannelName;
-    case TokenState::Disconnected:
-      return StyleIndex::DisconnectedChannelName;
-    case TokenState::Nonexistent:
-      return StyleIndex::NonexistentChannelName;
     case TokenState::NewValid:
-      return StyleIndex::ValidNewChannelName;
+      return StyleIndex::ValidNewTerminalName;
     case TokenState::NewInvalid:
     case TokenState::Invalid:
-      return StyleIndex::InvalidNewChannelName;
+      return StyleIndex::InvalidNewTerminalName;
     default:
-      return StyleIndex::ChannelName;
+      return StyleIndex::TerminalName;
     }
   case TokenRole::BuiltinArg:
     return state == TokenState::Invalid ? StyleIndex::NonexistentBuiltinArg
@@ -292,19 +279,19 @@ void RenderPath_(const AMInterface::style::AMStyleService *style_service,
                      token.state, token.path_kind);
 }
 
-void RenderChannelTarget_(const AMInterface::style::AMStyleService *style_service,
-                          const std::string &input, const AnalyzedToken &token,
-                          std::string *out) {
+void RenderTermTarget_(const AMInterface::style::AMStyleService *style_service,
+                       const std::string &input, const AnalyzedToken &token,
+                       std::string *out) {
   const std::string raw = input.substr(token.raw.start, token.raw.end - token.raw.start);
   const size_t at_pos = FindUnescapedChar(raw, '@');
   if (at_pos == std::string::npos) {
-    AppendStyledRange_(style_service, out, raw, TokenRole::ChannelName,
+    AppendStyledRange_(style_service, out, raw, TokenRole::TerminalName,
                        token.state);
     return;
   }
   if (at_pos > 0) {
     AppendStyledRange_(style_service, out, raw.substr(0, at_pos),
-                       TokenRole::TerminalName, TokenState::Valid);
+                       TokenRole::Nickname, token.qualifier_state);
   }
   if (style_service) {
     out->append(style_service->Format("@", StyleIndex::TermnameAtSign));
@@ -312,7 +299,7 @@ void RenderChannelTarget_(const AMInterface::style::AMStyleService *style_servic
     out->append(EscapeBbcode_("@"));
   }
   AppendStyledRange_(style_service, out, raw.substr(at_pos + 1),
-                     TokenRole::ChannelName, token.state);
+                     TokenRole::TerminalName, token.state);
 }
 
 bool ShellModeHead_(const std::string &input, size_t *head) {
@@ -363,8 +350,8 @@ void InputHighlighter::RenderFormatted(const std::string &input,
       RenderVarReference_(style_service_, input, token, formatted);
     } else if (token.role == TokenRole::Path) {
       RenderPath_(style_service_, input, token, formatted);
-    } else if (token.role == TokenRole::ChannelName) {
-      RenderChannelTarget_(style_service_, input, token, formatted);
+    } else if (token.role == TokenRole::TerminalName) {
+      RenderTermTarget_(style_service_, input, token, formatted);
     } else {
       AppendStyledRange_(style_service_, formatted,
                          input.substr(token.raw.start, token.raw.end - token.raw.start),

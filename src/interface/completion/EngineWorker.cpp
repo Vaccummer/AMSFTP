@@ -241,12 +241,12 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
     return AMCompletionTarget::Disabled;
   case AMCommandArgSemantic::TerminalName:
     return AMCompletionTarget::TerminalName;
-  case AMCommandArgSemantic::ChannelTargetExisting:
-    return AMCompletionTarget::ChannelTargetExisting;
-  case AMCommandArgSemantic::ChannelTargetNew:
-    return AMCompletionTarget::ChannelTargetNew;
-  case AMCommandArgSemantic::SshChannelTarget:
-    return AMCompletionTarget::SshChannelTarget;
+  case AMCommandArgSemantic::TermTargetExisting:
+    return AMCompletionTarget::TermTargetExisting;
+  case AMCommandArgSemantic::TermTargetNew:
+    return AMCompletionTarget::TermTargetNew;
+  case AMCommandArgSemantic::SshTermTarget:
+    return AMCompletionTarget::SshTermTarget;
   case AMCommandArgSemantic::HostAttr:
     return AMCompletionTarget::HostAttr;
   case AMCommandArgSemantic::HostAttrValue:
@@ -573,12 +573,12 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
        ctx.token_prefix.front() == '/' || ctx.token_prefix.front() == '\\' ||
        ctx.token_prefix.front() == '.');
   const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
-  const bool semantic_terminal_channel =
+  const bool semantic_terminal =
       semantic_target.has_value() &&
       (*semantic_target == AMCompletionTarget::TerminalName ||
-       *semantic_target == AMCompletionTarget::ChannelTargetExisting ||
-       *semantic_target == AMCompletionTarget::ChannelTargetNew ||
-       *semantic_target == AMCompletionTarget::SshChannelTarget);
+       *semantic_target == AMCompletionTarget::TermTargetExisting ||
+       *semantic_target == AMCompletionTarget::TermTargetNew ||
+       *semantic_target == AMCompletionTarget::SshTermTarget);
   const bool semantic_path =
       semantic_target.has_value() && *semantic_target == AMCompletionTarget::Path;
   const bool prefix_has_path_sign =
@@ -593,7 +593,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       push_target(AMCompletionTarget::ClientName);
       push_target(AMCompletionTarget::Path);
     }
-  } else if (!semantic_terminal_channel &&
+  } else if (!semantic_terminal &&
              (has_at || IsPathLikeText(ctx.token_prefix, false))) {
     push_target(AMCompletionTarget::Path);
   }
