@@ -29,24 +29,21 @@ namespace AMInfra::transfer {
 TransferExecutionEngine::TransferExecutionEngine(
     const TransferBufferPolicy &buffer_policy)
     : buffer_policy_(buffer_policy) {
-  read_thread_ = std::jthread(
-      [this](std::stop_token stop_token) { ReadLoop_(stop_token); });
+  read_thread_ = std::thread([this]() { ReadLoop_(); });
 }
 
 TransferExecutionEngine::~TransferExecutionEngine() {
-  if (read_thread_.joinable()) {
-    read_thread_.request_stop();
-  }
+  stop_requested_.store(true, std::memory_order_release);
   read_queue_ready_.release();
   if (read_thread_.joinable()) {
     read_thread_.join();
   }
 }
 
-void TransferExecutionEngine::ReadLoop_(std::stop_token stop_token) {
+void TransferExecutionEngine::ReadLoop_() {
   while (true) {
     read_queue_ready_.acquire();
-    if (stop_token.stop_requested()) {
+    if (stop_requested_.load(std::memory_order_acquire)) {
       std::lock_guard<std::mutex> lock(read_queue_mtx_);
       if (read_queue_.empty()) {
         return;
@@ -57,7 +54,7 @@ void TransferExecutionEngine::ReadLoop_(std::stop_token stop_token) {
     {
       std::lock_guard<std::mutex> lock(read_queue_mtx_);
       if (read_queue_.empty()) {
-        if (stop_token.stop_requested()) {
+        if (stop_requested_.load(std::memory_order_acquire)) {
           return;
         }
         continue;

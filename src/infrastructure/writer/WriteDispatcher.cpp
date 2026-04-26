@@ -7,8 +7,8 @@ void AMInfraAsyncWriter::Start() {
   if (running_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
-  worker_ = std::jthread(
-      [this](std::stop_token stop_token) { Loop_(stop_token); });
+  stop_requested_.store(false, std::memory_order_release);
+  worker_ = std::thread([this]() { Loop_(); });
 }
 
 /**
@@ -16,9 +16,7 @@ void AMInfraAsyncWriter::Start() {
  */
 void AMInfraAsyncWriter::Stop() {
   running_.store(false, std::memory_order_release);
-  if (worker_.joinable()) {
-    worker_.request_stop();
-  }
+  stop_requested_.store(true, std::memory_order_release);
   task_ready_.release();
   if (worker_.joinable()) {
     worker_.join();
@@ -68,10 +66,10 @@ void AMInfraAsyncWriter::WaitIdle() {
 /**
  * @brief Worker loop that drains queued tasks.
  */
-void AMInfraAsyncWriter::Loop_(std::stop_token stop_token) {
+void AMInfraAsyncWriter::Loop_() {
   while (true) {
     task_ready_.acquire();
-    if (stop_token.stop_requested()) {
+    if (stop_requested_.load(std::memory_order_acquire)) {
       std::lock_guard<std::mutex> lock(mtx_);
       if (queue_.empty()) {
         break;
@@ -82,7 +80,7 @@ void AMInfraAsyncWriter::Loop_(std::stop_token stop_token) {
     {
       std::lock_guard<std::mutex> lock(mtx_);
       if (queue_.empty()) {
-        if (stop_token.stop_requested()) {
+        if (stop_requested_.load(std::memory_order_acquire)) {
           break;
         }
         continue;

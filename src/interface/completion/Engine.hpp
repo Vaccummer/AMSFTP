@@ -13,7 +13,6 @@
 #include <mutex>
 #include <semaphore>
 #include <string>
-#include <stop_token>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -408,7 +407,7 @@ private:
   /**
    * @brief Async worker loop body.
    */
-  void AsyncWorkerLoop_(std::stop_token stop_token);
+  void AsyncWorkerLoop_();
 
   /**
    * @brief Push an async task into the worker queue.
@@ -474,7 +473,7 @@ private:
   std::mutex async_queue_mtx_;
   std::deque<AMCompletionAsyncTask> async_queue_;
   std::counting_semaphore<> async_queue_ready_{0};
-  std::vector<std::jthread> async_workers_;
+  std::vector<std::thread> async_workers_;
 
   const AMInterface::parser::CommandNode *command_tree_ = nullptr;
   AMInterface::input::InputAnalyzer *input_analyzer_ = nullptr;

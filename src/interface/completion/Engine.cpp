@@ -439,7 +439,7 @@ void AMCompleteEngine::StartAsyncWorkers_() {
   async_workers_.reserve(count);
   for (size_t i = 0; i < count; ++i) {
     async_workers_.emplace_back(
-        [this](std::stop_token stop_token) { AsyncWorkerLoop_(stop_token); });
+        [this]() { AsyncWorkerLoop_(); });
   }
 }
 
@@ -447,18 +447,13 @@ void AMCompleteEngine::StartAsyncWorkers_() {
  * @brief Stop async worker threads.
  */
 void AMCompleteEngine::StopAsyncWorkers_() {
-  async_stop_.store(true, std::memory_order_relaxed);
+  async_stop_.store(true, std::memory_order_release);
   CancelPendingAsyncRequests_();
   if (!async_workers_.empty()) {
     async_queue_ready_.release(
         static_cast<std::ptrdiff_t>(async_workers_.size()));
   }
 
-  for (auto &worker : async_workers_) {
-    if (worker.joinable()) {
-      worker.request_stop();
-    }
-  }
   for (auto &worker : async_workers_) {
     if (worker.joinable()) {
       worker.join();
@@ -613,11 +608,10 @@ void AMCompleteEngine::ConsumeAsyncResults_(const AMCompletionContext &ctx,
 /**
  * @brief Async worker loop body.
  */
-void AMCompleteEngine::AsyncWorkerLoop_(std::stop_token stop_token) {
+void AMCompleteEngine::AsyncWorkerLoop_() {
   while (true) {
     async_queue_ready_.acquire();
-    if (stop_token.stop_requested() ||
-        async_stop_.load(std::memory_order_relaxed)) {
+    if (async_stop_.load(std::memory_order_acquire)) {
       return;
     }
 

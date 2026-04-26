@@ -16,7 +16,6 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
-#include <stop_token>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -46,13 +45,12 @@ public:
         cursor_hidden_ = true;
       }
       prompt_io_manager_.RefreshBegin();
-      worker_ = std::jthread(
-          [this](std::stop_token stop_token) { RenderLoop_(stop_token); });
+      worker_ = std::thread([this]() { RenderLoop_(); });
     }
   }
 
   void Stop() {
-    std::jthread worker = {};
+    std::thread worker = {};
     bool should_refresh_end = false;
     bool should_show_cursor = false;
     {
@@ -73,7 +71,6 @@ public:
     }
 
     if (worker.joinable()) {
-      worker.request_stop();
       worker.join();
     }
     if (should_refresh_end) {
@@ -100,12 +97,11 @@ public:
   }
 
 private:
-  void RenderLoop_(std::stop_token stop_token) {
+  void RenderLoop_() {
     static const std::vector<std::string> frames = {
         "⠉⠉", "⠈⠙", "⠀⠹", "⠀⢸", "⠀⣰", "⢀⣠", "⣀⣀", "⣄⡀", "⣆⠀", "⡇⠀", "⠏⠀", "⠋⠁"};
     size_t idx = 0;
-    while (running_.load(std::memory_order_relaxed) &&
-           !stop_token.stop_requested()) {
+    while (running_.load(std::memory_order_acquire)) {
       std::string state_info;
       {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -123,7 +119,7 @@ private:
 
   PromptIOManager &prompt_io_manager_;
   mutable std::mutex mutex_ = {};
-  std::jthread worker_ = {};
+  std::thread worker_ = {};
   std::atomic<bool> running_ = false;
   std::string state_info_ = "";
   bool refresh_active_ = false;

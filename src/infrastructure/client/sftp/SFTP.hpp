@@ -16,11 +16,9 @@
 #include <fcntl.h>
 #include <fstream>
 #include <functional>
-#include <minwinbase.h>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -38,6 +36,7 @@
 #else
 #include <arpa/inet.h>
 #include <cerrno>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #ifdef __linux__
@@ -58,10 +57,14 @@
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
 
-#ifndef _WIN32
+#ifndef POSIX_SOCKET_TYPEDEFS_DEFINED
+#define POSIX_SOCKET_TYPEDEFS_DEFINED
 using SOCKET = int;
 constexpr SOCKET INVALID_SOCKET = -1;
 constexpr int SOCKET_ERROR = -1;
+#endif
+#ifndef POSIX_CLOSESOCKET_DEFINED
+#define POSIX_CLOSESOCKET_DEFINED
 inline int closesocket(SOCKET s) { return close(s); }
 #endif
 
@@ -1127,7 +1130,7 @@ protected:
 
   struct KeepaliveRuntime final {
     std::mutex lifecycle_mtx = {};
-    std::jthread worker = {};
+    std::thread worker = {};
     std::mutex wait_mtx = {};
     std::condition_variable cv = {};
     std::atomic<bool> shutdown{false};
@@ -1140,9 +1143,6 @@ protected:
       {
         std::lock_guard<std::mutex> lock(lifecycle_mtx);
         shutdown.store(true, std::memory_order_release);
-      }
-      if (worker.joinable()) {
-        worker.request_stop();
       }
       cv.notify_all();
       if (worker.joinable()) {
@@ -1209,8 +1209,7 @@ protected:
       return;
     }
     keepalive_.shutdown.store(false, std::memory_order_release);
-    keepalive_.worker = std::jthread(
-        [this](std::stop_token stop_token) { KeepaliveLoop_(stop_token); });
+    keepalive_.worker = std::thread([this]() { KeepaliveLoop_(); });
   }
 
   [[nodiscard]] bool ShouldRunKeepalive_() const {
@@ -1249,10 +1248,9 @@ protected:
     return OK;
   }
 
-  void KeepaliveLoop_(std::stop_token stop_token) {
+  void KeepaliveLoop_() {
     while (true) {
-      if (keepalive_.shutdown.load(std::memory_order_acquire) ||
-          stop_token.stop_requested()) {
+      if (keepalive_.shutdown.load(std::memory_order_acquire)) {
         return;
       }
 
@@ -1263,9 +1261,8 @@ protected:
       std::unique_lock<std::mutex> wait_lock(keepalive_.wait_mtx);
       (void)keepalive_.cv.wait_for(
           wait_lock, std::chrono::seconds(interval_s),
-          [this, wake_seq, &stop_token]() {
-            if (keepalive_.shutdown.load(std::memory_order_acquire) ||
-                stop_token.stop_requested()) {
+          [this, wake_seq]() {
+            if (keepalive_.shutdown.load(std::memory_order_acquire)) {
               return true;
             }
             return keepalive_.wake_seq.load(std::memory_order_acquire) !=
@@ -1273,8 +1270,7 @@ protected:
           });
       wait_lock.unlock();
 
-      if (keepalive_.shutdown.load(std::memory_order_acquire) ||
-          stop_token.stop_requested()) {
+      if (keepalive_.shutdown.load(std::memory_order_acquire)) {
         return;
       }
       if (!ShouldRunKeepalive_()) {

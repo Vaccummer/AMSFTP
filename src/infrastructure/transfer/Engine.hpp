@@ -27,7 +27,7 @@ private:
     std::promise<ECM> promise = {};
   };
 
-  void ReadLoop_(std::stop_token stop_token);
+  void ReadLoop_();
   std::future<ECM> EnqueueReadJob_(ClientHandle src_client,
                                    const TaskHandle &task_info,
                                    TransferRuntimeProgress *runtime_progress);
@@ -39,6 +39,7 @@ private:
   mutable std::mutex read_queue_mtx_ = {};
   std::deque<ReadJob> read_queue_ = {};
   std::counting_semaphore<> read_queue_ready_{0};
-  std::jthread read_thread_ = {};
+  std::atomic<bool> stop_requested_{false};
+  std::thread read_thread_ = {};
 };
 } // namespace AMInfra::transfer

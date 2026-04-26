@@ -13,22 +13,15 @@ std::atomic<int> GlobalSignalInt{0};
 
 namespace AMInfra::signal {
 
-/** Stop worker resources during teardown. */
 SignalMonitorImpl::~SignalMonitorImpl() { Stop(); }
 
 void SignalMonitorImpl::InstallHandlers() {
-#ifdef _WIN32
-  SetConsoleCtrlHandler(SignalMonitorImpl::ConsoleCtrlHandler_, TRUE);
-#else
   struct sigaction sa{};
   sa.sa_handler = SignalMonitorImpl::SignalHandler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART;
   sigaction(SIGINT, &sa, nullptr);
-#ifdef SIGTERM
   sigaction(SIGTERM, &sa, nullptr);
-#endif
-#endif
 }
 
 void SignalMonitorImpl::Start() {
@@ -36,7 +29,7 @@ void SignalMonitorImpl::Start() {
     return;
   }
   worker_ =
-      std::jthread([this](std::stop_token stop_token) { Run_(stop_token); });
+      std::thread([this]() { Run_(); });
 }
 
 ECM SignalMonitorImpl::Init() {
@@ -47,9 +40,7 @@ ECM SignalMonitorImpl::Init() {
 
 void SignalMonitorImpl::Stop() {
   running_.store(false, std::memory_order_release);
-  if (worker_.joinable()) {
-    worker_.request_stop();
-  }
+  stop_requested_.store(true, std::memory_order_release);
   if (worker_.joinable()) {
     worker_.join();
   }
@@ -119,35 +110,17 @@ bool SignalMonitorImpl::SetHookPriority(const std::string &name, int priority) {
   return true;
 }
 
-#ifdef _WIN32
-BOOL WINAPI SignalMonitorImpl::ConsoleCtrlHandler_(DWORD type) {
-  switch (type) {
-  case CTRL_C_EVENT:
-    GlobalSignalInt.store(SIGINT);
-    return TRUE;
-  case CTRL_BREAK_EVENT:
-    GlobalSignalInt.store(SIGTERM);
-    return TRUE;
-  case CTRL_CLOSE_EVENT:
-    GlobalSignalInt.store(SIGTERM);
-    return TRUE;
-  default:
-    return FALSE;
-  }
-}
-#else
 void SignalMonitorImpl::SignalHandler(int signal_num) {
   if (signal_num == SIGINT || signal_num == SIGTERM) {
     GlobalSignalInt.store(signal_num);
   }
 }
-#endif
 
 SignalMonitorImpl::SignalMonitorImpl() = default;
 
-void SignalMonitorImpl::Run_(std::stop_token stop_token) {
+void SignalMonitorImpl::Run_() {
   while (running_.load(std::memory_order_acquire) &&
-         !stop_token.stop_requested()) {
+         !stop_requested_.load(std::memory_order_acquire)) {
     const int signum = GlobalSignalInt.exchange(0);
     if (signum != 0) {
       last_handled_signal_.store(signum, std::memory_order_relaxed);

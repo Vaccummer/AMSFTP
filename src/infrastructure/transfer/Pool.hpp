@@ -1,6 +1,7 @@
 #pragma once
 #include "domain/transfer/TransferPort.hpp"
 #include "infrastructure/transfer/Engine.hpp"
+#include <list>
 
 namespace AMInfra::transfer {
 class TransferExecutionPool final
@@ -49,7 +50,7 @@ private:
   };
 
   struct WorkerRuntime_ {
-    std::vector<std::jthread> threads = {};
+    std::vector<std::thread> threads = {};
     mutable std::mutex mtx = {};
     std::vector<std::unique_ptr<TransferExecutionEngine>> engines = {};
   };
@@ -80,12 +81,12 @@ private:
   void RegisterTask(const TaskHandle &task_info, TaskAssignType assign_type,
                     int affinity_thread);
   [[nodiscard]] std::optional<std::pair<TaskID, TaskHandle>>
-  DequeueTask(std::stop_token stop_token, size_t thread_index);
+  DequeueTask(size_t thread_index);
   void HandleCompletedTask(const TaskHandle &task_info);
   void SetConducting(size_t thread_index, const TaskID &task_id,
                      const TaskHandle &task_info);
   void ClearConducting(size_t thread_index);
-  void WorkerLoop(std::stop_token stop_token, size_t thread_index);
+  void WorkerLoop(size_t thread_index);
   [[nodiscard]] size_t ClampMaxThreads_(size_t value) const;
   [[nodiscard]] size_t ComputeDesiredThreadCount_() const;
   void EnsureWorkerCapacity_(size_t worker_count);

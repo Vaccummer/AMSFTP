@@ -4,7 +4,6 @@
 #include <mutex>
 #include <queue>
 #include <semaphore>
-#include <stop_token>
 #include <thread>
 
 /**
@@ -52,12 +51,13 @@ private:
   /**
    * @brief Worker loop that drains queued tasks.
    */
-  void Loop_(std::stop_token stop_token);
+  void Loop_();
 
   mutable std::mutex mtx_;
   std::queue<Task> queue_;
   std::counting_semaphore<> task_ready_{0};
-  std::jthread worker_;
+  std::thread worker_;
+  std::atomic<bool> stop_requested_{false};
   std::atomic<bool> running_{false};
   std::atomic<size_t> pending_tasks_{0};
 };
