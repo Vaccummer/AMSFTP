@@ -2,104 +2,218 @@
     "version": 6,
     "configurePresets": [
         {
-            "name": "win-clang-debug",
-            "displayName": "Windows clang Debug (Ninja)",
+            "name": "macos-arm64-debug",
+            "displayName": "macOS arm64 Debug (Homebrew, Ninja)",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_C_COMPILER": "clang-cl",
-                "CMAKE_CXX_COMPILER": "clang-cl",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-                "AMSFTP_BUILD_TESTS": "ON",
-                "AMSFTP_LINK_MODE": "dynamic",
-                "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "AMSFTP_BUILD_TESTS": "ON"
             }
         },
         {
-            "name": "win-clang-static-debug",
-            "displayName": "Windows clang Static Debug (Ninja)",
+            "name": "macos-arm64-release",
+            "displayName": "macOS arm64 Release (Homebrew, Ninja)",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "AMSFTP_BUILD_TESTS": "ON"
+            }
+        },
+        {
+            "name": "linux-gcc-debug",
+            "displayName": "Linux GCC Debug (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": {
+                "type": "notEquals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_C_COMPILER": "clang-cl",
-                "CMAKE_CXX_COMPILER": "clang-cl",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-                "AMSFTP_BUILD_TESTS": "ON",
-                "AMSFTP_LINK_MODE": "static",
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static",
-                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+                "AMSFTP_BUILD_TESTS": "ON"
             }
         },
         {
-            "name": "win-clang-release",
-            "displayName": "Windows clang Release (Ninja)",
+            "name": "linux-gcc-release",
+            "displayName": "Linux GCC Release (Ninja)",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": {
+                "type": "notEquals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_C_COMPILER": "clang-cl",
-                "CMAKE_CXX_COMPILER": "clang-cl",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-                "AMSFTP_BUILD_TESTS": "ON",
-                "AMSFTP_LINK_MODE": "dynamic",
-                "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+                "AMSFTP_BUILD_TESTS": "ON"
             }
         },
         {
-            "name": "win-clang-static-release",
-            "displayName": "Windows clang Static Release (Ninja)",
+            "name": "linux-clang-debug",
+            "displayName": "Linux Clang Debug (Ninja)",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": {
+                "type": "notEquals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "AMSFTP_BUILD_TESTS": "ON"
+            }
+        },
+        {
+            "name": "linux-clang-release",
+            "displayName": "Linux Clang Release (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": {
+                "type": "notEquals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_C_COMPILER": "clang-cl",
-                "CMAKE_CXX_COMPILER": "clang-cl",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-                "AMSFTP_BUILD_TESTS": "ON",
-                "AMSFTP_LINK_MODE": "static",
-                "VCPKG_TARGET_TRIPLET": "x64-windows-static",
-                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+                "AMSFTP_BUILD_TESTS": "ON"
+            }
+        },
+        {
+            "name": "windows-msvc-debug",
+            "displayName": "Windows MSVC Debug (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_C_COMPILER": "cl",
+                "CMAKE_CXX_COMPILER": "cl",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "AMSFTP_BUILD_TESTS": "ON"
+            }
+        },
+        {
+            "name": "windows-msvc-release",
+            "displayName": "Windows MSVC Release (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER": "cl",
+                "CMAKE_CXX_COMPILER": "cl",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "AMSFTP_BUILD_TESTS": "ON"
             }
         }
     ],
     "buildPresets": [
         {
-            "name": "win-clang-debug",
-            "configurePreset": "win-clang-debug"
+            "name": "macos-arm64-debug",
+            "configurePreset": "macos-arm64-debug"
         },
         {
-            "name": "win-clang-static-debug",
-            "configurePreset": "win-clang-static-debug"
+            "name": "macos-arm64-release",
+            "configurePreset": "macos-arm64-release"
         },
         {
-            "name": "win-clang-release",
-            "configurePreset": "win-clang-release"
+            "name": "linux-gcc-debug",
+            "configurePreset": "linux-gcc-debug"
         },
         {
-            "name": "win-clang-static-release",
-            "configurePreset": "win-clang-static-release"
+            "name": "linux-gcc-release",
+            "configurePreset": "linux-gcc-release"
+        },
+        {
+            "name": "linux-clang-debug",
+            "configurePreset": "linux-clang-debug"
+        },
+        {
+            "name": "linux-clang-release",
+            "configurePreset": "linux-clang-release"
+        },
+        {
+            "name": "windows-msvc-debug",
+            "configurePreset": "windows-msvc-debug"
+        },
+        {
+            "name": "windows-msvc-release",
+            "configurePreset": "windows-msvc-release"
         }
     ],
     "testPresets": [
         {
-            "name": "win-clang-debug",
-            "configurePreset": "win-clang-debug"
+            "name": "macos-arm64-debug",
+            "configurePreset": "macos-arm64-debug"
         },
         {
-            "name": "win-clang-static-debug",
-            "configurePreset": "win-clang-static-debug"
+            "name": "macos-arm64-release",
+            "configurePreset": "macos-arm64-release"
         },
         {
-            "name": "win-clang-release",
-            "configurePreset": "win-clang-release"
+            "name": "linux-gcc-debug",
+            "configurePreset": "linux-gcc-debug"
         },
         {
-            "name": "win-clang-static-release",
-            "configurePreset": "win-clang-static-release"
+            "name": "linux-gcc-release",
+            "configurePreset": "linux-gcc-release"
+        },
+        {
+            "name": "linux-clang-debug",
+            "configurePreset": "linux-clang-debug"
+        },
+        {
+            "name": "linux-clang-release",
+            "configurePreset": "linux-clang-release"
+        },
+        {
+            "name": "windows-msvc-debug",
+            "configurePreset": "windows-msvc-debug"
+        },
+        {
+            "name": "windows-msvc-release",
+            "configurePreset": "windows-msvc-release"
         }
     ]
 }
