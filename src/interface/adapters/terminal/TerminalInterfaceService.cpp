@@ -23,7 +23,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <stop_token>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -1067,8 +1066,7 @@ public:
     DrainSignal();
 #endif
 
-    reader_thread_ = std::jthread(
-        [this](std::stop_token stop_token) { ReaderLoop_(stop_token); });
+    reader_thread_ = std::thread([this]() { ReaderLoop_(); });
     running_ = true;
     return OK;
   }
@@ -1092,7 +1090,6 @@ public:
     SignalKey_();
 #endif
     if (reader_thread_.joinable()) {
-      reader_thread_.request_stop();
       reader_thread_.join();
     }
     running_ = false;
@@ -1118,6 +1115,8 @@ public:
     if (activate_event_ != nullptr) {
       (void)SetEvent(activate_event_);
     }
+#else
+    SignalKey_();
 #endif
     return OK;
   }
@@ -1128,6 +1127,8 @@ public:
     if (deactivate_event_ != nullptr) {
       (void)SetEvent(deactivate_event_);
     }
+#else
+    SignalKey_();
 #endif
     {
       auto guard = key_cache_.lock();
@@ -1300,7 +1301,44 @@ private:
 #endif
   }
 
-  void ReaderLoop_(std::stop_token stop_token) {
+#ifndef _WIN32
+  [[nodiscard]] bool WaitForPosixInputOrSignal_() {
+    while (!stop_requested_.load(std::memory_order_acquire)) {
+      pollfd waiters[2] = {};
+      waiters[0].fd = key_pipe_[0];
+      waiters[0].events = POLLIN;
+      nfds_t waiter_count = 1;
+      if (capture_enabled_.load(std::memory_order_acquire)) {
+        waiters[1].fd = STDIN_FILENO;
+        waiters[1].events = POLLIN;
+        waiter_count = 2;
+      }
+
+      const int ready = poll(waiters, waiter_count, -1);
+      if (ready < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        std::lock_guard<std::mutex> lock(fatal_mutex_);
+        fatal_error_ = std::strerror(errno);
+        return false;
+      }
+      if ((waiters[0].revents & POLLIN) != 0) {
+        DrainSignal();
+      }
+      if (waiter_count > 1 &&
+          (waiters[1].revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
+        return true;
+      }
+      if ((waiters[0].revents & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+        return false;
+      }
+    }
+    return false;
+  }
+#endif
+
+  void ReaderLoop_() {
 #ifdef _WIN32
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
     if (input == INVALID_HANDLE_VALUE || input == nullptr) {
@@ -1310,8 +1348,7 @@ private:
       return;
     }
 
-    while (!stop_requested_.load(std::memory_order_acquire) &&
-           !stop_token.stop_requested()) {
+    while (!stop_requested_.load(std::memory_order_acquire)) {
       if (!capture_enabled_.load(std::memory_order_acquire)) {
         std::array<HANDLE, 2> inactive_wait = {stop_event_, activate_event_};
         const DWORD rc =
@@ -1369,8 +1406,17 @@ private:
       SignalKey_();
     }
 #else
-    while (!stop_requested_.load(std::memory_order_acquire) &&
-           !stop_token.stop_requested()) {
+    while (!stop_requested_.load(std::memory_order_acquire)) {
+      if (!WaitForPosixInputOrSignal_()) {
+        if (!stop_requested_.load(std::memory_order_acquire)) {
+          SignalKey_();
+        }
+        return;
+      }
+      if (!capture_enabled_.load(std::memory_order_acquire)) {
+        continue;
+      }
+
       std::string input = {};
       std::string input_error = {};
       const auto status = PollLocalTerminalInput_(&input, &input_error);
@@ -1386,9 +1432,6 @@ private:
         SignalKey_();
         return;
       }
-      if (!capture_enabled_.load(std::memory_order_acquire)) {
-        continue;
-      }
       if (!input.empty()) {
         auto guard = key_cache_.lock();
         guard->insert(guard->end(), input.begin(), input.end());
@@ -1403,7 +1446,7 @@ private:
   std::atomic<bool> closed_ = false;
   std::atomic<bool> capture_enabled_ = false;
   bool running_ = false;
-  std::jthread reader_thread_ = {};
+  std::thread reader_thread_ = {};
   AMAtomic<std::vector<char>> key_cache_ = {};
   mutable std::mutex fatal_mutex_ = {};
   std::string fatal_error_ = {};

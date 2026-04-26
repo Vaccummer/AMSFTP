@@ -85,14 +85,10 @@ void TransferExecutionPool::RegisterTask(const TaskHandle &task_info,
 }
 
 std::optional<std::pair<TaskID, TaskHandle>>
-TransferExecutionPool::DequeueTask(std::stop_token stop_token,
-                                   size_t thread_index) {
+TransferExecutionPool::DequeueTask(size_t thread_index) {
   while (true) {
     std::unique_lock<std::mutex> lock(queue_.mtx);
-    queue_.cv.wait(lock, [this, &stop_token, thread_index]() {
-      if (stop_token.stop_requested()) {
-        return true;
-      }
+    queue_.cv.wait(lock, [this, thread_index]() {
       if (!control_.running.load(std::memory_order_acquire)) {
         return true;
       }
@@ -108,10 +104,6 @@ TransferExecutionPool::DequeueTask(std::stop_token stop_token,
       }
       return HasPendingTasksUnsafe_();
     });
-
-    if (stop_token.stop_requested()) {
-      return std::nullopt;
-    }
 
     if (!control_.running.load(std::memory_order_relaxed) &&
         !HasPendingTasksUnsafe_()) {
@@ -203,11 +195,9 @@ void TransferExecutionPool::ClearConducting(size_t thread_index) {
   RecomputeDesiredThreadCount_();
 }
 
-void TransferExecutionPool::WorkerLoop(std::stop_token stop_token,
-                                       size_t thread_index) {
-  while (control_.running.load(std::memory_order_relaxed) &&
-         !stop_token.stop_requested()) {
-    auto task_opt = DequeueTask(stop_token, thread_index);
+void TransferExecutionPool::WorkerLoop(size_t thread_index) {
+  while (control_.running.load(std::memory_order_relaxed)) {
+    auto task_opt = DequeueTask(thread_index);
     if (!task_opt.has_value()) {
       break;
     }
@@ -418,8 +408,8 @@ void TransferExecutionPool::EnsureWorkerCapacity_(size_t worker_count) {
 
   const size_t begin = workers_.threads.size();
   for (size_t idx = begin; idx < worker_count; ++idx) {
-    workers_.threads.emplace_back([this, idx](std::stop_token stop_token) {
-      WorkerLoop(stop_token, idx);
+    workers_.threads.emplace_back([this, idx]() {
+      WorkerLoop(idx);
     });
   }
 }
