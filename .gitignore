@@ -2,7 +2,7 @@ trial*
 test*
 .history/
 .vscode/
-build
+/build/
 debug*
 *.dll
 *.pyd
@@ -18,10 +18,13 @@ experience.md
 autosave
 *.pdb
 .*
-md/*
-!md/refactor_workflow0_status.md
-!md/refactor_wf7*.md
-test/
+/dep/
+/md/
+/test/
+/MD_ALL.md
+/action.md
+/improve.md
+/plan.md
 AMBind*
 AMATrial*
 /config/
@@ -30,12 +33,12 @@ AMATrial*
 !src/infrastructure/config/
 !src/infrastructure/config/**
 trashes/
-/task_md
-logs
-log/
+/task_md/
+/logs/
+/log/
 src/foreign/**/target/
 * copy.*
 tmp.*
-bak/
+/bak/
 bak.*
 data/backup/

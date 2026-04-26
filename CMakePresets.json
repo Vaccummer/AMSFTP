@@ -14,7 +14,7 @@
                 "AMSFTP_BUILD_TESTS": "ON",
                 "AMSFTP_LINK_MODE": "dynamic",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "CMAKE_TOOLCHAIN_FILE": "D:/compiler/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
             }
         },
         {
@@ -30,7 +30,7 @@
                 "AMSFTP_BUILD_TESTS": "ON",
                 "AMSFTP_LINK_MODE": "static",
                 "VCPKG_TARGET_TRIPLET": "x64-windows-static",
-                "CMAKE_TOOLCHAIN_FILE": "D:/compiler/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
             }
         },
         {
@@ -46,7 +46,7 @@
                 "AMSFTP_BUILD_TESTS": "ON",
                 "AMSFTP_LINK_MODE": "dynamic",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "CMAKE_TOOLCHAIN_FILE": "D:/compiler/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
             }
         },
         {
@@ -62,7 +62,7 @@
                 "AMSFTP_BUILD_TESTS": "ON",
                 "AMSFTP_LINK_MODE": "static",
                 "VCPKG_TARGET_TRIPLET": "x64-windows-static",
-                "CMAKE_TOOLCHAIN_FILE": "D:/compiler/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
             }
         }
     ],
