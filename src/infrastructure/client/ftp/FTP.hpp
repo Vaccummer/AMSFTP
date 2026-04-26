@@ -245,7 +245,7 @@ PathInfo ParseDOSListLine(const std::string &line,
     int month = 0;
     int day = 0;
     int year = 0;
-    if (sscanf_s(date_str.c_str(), "%d-%d-%d", &month, &day, &year) == 3) {
+    if (sscanf(date_str.c_str(), "%d-%d-%d", &month, &day, &year) == 3) {
       if (year < 100) {
         year += (year >= 70) ? 1900 : 2000;
       }
@@ -253,8 +253,7 @@ PathInfo ParseDOSListLine(const std::string &line,
       int hour = 0;
       int minute = 0;
       std::array<char, 3> ampm = {0};
-      if (sscanf_s(time_str.c_str(), "%d:%d%2s", &hour, &minute, ampm) >= 2) {
-        std::string ampm_str(ampm.data());
+      if (sscanf(time_str.c_str(), "%d:%d%2s", &hour, &minute, ampm.data()) >= 2) {        std::string ampm_str(ampm.data());
         std::transform(ampm_str.begin(), ampm_str.end(), ampm_str.begin(),
                        ::toupper);
         if (ampm_str == "PM" && hour != 12) {

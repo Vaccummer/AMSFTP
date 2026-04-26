@@ -771,11 +771,9 @@ public:
     info.owner = pw ? pw->pw_name : std::to_string(file_stat.st_uid);
     info.mode_int = static_cast<size_t>(file_stat.st_mode) & 0777U;
     info.mode_str = AMStr::ModeTrans(info.mode_int);
-    info.access_time = timespec_to_double(file_stat.st_atim);
-    info.modify_time = timespec_to_double(file_stat.st_mtim);
-#ifdef __APPLE__
-    info.create_time = timespec_to_double(file_stat.st_birthtimespec);
-#endif
+    info.access_time = AMPath::timespec_to_double(file_stat.st_atimespec);
+    info.modify_time = AMPath::timespec_to_double(file_stat.st_mtimespec);
+    info.create_time = AMPath::timespec_to_double(file_stat.st_birthtimespec);
 #endif
 
     out.rcm = OK;

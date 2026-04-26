@@ -1,6 +1,7 @@
 #pragma once
 // standard library
 #include <concepts>
+#include <pwd.h>
 #include <regex>
 #include <type_traits>
 #include <unordered_map>
@@ -709,6 +710,10 @@ using EC = ErrorCode;
 using WER = std::vector<std::pair<std::string, ECM>>;
 using WRI = std::pair<std::vector<PathInfo>, WER>;
 
+inline double timespec_to_double(const timespec &ts) {
+  return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) * 1e-9;
+}
+
 inline std::string HomePath() {
 #ifdef _WIN32
   std::array<wchar_t, MAX_PATH> path{};
@@ -913,8 +918,9 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
   // Call stat to get file metadata (supports symlinks; use stat instead of
   // lstat to follow links)
   if (stat(path.c_str(), &file_stat) == -1) {
-    return std::make_pair("Fail to stat file: " + std::string(strerror(errno)),
-                          info);
+    return {ECM{fec(std::error_code(errno, std::generic_category())),
+                AMStr::fmt("Fail to stat file: {}", std::strerror(errno))},
+            info};
   }
 
   // 1. Owner and group (via UID/GID conversion)
@@ -923,19 +929,14 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
 
   // 2. Octal permissions (0777 format)
   info.mode_int = file_stat.st_mode & 0777;
-  info.mode_str = ModeTrans(info.mode_int);
+  info.mode_str = AMStr::ModeTrans(info.mode_int);
 
   // 3. Access time and modification time
-  // Use struct timespec fields (seconds + nanoseconds, POSIX standard)
-  info.access_time =
-      timespec_to_double(file_stat.st_atim); // st_atim is timespec type
-  info.modify_time =
-      timespec_to_double(file_stat.st_mtim); // st_mtim is timespec type
-#endif
-#ifdef __APPLE__
+  info.access_time = timespec_to_double(file_stat.st_atimespec);
+  info.modify_time = timespec_to_double(file_stat.st_mtimespec);
   info.create_time = timespec_to_double(file_stat.st_birthtimespec);
-#endif
   return {OK, info};
+#endif
 }
 
 inline std::pair<ECM, std::vector<PathInfo>>
