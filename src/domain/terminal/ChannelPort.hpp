@@ -11,7 +11,17 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include <winsock2.h>
+#ifndef POSIX_SOCKET_TYPEDEFS_DEFINED
+#define POSIX_SOCKET_TYPEDEFS_DEFINED
+using SOCKET = int;
+constexpr SOCKET INVALID_SOCKET = -1;
+constexpr int SOCKET_ERROR = -1;
+#endif
+#ifndef POSIX_CLOSESOCKET_DEFINED
+#define POSIX_CLOSESOCKET_DEFINED
+#include <unistd.h>
+inline int closesocket(SOCKET s) { return close(s); }
+#endif
 
 namespace AMDomain::terminal {
 class IChannelPort;
