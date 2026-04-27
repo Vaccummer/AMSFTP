@@ -1780,7 +1780,6 @@ private:
         delta > 0 ? kLocalWheelUpInput_ : kLocalWheelDownInput_;
     if (callback_) {
       callback_(token);
-      return 1;
     }
     return CallNextHookEx(hook_, code, wparam, lparam);
   }
