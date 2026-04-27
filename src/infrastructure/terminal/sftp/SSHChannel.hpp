@@ -53,8 +53,6 @@ struct ChannelRuntimeAttrs_ {
 
 struct ChannelForegroundAttrs_ {
   std::string send_buffer = {};
-  int last_cols = -1;
-  int last_rows = -1;
   bool foreground_bound = false;
   bool detach_requested = false;
   bool closed = false;
@@ -1059,35 +1057,8 @@ private:
     }
   }
 
-  void HandleResizeBeforeWrite_() {
-    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (out == nullptr || out == INVALID_HANDLE_VALUE) {
-      return;
-    }
-    CONSOLE_SCREEN_BUFFER_INFO info = {};
-    if (GetConsoleScreenBufferInfo(out, &info) == 0) {
-      return;
-    }
-    int const cols =
-        static_cast<int>(info.srWindow.Right - info.srWindow.Left + 1);
-    int const rows =
-        static_cast<int>(info.srWindow.Bottom - info.srWindow.Top + 1);
-    if (cols <= 0 || rows <= 0) {
-      return;
-    }
-    if (cols == foreground_.last_cols && rows == foreground_.last_rows) {
-      return;
-    }
-    auto resize_result = Resize({cols, rows, 0, 0}, {});
-    if (resize_result.rcm) {
-      foreground_.last_cols = cols;
-      foreground_.last_rows = rows;
-    }
-  }
-
   void FlushSend_() {
     for (int i = 0; i < 16 && !foreground_.send_buffer.empty(); ++i) {
-      HandleResizeBeforeWrite_();
       size_t const n =
           std::min<size_t>(32U * 1024U, foreground_.send_buffer.size());
       std::string const chunk(foreground_.send_buffer.data(), n);
