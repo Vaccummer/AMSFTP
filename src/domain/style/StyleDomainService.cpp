@@ -310,6 +310,14 @@ void NormalizeInputHighlight(InputHighlightStyle *style) {
                       defaults.termname_new_valid);
   NormalizeStyleToken(&style->termname_new_invalid,
                       defaults.termname_new_invalid);
+  NormalizeStyleToken(&style->termname_clientname_ok,
+                      defaults.termname_clientname_ok);
+  NormalizeStyleToken(&style->termname_clientname_disconnected,
+                      defaults.termname_clientname_disconnected);
+  NormalizeStyleToken(&style->termname_clientname_unestablished,
+                      defaults.termname_clientname_unestablished);
+  NormalizeStyleToken(&style->termname_clientname_nonexistent,
+                      defaults.termname_clientname_nonexistent);
   NormalizeStyleToken(&style->attr_valid, defaults.attr_valid);
   NormalizeStyleToken(&style->attr_invalid, defaults.attr_invalid);
   if (style->type_shell_cmd.empty()) {

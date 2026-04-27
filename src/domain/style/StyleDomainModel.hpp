@@ -99,6 +99,10 @@ struct InputHighlightStyle {
   std::string termname_nonexistent = "";
   std::string termname_new_valid = "";
   std::string termname_new_invalid = "";
+  std::string termname_clientname_ok = "";
+  std::string termname_clientname_disconnected = "";
+  std::string termname_clientname_unestablished = "";
+  std::string termname_clientname_nonexistent = "";
   std::string attr_valid = "";
   std::string attr_invalid = "";
 };
