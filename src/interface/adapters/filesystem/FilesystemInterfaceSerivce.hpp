@@ -1,6 +1,6 @@
 #pragma once
 #include "application/client/ClientAppService.hpp"
-#include "application/filesystem/FileSystemAppService.hpp"
+#include "application/filesystem/FilesystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/core/Enum.hpp"

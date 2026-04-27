@@ -16,12 +16,17 @@ namespace AMInfra::signal {
 SignalMonitorImpl::~SignalMonitorImpl() { Stop(); }
 
 void SignalMonitorImpl::InstallHandlers() {
+#ifdef _WIN32
+  std::signal(SIGINT, SignalMonitorImpl::SignalHandler);
+  std::signal(SIGTERM, SignalMonitorImpl::SignalHandler);
+#else
   struct sigaction sa{};
   sa.sa_handler = SignalMonitorImpl::SignalHandler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART;
   sigaction(SIGINT, &sa, nullptr);
   sigaction(SIGTERM, &sa, nullptr);
+#endif
 }
 
 void SignalMonitorImpl::Start() {

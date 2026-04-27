@@ -1,6 +1,4 @@
 #pragma once
-// Internal dependencies
-#include "infrastructure/client/common/Base.hpp"
 
 #include <array>
 #include <filesystem>
@@ -15,9 +13,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
-#ifdef _WIN32
-#include <windows.h>
-#endif
+
+// Internal dependencies
+#include "foundation/tools/path.hpp"
+#include "infrastructure/client/common/Base.hpp"
 
 namespace AMInfra::client::LOCAL {
 class AMLocalIOCore : public ClientIOBase {

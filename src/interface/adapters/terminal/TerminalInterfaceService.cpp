@@ -1763,6 +1763,14 @@ private:
     return foreground == target_window_;
   }
 
+  [[nodiscard]] bool MousePointMatchesTarget_(POINT point) const {
+    if (target_window_ == nullptr) {
+      return false;
+    }
+    HWND const window_at_point = GetAncestor(WindowFromPoint(point), GA_ROOT);
+    return window_at_point == target_window_;
+  }
+
   [[nodiscard]] LRESULT HandleHook_(int code, WPARAM wparam,
                                     LPARAM lparam) {
     if (code != HC_ACTION || wparam != WM_MOUSEWHEEL ||
@@ -1773,6 +1781,9 @@ private:
 
     auto const *info = reinterpret_cast<const MSLLHOOKSTRUCT *>(lparam);
     if (info == nullptr) {
+      return CallNextHookEx(hook_, code, wparam, lparam);
+    }
+    if (!MousePointMatchesTarget_(info->pt)) {
       return CallNextHookEx(hook_, code, wparam, lparam);
     }
     const SHORT delta = static_cast<SHORT>(HIWORD(info->mouseData));

@@ -15,6 +15,12 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
+#define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE 0x00020016
+#endif
+#else
 #include <cerrno>
 #include <csignal>
 #include <cstring>
@@ -24,10 +30,11 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#ifdef __APPLE__
-#include <util.h>
-#else
+#if defined(__linux__)
 #include <pty.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+#include <util.h>
+#endif
 #endif
 
 namespace AMInfra::client::LOCAL::terminal {
@@ -50,8 +57,15 @@ struct ChannelRuntimeAttrs_ {
   int window_width = 0;
   int window_height = 0;
   std::string term = "xterm-256color";
+#ifdef _WIN32
+  void *pseudo_console = nullptr;
+  HANDLE input_write = INVALID_HANDLE_VALUE;
+  HANDLE output_read = INVALID_HANDLE_VALUE;
+  HANDLE process_handle = INVALID_HANDLE_VALUE;
+#else
   int master_fd = -1;
   pid_t child_pid = -1;
+#endif
 };
 
 struct ChannelForegroundAttrs_ {
@@ -67,7 +81,298 @@ struct ChannelForegroundAttrs_ {
   AMT::ChannelInputTransformer input_transformer = {};
 };
 
-inline void UpdateProcessState_(ChannelRuntimeAttrs_ *runtime) {
+#ifdef _WIN32
+struct ChannelLoopEvents_ {
+  HANDLE state_wait_handle = nullptr;
+};
+
+struct ConPTYApi_ {
+  using CreatePseudoConsoleFn = HRESULT(WINAPI *)(COORD, HANDLE, HANDLE, DWORD,
+                                                  void **);
+  using ResizePseudoConsoleFn = HRESULT(WINAPI *)(void *, COORD);
+  using ClosePseudoConsoleFn = void(WINAPI *)(void *);
+
+  HMODULE kernel = nullptr;
+  CreatePseudoConsoleFn create = nullptr;
+  ResizePseudoConsoleFn resize = nullptr;
+  ClosePseudoConsoleFn close = nullptr;
+
+  ConPTYApi_() {
+    kernel = GetModuleHandleW(L"kernel32.dll");
+    if (kernel == nullptr) {
+      return;
+    }
+    create = reinterpret_cast<CreatePseudoConsoleFn>(
+        GetProcAddress(kernel, "CreatePseudoConsole"));
+    resize = reinterpret_cast<ResizePseudoConsoleFn>(
+        GetProcAddress(kernel, "ResizePseudoConsole"));
+    close = reinterpret_cast<ClosePseudoConsoleFn>(
+        GetProcAddress(kernel, "ClosePseudoConsole"));
+  }
+
+  [[nodiscard]] bool IsAvailable() const {
+    return create != nullptr && resize != nullptr && close != nullptr;
+  }
+};
+
+[[nodiscard]] inline const ConPTYApi_ &ConPTYApiInstance_() {
+  static const ConPTYApi_ api = {};
+  return api;
+}
+
+inline void CloseHandleSafe_(HANDLE *handle) {
+  if (handle != nullptr && *handle != nullptr &&
+      *handle != INVALID_HANDLE_VALUE) {
+    (void)CloseHandle(*handle);
+    *handle = INVALID_HANDLE_VALUE;
+  }
+}
+
+inline void ClosePseudoConsoleSafe_(void **pseudo_console) {
+  if (pseudo_console == nullptr || *pseudo_console == nullptr) {
+    return;
+  }
+  const auto &api = ConPTYApiInstance_();
+  if (api.close != nullptr) {
+    api.close(*pseudo_console);
+  }
+  *pseudo_console = nullptr;
+}
+
+inline void UpdateWindowsProcessState_(ChannelRuntimeAttrs_ *runtime) {
+  if (runtime == nullptr || runtime->process_handle == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  DWORD code = STILL_ACTIVE;
+  if (GetExitCodeProcess(runtime->process_handle, &code) == 0) {
+    return;
+  }
+  if (code != STILL_ACTIVE) {
+    runtime->process_exited = true;
+    runtime->exit_status = static_cast<int>(code);
+  }
+}
+
+[[nodiscard]] inline bool DrainWindowsOutput_(ChannelRuntimeAttrs_ *runtime,
+                                              std::string *output,
+                                              size_t max_bytes) {
+  if (runtime == nullptr || output == nullptr ||
+      runtime->output_read == INVALID_HANDLE_VALUE || max_bytes == 0U) {
+    return false;
+  }
+  bool wrote = false;
+  std::array<char, 4096> buffer = {};
+  while (output->size() < max_bytes) {
+    DWORD available = 0;
+    if (PeekNamedPipe(runtime->output_read, nullptr, 0, nullptr, &available,
+                      nullptr) == 0) {
+      runtime->eof = true;
+      break;
+    }
+    if (available == 0) {
+      break;
+    }
+    const DWORD want = static_cast<DWORD>(std::min<size_t>(
+        static_cast<size_t>(available),
+        std::min<size_t>(buffer.size(), max_bytes - output->size())));
+    DWORD nread = 0;
+    if (ReadFile(runtime->output_read, buffer.data(), want, &nread, nullptr) ==
+        0) {
+      runtime->eof = true;
+      break;
+    }
+    if (nread == 0) {
+      break;
+    }
+    output->append(buffer.data(), static_cast<size_t>(nread));
+    wrote = true;
+  }
+  return wrote;
+}
+
+[[nodiscard]] inline bool WaitReadableWindows_(ChannelRuntimeAttrs_ *runtime,
+                                               const ControlComponent &control,
+                                               bool *timed_out) {
+  if (timed_out != nullptr) {
+    *timed_out = false;
+  }
+  if (runtime == nullptr) {
+    if (timed_out != nullptr) {
+      *timed_out = true;
+    }
+    return false;
+  }
+
+  auto deadline = std::chrono::steady_clock::time_point::max();
+  const auto remain_opt = control.RemainingTimeMs();
+  if (remain_opt.has_value()) {
+    deadline = std::chrono::steady_clock::now() +
+               std::chrono::milliseconds(*remain_opt);
+  }
+
+  while (true) {
+    if (control.IsInterrupted()) {
+      return false;
+    }
+    if (control.IsTimeout()) {
+      if (timed_out != nullptr) {
+        *timed_out = true;
+      }
+      return false;
+    }
+
+    std::array<HANDLE, 2> handles = {runtime->output_read,
+                                     runtime->process_handle};
+    DWORD count = 0;
+    if (runtime->output_read != INVALID_HANDLE_VALUE) {
+      handles[count++] = runtime->output_read;
+    }
+    if (runtime->process_handle != INVALID_HANDLE_VALUE) {
+      handles[count++] = runtime->process_handle;
+    }
+    if (count == 0) {
+      if (timed_out != nullptr) {
+        *timed_out = true;
+      }
+      return false;
+    }
+
+    DWORD slice = 100;
+    if (deadline != std::chrono::steady_clock::time_point::max()) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        if (timed_out != nullptr) {
+          *timed_out = true;
+        }
+        return false;
+      }
+      const auto remain =
+          std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+      slice = static_cast<DWORD>(std::min<int64_t>(
+          static_cast<int64_t>(slice), std::max<int64_t>(1, remain.count())));
+    }
+
+    const DWORD wait_rc =
+        WaitForMultipleObjects(count, handles.data(), FALSE, slice);
+    if (wait_rc == WAIT_TIMEOUT) {
+      continue;
+    }
+    if (wait_rc >= WAIT_OBJECT_0 && wait_rc < WAIT_OBJECT_0 + count) {
+      return true;
+    }
+    if (wait_rc == WAIT_FAILED) {
+      return false;
+    }
+  }
+}
+
+inline ECM OpenChannelWindows_(ChannelRuntimeAttrs_ *runtime,
+                               const AMT::ChannelInitArgs &init_args) {
+  if (runtime == nullptr) {
+    return Err(EC::InvalidArg, "terminal.channel.init", "channel",
+               "Channel runtime is null");
+  }
+
+  const auto &api = ConPTYApiInstance_();
+  if (!api.IsAvailable()) {
+    return Err(EC::OperationUnsupported, "terminal.channel.init", "conpty",
+               "ConPTY API is unavailable on current Windows runtime");
+  }
+
+  SECURITY_ATTRIBUTES sa = {};
+  sa.nLength = sizeof(sa);
+  sa.bInheritHandle = TRUE;
+  sa.lpSecurityDescriptor = nullptr;
+
+  HANDLE input_read = INVALID_HANDLE_VALUE;
+  HANDLE input_write = INVALID_HANDLE_VALUE;
+  HANDLE output_read = INVALID_HANDLE_VALUE;
+  HANDLE output_write = INVALID_HANDLE_VALUE;
+  if (CreatePipe(&input_read, &input_write, &sa, 0) == 0) {
+    return Err(EC::CommonFailure, "terminal.channel.init", "conpty",
+               "CreatePipe failed for terminal input");
+  }
+  if (CreatePipe(&output_read, &output_write, &sa, 0) == 0) {
+    CloseHandleSafe_(&input_read);
+    CloseHandleSafe_(&input_write);
+    return Err(EC::CommonFailure, "terminal.channel.init", "conpty",
+               "CreatePipe failed for terminal output");
+  }
+  (void)SetHandleInformation(input_write, HANDLE_FLAG_INHERIT, 0);
+  (void)SetHandleInformation(output_read, HANDLE_FLAG_INHERIT, 0);
+
+  COORD size = {};
+  size.X = static_cast<SHORT>(std::max(1, init_args.cols));
+  size.Y = static_cast<SHORT>(std::max(1, init_args.rows));
+
+  void *pseudo_console = nullptr;
+  const HRESULT create_hr =
+      api.create(size, input_read, output_write, 0, &pseudo_console);
+  CloseHandleSafe_(&input_read);
+  CloseHandleSafe_(&output_write);
+  if (FAILED(create_hr) || pseudo_console == nullptr) {
+    CloseHandleSafe_(&input_write);
+    CloseHandleSafe_(&output_read);
+    return Err(EC::OperationUnsupported, "terminal.channel.init", "conpty",
+               AMStr::fmt("CreatePseudoConsole failed (hr=0x{:08X})",
+                          static_cast<unsigned int>(create_hr)));
+  }
+
+  SIZE_T attr_size = 0;
+  (void)InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
+  std::vector<char> attr_buffer(attr_size);
+  auto *attr_list =
+      reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attr_buffer.data());
+  if (InitializeProcThreadAttributeList(attr_list, 1, 0, &attr_size) == 0) {
+    ClosePseudoConsoleSafe_(&pseudo_console);
+    CloseHandleSafe_(&input_write);
+    CloseHandleSafe_(&output_read);
+    return Err(EC::CommonFailure, "terminal.channel.init", "conpty",
+               "InitializeProcThreadAttributeList failed");
+  }
+
+  const BOOL update_ok = UpdateProcThreadAttribute(
+      attr_list, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, pseudo_console,
+      sizeof(pseudo_console), nullptr, nullptr);
+  if (update_ok == 0) {
+    DeleteProcThreadAttributeList(attr_list);
+    ClosePseudoConsoleSafe_(&pseudo_console);
+    CloseHandleSafe_(&input_write);
+    CloseHandleSafe_(&output_read);
+    return Err(EC::CommonFailure, "terminal.channel.init", "conpty",
+               "UpdateProcThreadAttribute failed");
+  }
+
+  STARTUPINFOEXW startup = {};
+  startup.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+  startup.lpAttributeList = attr_list;
+  PROCESS_INFORMATION proc = {};
+  std::wstring cmd = L"cmd.exe";
+  const BOOL created =
+      CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                     EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
+                     &startup.StartupInfo, &proc);
+  DeleteProcThreadAttributeList(attr_list);
+  if (created == 0) {
+    ClosePseudoConsoleSafe_(&pseudo_console);
+    CloseHandleSafe_(&input_write);
+    CloseHandleSafe_(&output_read);
+    return Err(EC::CommonFailure, "terminal.channel.init", "cmd.exe",
+               "CreateProcessW failed");
+  }
+
+  CloseHandleSafe_(&proc.hThread);
+  runtime->pseudo_console = pseudo_console;
+  runtime->input_write = input_write;
+  runtime->output_read = output_read;
+  runtime->process_handle = proc.hProcess;
+  runtime->process_exited = false;
+  runtime->eof = false;
+  runtime->exit_status = -1;
+  return OK;
+}
+#else
+inline void UpdatePosixProcessState_(ChannelRuntimeAttrs_ *runtime) {
   if (runtime == nullptr || runtime->child_pid <= 0 ||
       runtime->process_exited) {
     return;
@@ -88,9 +393,9 @@ inline void UpdateProcessState_(ChannelRuntimeAttrs_ *runtime) {
   runtime->child_pid = -1;
 }
 
-[[nodiscard]] inline bool DrainOutput_(ChannelRuntimeAttrs_ *runtime,
-                                        std::string *output,
-                                        size_t max_bytes) {
+[[nodiscard]] inline bool DrainPosixOutput_(ChannelRuntimeAttrs_ *runtime,
+                                            std::string *output,
+                                            size_t max_bytes) {
   if (runtime == nullptr || output == nullptr || runtime->master_fd < 0 ||
       max_bytes == 0U) {
     return false;
@@ -117,9 +422,9 @@ inline void UpdateProcessState_(ChannelRuntimeAttrs_ *runtime) {
   return wrote;
 }
 
-[[nodiscard]] inline bool WaitReadable_(ChannelRuntimeAttrs_ *runtime,
-                                         const ControlComponent &control,
-                                         bool *timed_out) {
+[[nodiscard]] inline bool WaitReadablePosix_(ChannelRuntimeAttrs_ *runtime,
+                                             const ControlComponent &control,
+                                             bool *timed_out) {
   if (timed_out != nullptr) {
     *timed_out = false;
   }
@@ -184,8 +489,8 @@ inline void UpdateProcessState_(ChannelRuntimeAttrs_ *runtime) {
   }
 }
 
-inline ECM OpenChannel_(ChannelRuntimeAttrs_ *runtime,
-                         const AMT::ChannelInitArgs &init_args) {
+inline ECM OpenChannelPosix_(ChannelRuntimeAttrs_ *runtime,
+                             const AMT::ChannelInitArgs &init_args) {
   if (runtime == nullptr) {
     return Err(EC::InvalidArg, "terminal.channel.init", "channel",
                "Channel runtime is null");
@@ -216,6 +521,7 @@ inline ECM OpenChannel_(ChannelRuntimeAttrs_ *runtime,
   runtime->exit_status = -1;
   return OK;
 }
+#endif
 
 [[nodiscard]] inline bool IsConnectionBrokenCode_(ErrorCode code) {
   return code == EC::NoConnection || code == EC::ConnectionLost ||
@@ -227,18 +533,51 @@ inline ECM OpenChannel_(ChannelRuntimeAttrs_ *runtime,
 class LocalChannelPort final : public AMT::IChannelPort {
 private:
   [[nodiscard]] bool RuntimeOpenedUnlocked_() const {
+#ifdef _WIN32
+    return runtime_.process_handle != INVALID_HANDLE_VALUE ||
+           runtime_.output_read != INVALID_HANDLE_VALUE ||
+           runtime_.input_write != INVALID_HANDLE_VALUE;
+#else
     return runtime_.master_fd >= 0 || runtime_.child_pid > 0;
+#endif
   }
 
   void UpdateProcessStateUnlocked_() {
-    detail::UpdateProcessState_(&runtime_);
+#ifdef _WIN32
+    detail::UpdateWindowsProcessState_(&runtime_);
+#else
+    detail::UpdatePosixProcessState_(&runtime_);
+#endif
     if (runtime_.process_exited) {
       runtime_.eof = true;
     }
   }
 
   void CloseRuntimeUnlocked_(bool force) {
-    detail::UpdateProcessState_(&runtime_);
+#ifdef _WIN32
+    detail::UpdateWindowsProcessState_(&runtime_);
+    if (!runtime_.process_exited &&
+        runtime_.process_handle != INVALID_HANDLE_VALUE) {
+      if (!force && runtime_.input_write != INVALID_HANDLE_VALUE) {
+        const std::string exit_cmd = "exit";
+        DWORD wrote = 0;
+        (void)WriteFile(runtime_.input_write, exit_cmd.data(),
+                        static_cast<DWORD>(exit_cmd.size()), &wrote, nullptr);
+      }
+      DWORD wait_rc =
+          WaitForSingleObject(runtime_.process_handle, force ? 10 : 300);
+      if (wait_rc == WAIT_TIMEOUT) {
+        (void)TerminateProcess(runtime_.process_handle, 1);
+        (void)WaitForSingleObject(runtime_.process_handle, 300);
+      }
+    }
+    detail::UpdateWindowsProcessState_(&runtime_);
+    detail::CloseHandleSafe_(&runtime_.input_write);
+    detail::CloseHandleSafe_(&runtime_.output_read);
+    detail::CloseHandleSafe_(&runtime_.process_handle);
+    detail::ClosePseudoConsoleSafe_(&runtime_.pseudo_console);
+#else
+    detail::UpdatePosixProcessState_(&runtime_);
     if (!runtime_.process_exited && runtime_.child_pid > 0) {
       if (!force && runtime_.master_fd >= 0) {
         const std::string exit_cmd = "exit\n";
@@ -247,7 +586,7 @@ private:
       const auto deadline = std::chrono::steady_clock::now() +
                             std::chrono::milliseconds(force ? 20 : 300);
       while (std::chrono::steady_clock::now() < deadline) {
-        detail::UpdateProcessState_(&runtime_);
+        detail::UpdatePosixProcessState_(&runtime_);
         if (runtime_.process_exited) {
           break;
         }
@@ -258,7 +597,7 @@ private:
         const auto kill_deadline =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
         while (std::chrono::steady_clock::now() < kill_deadline) {
-          detail::UpdateProcessState_(&runtime_);
+          detail::UpdatePosixProcessState_(&runtime_);
           if (runtime_.process_exited) {
             break;
           }
@@ -267,20 +606,34 @@ private:
       }
       if (!runtime_.process_exited && runtime_.child_pid > 0) {
         (void)kill(runtime_.child_pid, SIGKILL);
-        detail::UpdateProcessState_(&runtime_);
+        detail::UpdatePosixProcessState_(&runtime_);
       }
     }
     if (runtime_.master_fd >= 0) {
       (void)close(runtime_.master_fd);
       runtime_.master_fd = -1;
     }
+#endif
     runtime_.eof = true;
     runtime_.process_exited = true;
   }
 
-  void SignalLoopStateChanged_() {}
+  void SignalLoopStateChanged_() {
+#ifdef _WIN32
+    if (loop_events_.state_wait_handle != nullptr) {
+      (void)SetEvent(loop_events_.state_wait_handle);
+    }
+#endif
+  }
 
-  void CloseStateWaitHandle_() {}
+  void CloseStateWaitHandle_() {
+#ifdef _WIN32
+    if (loop_events_.state_wait_handle != nullptr) {
+      (void)CloseHandle(loop_events_.state_wait_handle);
+      loop_events_.state_wait_handle = nullptr;
+    }
+#endif
+  }
 
   void RequestStop_() {
     stop_requested_.store(true, std::memory_order_release);
@@ -523,12 +876,22 @@ private:
     size_t const max_bytes =
         (read_args.max_bytes == 0U ? static_cast<size_t>(32U * AMKB)
                                    : read_args.max_bytes);
+#ifdef _WIN32
     bool wrote =
-        detail::DrainOutput_(&runtime_, &out.data.output, max_bytes);
+        detail::DrainWindowsOutput_(&runtime_, &out.data.output, max_bytes);
+#else
+    bool wrote =
+        detail::DrainPosixOutput_(&runtime_, &out.data.output, max_bytes);
+#endif
     if (!wrote && !runtime_.eof && control.RemainingTimeMs().has_value()) {
       bool timed_out = false;
+#ifdef _WIN32
       bool const wait_ok =
-          detail::WaitReadable_(&runtime_, control, &timed_out);
+          detail::WaitReadableWindows_(&runtime_, control, &timed_out);
+#else
+      bool const wait_ok =
+          detail::WaitReadablePosix_(&runtime_, control, &timed_out);
+#endif
       if (!wait_ok) {
         if (control.IsInterrupted()) {
           out.rcm = Err(EC::Terminate, "terminal.channel.read",
@@ -549,7 +912,11 @@ private:
         out.data.eof = runtime_.eof || runtime_.process_exited;
         return out;
       }
-      (void)detail::DrainOutput_(&runtime_, &out.data.output, max_bytes);
+#ifdef _WIN32
+      (void)detail::DrainWindowsOutput_(&runtime_, &out.data.output, max_bytes);
+#else
+      (void)detail::DrainPosixOutput_(&runtime_, &out.data.output, max_bytes);
+#endif
     }
 
     UpdateProcessStateUnlocked_();
@@ -595,6 +962,26 @@ private:
       return out;
     }
 
+#ifdef _WIN32
+    if (runtime_.input_write == INVALID_HANDLE_VALUE) {
+      runtime_.state =
+          Err(EC::InvalidHandle, "terminal.channel.write",
+              identity_.channel_name, "Terminal input handle is unavailable");
+      out.rcm = runtime_.state;
+      return out;
+    }
+    DWORD wrote = 0;
+    const BOOL write_ok =
+        WriteFile(runtime_.input_write, write_args.input.data(),
+                  static_cast<DWORD>(write_args.input.size()), &wrote, nullptr);
+    out.data.bytes_written = static_cast<size_t>(wrote);
+    out.rcm = write_ok
+                  ? OK
+                  : Err(EC::SocketSendError, "terminal.channel.write",
+                        identity_.channel_name, "Failed to write to terminal");
+    runtime_.state = out.rcm;
+    return out;
+#else
     if (runtime_.master_fd < 0) {
       runtime_.state = Err(EC::InvalidHandle, "terminal.channel.write",
                            identity_.channel_name, "PTY handle is unavailable");
@@ -655,6 +1042,7 @@ private:
     out.rcm = OK;
     runtime_.state = out.rcm;
     return out;
+#endif
   }
 
   [[nodiscard]] ECMData<AMT::ChannelResizeResult>
@@ -676,6 +1064,30 @@ private:
       return out;
     }
 
+#ifdef _WIN32
+    const auto &api = detail::ConPTYApiInstance_();
+    if (runtime_.pseudo_console == nullptr || !api.IsAvailable() ||
+        api.resize == nullptr) {
+      out.data.resized = false;
+      out.rcm = OK;
+      return out;
+    }
+    COORD size = {};
+    size.X = static_cast<SHORT>(std::max(1, resize_args.cols));
+    size.Y = static_cast<SHORT>(std::max(1, resize_args.rows));
+    const HRESULT hr = api.resize(runtime_.pseudo_console, size);
+    if (FAILED(hr)) {
+      out.data.resized = false;
+      out.rcm = Err(EC::OperationUnsupported, "terminal.channel.resize",
+                    identity_.channel_name, "ConPTY resize failed");
+      runtime_.state = out.rcm;
+      return out;
+    }
+    out.data.resized = true;
+    out.rcm = OK;
+    runtime_.state = out.rcm;
+    return out;
+#else
     if (runtime_.master_fd < 0) {
       out.data.resized = false;
       out.rcm = OK;
@@ -698,6 +1110,7 @@ private:
     out.rcm = OK;
     runtime_.state = out.rcm;
     return out;
+#endif
   }
 
 public:
@@ -734,6 +1147,17 @@ public:
                     identity_.channel_name, "Channel is closed");
       return out;
     }
+#ifdef _WIN32
+    if (runtime_.output_read == INVALID_HANDLE_VALUE) {
+      out.data = INVALID_SOCKET;
+      out.rcm =
+          Err(EC::NoConnection, "terminal.channel.wait_handle",
+              identity_.channel_name, "Channel output handle is unavailable");
+      return out;
+    }
+    out.data = static_cast<SOCKET>(
+        reinterpret_cast<std::intptr_t>(runtime_.output_read));
+#else
     if (runtime_.master_fd < 0) {
       out.data = INVALID_SOCKET;
       out.rcm = Err(EC::NoConnection, "terminal.channel.wait_handle",
@@ -741,6 +1165,7 @@ public:
       return out;
     }
     out.data = static_cast<SOCKET>(runtime_.master_fd);
+#endif
     out.rcm = OK;
     return out;
   }
@@ -786,7 +1211,11 @@ public:
     runtime_.exit_status = -1;
     runtime_.state = OK;
 
-    runtime_.state = detail::OpenChannel_(&runtime_, init_args);
+#ifdef _WIN32
+    runtime_.state = detail::OpenChannelWindows_(&runtime_, init_args);
+#else
+    runtime_.state = detail::OpenChannelPosix_(&runtime_, init_args);
+#endif
     foreground_.closed = !(runtime_.state);
     foreground_.last_error = runtime_.state;
     return runtime_.state;
@@ -908,6 +1337,19 @@ public:
               identity_.channel_name, "Channel is closed");
       return foreground_.last_error;
     }
+#ifdef _WIN32
+    if (loop_events_.state_wait_handle == nullptr) {
+      loop_events_.state_wait_handle =
+          CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      if (loop_events_.state_wait_handle == nullptr) {
+        foreground_.last_error =
+            Err(EC::CommonFailure, "terminal.channel.loop.start",
+                identity_.channel_name,
+                "Failed to create local loop state wait handle");
+        return foreground_.last_error;
+      }
+    }
+#endif
     if (loop_started_ && loop_thread_.joinable()) {
       loop_running_ = true;
       foreground_.last_error = OK;
@@ -1010,7 +1452,14 @@ public:
     state.loop_running = loop_running_ && !state.closed;
     state.foreground_bound = foreground_.foreground_bound;
     state.detach_requested = foreground_.detach_requested;
+#ifdef _WIN32
+    state.state_wait_handle =
+        loop_events_.state_wait_handle != nullptr
+            ? reinterpret_cast<std::intptr_t>(loop_events_.state_wait_handle)
+            : static_cast<std::intptr_t>(-1);
+#else
     state.state_wait_handle = static_cast<std::intptr_t>(-1);
+#endif
     state.last_error = foreground_.last_error;
     if (!(state.last_error) && port_state.last_error) {
       state.last_error = port_state.last_error;
@@ -1032,6 +1481,10 @@ private:
   std::atomic<bool> key_ctrl_state_ = false;
   bool loop_running_ = false;
   bool loop_started_ = false;
+
+#ifdef _WIN32
+  detail::ChannelLoopEvents_ loop_events_ = {};
+#endif
 };
 
 } // namespace AMInfra::client::LOCAL::terminal
