@@ -4,6 +4,7 @@
 #include "domain/terminal/TerminalPort.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/terminal.hpp"
+#include "foundation/tools/prompt_ui.hpp"
 #include "interface/parser/LuaInterpreter.hpp"
 #include "interface/style/StyleIndex.hpp"
 #include "interface/style/StyleManager.hpp"
@@ -12,6 +13,7 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -66,6 +68,14 @@ constexpr const char *kDefaultTerminalType_ = "xterm-256color";
 constexpr std::string_view kLocalWheelUpInput_("\0AMSFTP_WHEEL_UP\0", 17);
 constexpr std::string_view kLocalWheelDownInput_("\0AMSFTP_WHEEL_DOWN\0", 19);
 
+enum class TerminalBannerAlign_ { Left = 0, Center = 1, Right = 2 };
+
+struct TerminalBannerConfig_ {
+  std::string text = {};
+  std::string background = {};
+  TerminalBannerAlign_ align = TerminalBannerAlign_::Left;
+};
+
 [[nodiscard]] AMDomain::terminal::ChannelOpenArgs
 BuildChannelOpenArgs_(const std::string &channel_name,
                       const AMTerminalTools::TerminalViewportInfo &geometry) {
@@ -77,6 +87,28 @@ BuildChannelOpenArgs_(const std::string &channel_name,
   out.height = std::max(0, geometry.height);
   out.term = kDefaultTerminalType_;
   return out;
+}
+
+[[nodiscard]] AMTerminalTools::TerminalViewportInfo
+BuildContentGeometry_(const AMTerminalTools::TerminalViewportInfo &geometry,
+                      int fixed_header_rows) {
+  auto out = geometry;
+  out.rows = std::max(1, geometry.rows - std::max(0, fixed_header_rows));
+  return out;
+}
+
+[[nodiscard]] int FixedHeaderLineCount_(
+    const std::vector<std::string> &banner_lines,
+    const std::vector<std::string> &hint_lines,
+    bool show_hint,
+    int terminal_rows) {
+  const int requested =
+      static_cast<int>(banner_lines.size() +
+                       (show_hint ? hint_lines.size() : 0U));
+  if (requested <= 0) {
+    return 0;
+  }
+  return std::min(requested, std::max(0, terminal_rows - 1));
 }
 
 struct TerminalTargetSpec_ {
@@ -429,9 +461,30 @@ ResolveShellRunCommand_(const AMDomain::host::ConRequest &request,
 AMInterface::prompt::PromptVarMap
 BuildTerminalBannerLuaVars_(const TerminalTargetSpec_ &target,
                             const AMDomain::host::ConRequest &request,
-                            AMDomain::client::OS_TYPE os_type) {
+                            AMDomain::client::OS_TYPE os_type,
+                            const AMDomain::style::CLIPromptIconsStyle &icons) {
   using AMInterface::prompt::PromptVarMap;
   using AMInterface::prompt::PromptVarValue;
+
+  auto resolve_sysicon = [&]() -> std::string {
+    const std::string fallback = icons.default_icon;
+    switch (os_type) {
+    case AMDomain::client::OS_TYPE::Windows:
+      return icons.windows.empty() ? fallback : icons.windows;
+    case AMDomain::client::OS_TYPE::Linux:
+      return icons.linux.empty() ? fallback : icons.linux;
+    case AMDomain::client::OS_TYPE::MacOS:
+      return icons.macos.empty() ? fallback : icons.macos;
+    case AMDomain::client::OS_TYPE::FreeBSD:
+      return icons.freebsd.empty() ? fallback : icons.freebsd;
+    case AMDomain::client::OS_TYPE::Unix:
+      return icons.unix.empty() ? fallback : icons.unix;
+    case AMDomain::client::OS_TYPE::Unknown:
+    case AMDomain::client::OS_TYPE::Uncertain:
+    default:
+      return fallback;
+    }
+  };
 
   PromptVarMap vars = {};
   vars["os_type"] =
@@ -442,27 +495,49 @@ BuildTerminalBannerLuaVars_(const TerminalTargetSpec_ &target,
   vars["username"] = PromptVarValue{request.username};
   vars["nickname"] = PromptVarValue{target.term_name};
   vars["port"] = PromptVarValue{request.port};
+  vars["sysicon"] = PromptVarValue{resolve_sysicon()};
   return vars;
 }
 
-std::string ResolveTerminalBanner_(
+TerminalBannerAlign_ ParseTerminalBannerAlign_(std::string_view raw_align) {
+  const std::string align =
+      AMStr::lowercase(AMStr::Strip(std::string(raw_align)));
+  if (align == "center") {
+    return TerminalBannerAlign_::Center;
+  }
+  if (align == "right") {
+    return TerminalBannerAlign_::Right;
+  }
+  return TerminalBannerAlign_::Left;
+}
+
+TerminalBannerConfig_ ResolveTerminalBanner_(
     const AMInterface::style::AMStyleService &style_service,
     const TerminalTargetSpec_ &target,
     const AMDomain::host::ConRequest &request,
     AMDomain::client::OS_TYPE os_type) {
-  const std::string banner_template =
-      style_service.GetInitArg().style.terminal.banner_template;
+  TerminalBannerConfig_ out = {};
+  const auto style_config = style_service.GetInitArg().style;
+  const auto &banner = style_config.terminal.banner;
+  const std::string banner_template = banner.template_text.empty()
+                                          ? style_config.terminal.banner_template
+                                          : banner.template_text;
+  out.background = banner.background;
+  out.align = ParseTerminalBannerAlign_(banner.align);
   if (AMStr::Strip(banner_template).empty()) {
-    return {};
+    return out;
   }
 
   const auto render = AMInterface::prompt::LUARender(
       {banner_template},
-      BuildTerminalBannerLuaVars_(target, request, os_type));
+      BuildTerminalBannerLuaVars_(target, request, os_type,
+                                  style_config.cli_prompt.icons));
   if (!(render.rcm)) {
-    return banner_template;
+    out.text = banner_template;
+    return out;
   }
-  return render.data;
+  out.text = render.data;
+  return out;
 }
 
 enum class LocalInputPollStatus_ { Ready, Closed, Error };
@@ -529,15 +604,131 @@ SplitTerminalBannerLines_(std::string_view banner) {
   return lines;
 }
 
-void WriteTerminalBannerLines_(const std::vector<std::string> &lines) {
-  for (size_t i = 0; i < lines.size(); ++i) {
-    WriteTerminalBytes_(
-        AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", static_cast<int>(i + 1U)));
-    if (!lines[i].empty()) {
-      ic_term_write_bbcode(lines[i].c_str());
-    }
+[[nodiscard]] std::vector<std::string> BuildGodModeHintLines_() {
+  return {"[#d7d7d7 b]Ctrl+][/]: [#d7d7d7]Tab/Right next | "
+          "Shift+Tab/Left previous | q detach | Esc back | Ctrl+] send[/]"};
+}
+
+[[nodiscard]] std::optional<std::array<int, 3>>
+ParseBannerBackgroundRgb_(std::string_view raw_background) {
+  const std::string text = AMStr::Strip(std::string(raw_background));
+  if (text.empty()) {
+    return std::nullopt;
   }
-  ic_term_flush();
+  for (size_t i = 0; i + 7U <= text.size(); ++i) {
+    if (text[i] != '#') {
+      continue;
+    }
+    const std::string_view hex(text.data() + i + 1U, 6U);
+    bool all_hex = true;
+    for (char ch : hex) {
+      if (!std::isxdigit(static_cast<unsigned char>(ch))) {
+        all_hex = false;
+        break;
+      }
+    }
+    if (!all_hex) {
+      continue;
+    }
+    int value = 0;
+    const auto result =
+        std::from_chars(hex.data(), hex.data() + hex.size(), value, 16);
+    if (result.ec != std::errc{} || result.ptr != hex.data() + hex.size()) {
+      continue;
+    }
+    return std::array<int, 3>{(value >> 16) & 0xff, (value >> 8) & 0xff,
+                              value & 0xff};
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::string
+BuildBackgroundAnsi_(std::string_view raw_background) {
+  const auto rgb = ParseBannerBackgroundRgb_(raw_background);
+  if (!rgb.has_value()) {
+    return {};
+  }
+  return AMStr::fmt("\x1b[48;2;{};{};{}m", (*rgb)[0], (*rgb)[1], (*rgb)[2]);
+}
+
+[[nodiscard]] size_t MeasureBannerLineWidth_(const std::string &line) {
+  std::string plain = AMPromptUI::StripStyleForMeasure(line);
+  plain = AMPromptUI::NormalizeMeasureLine(plain);
+  return AMStr::DisplayWidthUtf8(plain);
+}
+
+[[nodiscard]] std::pair<size_t, size_t>
+ComputeBannerPadding_(const std::string &line, int cols,
+                      TerminalBannerAlign_ align) {
+  const size_t width = MeasureBannerLineWidth_(line);
+  const size_t target = static_cast<size_t>(std::max(1, cols));
+  if (width >= target) {
+    return {0U, 0U};
+  }
+  const size_t padding = target - width;
+  if (align == TerminalBannerAlign_::Right) {
+    return {padding, 0U};
+  }
+  if (align == TerminalBannerAlign_::Center) {
+    return {padding / 2U, padding - padding / 2U};
+  }
+  return {0U, padding};
+}
+
+void WriteTerminalFixedLine_(int row, int cols, const std::string &line,
+                             const std::string &background_ansi,
+                             TerminalBannerAlign_ align) {
+  WriteTerminalBytes_(AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row));
+  const auto [left_pad, right_pad] = ComputeBannerPadding_(line, cols, align);
+  if (!background_ansi.empty()) {
+    WriteTerminalBytes_(background_ansi);
+  }
+  if (left_pad > 0U) {
+    WriteTerminalBytes_(std::string(left_pad, ' '));
+  }
+  if (!line.empty()) {
+    ic_term_write_bbcode(line.c_str());
+    ic_term_flush();
+  }
+  if (!background_ansi.empty()) {
+    WriteTerminalBytes_(background_ansi);
+  }
+  if (right_pad > 0U) {
+    WriteTerminalBytes_(std::string(right_pad, ' '));
+  }
+  if (!background_ansi.empty()) {
+    WriteTerminalBytes_("\x1b[0m");
+  }
+}
+
+void WriteTerminalFixedHeader_(const std::vector<std::string> &banner_lines,
+                               const std::vector<std::string> &hint_lines,
+                               const std::string &banner_background,
+                               TerminalBannerAlign_ banner_align,
+                               bool show_hint, int visible_header_rows,
+                               int cols) {
+  if (visible_header_rows <= 0) {
+    return;
+  }
+  const std::string background_ansi = BuildBackgroundAnsi_(banner_background);
+  int row = 1;
+  for (const auto &line : banner_lines) {
+    if (row > visible_header_rows) {
+      return;
+    }
+    WriteTerminalFixedLine_(row, cols, line, background_ansi, banner_align);
+    ++row;
+  }
+  if (!show_hint) {
+    return;
+  }
+  for (const auto &line : hint_lines) {
+    if (row > visible_header_rows) {
+      return;
+    }
+    WriteTerminalFixedLine_(row, cols, line, {}, TerminalBannerAlign_::Left);
+    ++row;
+  }
 }
 
 constexpr const char *kTerminalEnterAlternateScreen_ = "\x1b[?1049h";
@@ -1863,8 +2054,19 @@ ECM TerminalInterfaceService::LaunchTerminal(
     return status_result.rcm;
   }
 
+  const TerminalBannerConfig_ terminal_banner = ResolveTerminalBanner_(
+      style_service_, target, terminal_request, terminal_os_type);
+  const std::vector<std::string> terminal_banner_lines =
+      SplitTerminalBannerLines_(terminal_banner.text);
+  const std::vector<std::string> god_mode_hint_lines =
+      BuildGodModeHintLines_();
   const AMTerminalTools::TerminalViewportInfo geometry =
       AMTerminalTools::GetTerminalViewportInfo();
+  const int initial_header_rows = FixedHeaderLineCount_(
+      terminal_banner_lines, god_mode_hint_lines, arg.start_in_god_mode,
+      geometry.rows);
+  const AMTerminalTools::TerminalViewportInfo initial_content_geometry =
+      BuildContentGeometry_(geometry, initial_header_rows);
   std::string channel_name = AMStr::Strip(status_result.data.current_channel);
   if (channel_name.empty()) {
     channel_name = AMDomain::terminal::kDefaultTerminalChannelName;
@@ -1875,9 +2077,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
   if (!(current_channel_result.rcm) ||
       (current_channel_result.data &&
        current_channel_result.data->GetState().closed)) {
-    auto open_result =
-        terminal_handle->OpenChannel(BuildChannelOpenArgs_(channel_name, geometry),
-                                     control);
+    auto open_result = terminal_handle->OpenChannel(
+        BuildChannelOpenArgs_(channel_name, initial_content_geometry), control);
     if (!(open_result.rcm) && open_result.rcm.code != EC::TargetAlreadyExists) {
       prompt_io_manager_.ErrorFormat(open_result.rcm);
       return open_result.rcm;
@@ -1970,10 +2171,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
   std::string pending_local_input = {};
   std::mutex requested_switch_mutex = {};
   std::string requested_switch_key = {};
-  AMTerminalTools::TerminalViewportInfo last_geometry = geometry;
-  const std::vector<std::string> god_mode_banner_lines =
-      SplitTerminalBannerLines_(ResolveTerminalBanner_(
-          style_service_, target, terminal_request, terminal_os_type));
+  AMTerminalTools::TerminalViewportInfo last_geometry = {};
+  int last_fixed_header_rows = -1;
 #ifdef _WIN32
   MouseWheelMonitor_ mouse_wheel_monitor = {};
   HWND const terminal_foreground_window =
@@ -2072,6 +2271,9 @@ ECM TerminalInterfaceService::LaunchTerminal(
       return;
     }
     auto const current_geometry = AMTerminalTools::GetTerminalViewportInfo();
+    const int row_offset = FixedHeaderLineCount_(
+        terminal_banner_lines, god_mode_hint_lines, god_mode,
+        current_geometry.rows);
     const std::vector<std::string> current_lines = SplitAnsiFrameLines_(frame);
     const std::string input_protocol_ansi =
         BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active);
@@ -2105,8 +2307,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
       if (input_protocol_changed) {
         cursor_only += input_protocol_ansi;
       }
-      const int row_offset =
-          god_mode ? static_cast<int>(god_mode_banner_lines.size()) : 0;
       const int cursor_row =
           std::clamp(vt_snapshot.cursor_row + 1 + row_offset, 1,
                      std::max(1, current_geometry.rows));
@@ -2128,13 +2328,14 @@ ECM TerminalInterfaceService::LaunchTerminal(
     repaint += input_protocol_ansi;
     repaint += "\x1b[?25l";
     repaint += "\x1b[0m";
-    const int row_offset =
-        god_mode ? static_cast<int>(god_mode_banner_lines.size()) : 0;
     if (force_full_clear) {
       repaint += kTerminalClearAndHome_;
       for (size_t i = 0; i < current_lines.size(); ++i) {
-        repaint +=
-            AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U + row_offset));
+        const int target_row = static_cast<int>(i + 1U + row_offset);
+        if (target_row > current_geometry.rows) {
+          break;
+        }
+        repaint += AMStr::fmt("\x1b[{};1H", target_row);
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
       }
@@ -2144,20 +2345,29 @@ ECM TerminalInterfaceService::LaunchTerminal(
         if (last_rendered_lines[i] == current_lines[i]) {
           continue;
         }
-        repaint +=
-            AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U + row_offset));
+        const int target_row = static_cast<int>(i + 1U + row_offset);
+        if (target_row > current_geometry.rows) {
+          continue;
+        }
+        repaint += AMStr::fmt("\x1b[{};1H", target_row);
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
       }
       for (size_t i = overlap; i < current_lines.size(); ++i) {
-        repaint +=
-            AMStr::fmt("\x1b[{};1H", static_cast<int>(i + 1U + row_offset));
+        const int target_row = static_cast<int>(i + 1U + row_offset);
+        if (target_row > current_geometry.rows) {
+          break;
+        }
+        repaint += AMStr::fmt("\x1b[{};1H", target_row);
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
       }
       for (size_t i = current_lines.size(); i < last_rendered_lines.size(); ++i) {
-        repaint += AMStr::fmt("\x1b[{};1H\x1b[2K",
-                              static_cast<int>(i + 1U + row_offset));
+        const int target_row = static_cast<int>(i + 1U + row_offset);
+        if (target_row > current_geometry.rows) {
+          break;
+        }
+        repaint += AMStr::fmt("\x1b[{};1H\x1b[2K", target_row);
       }
     }
     std::string restore_cursor_after_banner = {};
@@ -2182,8 +2392,11 @@ ECM TerminalInterfaceService::LaunchTerminal(
       last_server_in_alternate_screen = false;
     }
     WriteTerminalBytes_(repaint);
-    if (god_mode && !god_mode_banner_lines.empty()) {
-      WriteTerminalBannerLines_(god_mode_banner_lines);
+    if (row_offset > 0) {
+      WriteTerminalFixedHeader_(terminal_banner_lines, god_mode_hint_lines,
+                                terminal_banner.background,
+                                terminal_banner.align, god_mode, row_offset,
+                                current_geometry.cols);
       WriteTerminalBytes_(restore_cursor_after_banner);
     }
     last_rendered_lines = current_lines;
@@ -2258,24 +2471,32 @@ ECM TerminalInterfaceService::LaunchTerminal(
       return;
     }
     auto const current_geometry = AMTerminalTools::GetTerminalViewportInfo();
+    const bool god_mode = god_mode_active.load(std::memory_order_acquire);
+    const int fixed_header_rows = FixedHeaderLineCount_(
+        terminal_banner_lines, god_mode_hint_lines, god_mode,
+        current_geometry.rows);
     if (current_geometry.cols == last_geometry.cols &&
         current_geometry.rows == last_geometry.rows &&
         current_geometry.width == last_geometry.width &&
-        current_geometry.height == last_geometry.height) {
+        current_geometry.height == last_geometry.height &&
+        fixed_header_rows == last_fixed_header_rows) {
       return;
     }
 
+    const auto content_geometry =
+        BuildContentGeometry_(current_geometry, fixed_header_rows);
     AMDomain::terminal::ChannelResizeArgs resize_args = {};
-    resize_args.cols = std::max(1, current_geometry.cols);
-    resize_args.rows = std::max(1, current_geometry.rows);
-    resize_args.width = std::max(0, current_geometry.width);
-    resize_args.height = std::max(0, current_geometry.height);
+    resize_args.cols = std::max(1, content_geometry.cols);
+    resize_args.rows = std::max(1, content_geometry.rows);
+    resize_args.width = std::max(0, content_geometry.width);
+    resize_args.height = std::max(0, content_geometry.height);
     auto resize_result = channel_port->Resize(resize_args, control);
     if (!(resize_result.rcm)) {
       return;
     }
 
     last_geometry = current_geometry;
+    last_fixed_header_rows = fixed_header_rows;
     local_viewport_offset.store(
         clamp_local_viewport_offset(
             local_viewport_offset.load(std::memory_order_acquire)),

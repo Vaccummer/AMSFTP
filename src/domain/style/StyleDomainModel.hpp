@@ -126,9 +126,15 @@ struct PathHighlightStyle {
   std::string find_pattern = "";
 };
 
+struct TerminalBannerStyle {
+  std::string template_text = "";
+  std::string background = "";
+  std::string align = "left";
+};
+
 struct TerminalStyle {
-  std::string banner_template =
-      "[#5e63b6 b]Welcome to use CLIPrompt![/]\n";
+  TerminalBannerStyle banner = {};
+  std::string banner_template = "";
 };
 
 struct StyleConfig {

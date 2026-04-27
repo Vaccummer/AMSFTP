@@ -1,0 +1,13 @@
+exit
+ls
+cd CodeLib/
+ssh 
+ssh mew
+ls
+exit
+ls
+cd Applications
+ls
+exit
+ls
+exit
