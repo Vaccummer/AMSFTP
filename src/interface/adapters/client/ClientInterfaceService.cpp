@@ -732,9 +732,7 @@ std::string ResolveLocalUsername_() {
 }
 
 int DefaultPortForProtocol_(ClientProtocol protocol) {
-  if (protocol == ClientProtocol::FTP) {
-    return AMDomain::host::DefaultFTPPort;
-  }
+  (void)protocol;
   return AMDomain::host::DefaultSFTPPort;
 }
 
@@ -742,7 +740,7 @@ std::string DefaultUsernameForProtocol_(ClientProtocol protocol) {
   if (protocol == ClientProtocol::FTP) {
     return "anonymous";
   }
-  return ResolveLocalUsername_();
+  return "";
 }
 
 bool PromptHostText_(PromptIOManager &prompt, const std::string &label,
@@ -2905,6 +2903,11 @@ ECM ClientInterfaceService::RemoveHosts(
 }
 
 ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
+  const ECM lock_rcm = config_service_.EnsureConfigWriteLock();
+  if (!(lock_rcm)) {
+    prompt_io_manager_.ErrorFormat(lock_rcm);
+    return lock_rcm;
+  }
   const std::string nickname = AMStr::Strip(request.nickname);
   const std::string field = AMStr::lowercase(AMStr::Strip(request.attrname));
   if (nickname.empty()) {

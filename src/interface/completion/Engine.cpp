@@ -329,12 +329,20 @@ void AMCompleteEngine::LoadConfig() {
   args_.complete_select_sign = ">";
   args_.complete_order_num_style = "";
   args_.complete_help_style = "";
+  args_.attr_valid_style = "";
+  args_.attr_invalid_style = "";
 
   if (style_service_ != nullptr) {
-    const auto style_cfg = style_service_->GetInitArg().style.complete_menu;
-    args_.complete_select_sign = style_cfg.item_select_sign;
-    args_.complete_order_num_style = style_cfg.order_num_style;
-    args_.complete_help_style = style_cfg.help_style;
+    const auto style_cfg = style_service_->GetInitArg().style;
+    args_.complete_select_sign = style_cfg.complete_menu.item_select_sign;
+    args_.complete_order_num_style = style_cfg.complete_menu.order_num_style;
+    args_.complete_help_style = style_cfg.complete_menu.help_style;
+    args_.attr_valid_style = NormalizeStyleForIc_(
+        style_cfg.common.attr_valid.empty() ? "[ansi-blue]"
+                                            : style_cfg.common.attr_valid);
+    args_.attr_invalid_style = NormalizeStyleForIc_(
+        style_cfg.common.attr_invalid.empty() ? "[ansi-red]"
+                                              : style_cfg.common.attr_invalid);
   }
 
   args_.complete_delay_ms = static_cast<int>(completer_arg.complete_delay_ms);

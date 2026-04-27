@@ -136,13 +136,7 @@ bool DecodeHostConfig_(const std::string &nickname, const Json &json,
       parsed_port <= 65535) {
     cfg.request.port = parsed_port;
   } else {
-    if (cfg.request.protocol == AMDomain::host::ClientProtocol::FTP) {
-      cfg.request.port = kDefaultFTPPort;
-    } else if (cfg.request.protocol == AMDomain::host::ClientProtocol::HTTP) {
-      cfg.request.port = kDefaultHTTPPort;
-    } else {
-      cfg.request.port = kDefaultSFTPPort;
-    }
+    cfg.request.port = kDefaultSFTPPort;
   }
 
   *out = std::move(cfg);
@@ -1349,6 +1343,14 @@ void DecodeCommon_(const Json &json, InputHighlightStyle *out) {
                          &out->termname_new_valid);
   (void)AMJson::QueryKey(json, {"termname", "new", "invalid"},
                          &out->termname_new_invalid);
+  (void)AMJson::QueryKey(json, {"termname", "clientname", "ok"},
+                         &out->termname_clientname_ok);
+  (void)AMJson::QueryKey(json, {"termname", "clientname", "disconnected"},
+                         &out->termname_clientname_disconnected);
+  (void)AMJson::QueryKey(json, {"termname", "clientname", "unestablished"},
+                         &out->termname_clientname_unestablished);
+  (void)AMJson::QueryKey(json, {"termname", "clientname", "nonexistent"},
+                         &out->termname_clientname_nonexistent);
 
   (void)AMJson::QueryKey(json, {"attr", "valid"}, &out->attr_valid);
   (void)AMJson::QueryKey(json, {"attr", "invalid"},
@@ -1405,6 +1407,10 @@ Json EncodeCommon_(const InputHighlightStyle &in) {
   out["termname"]["nonexistent"] = in.termname_nonexistent;
   out["termname"]["new"]["valid"] = in.termname_new_valid;
   out["termname"]["new"]["invalid"] = in.termname_new_invalid;
+  out["termname"]["clientname"]["ok"] = in.termname_clientname_ok;
+  out["termname"]["clientname"]["disconnected"] = in.termname_clientname_disconnected;
+  out["termname"]["clientname"]["unestablished"] = in.termname_clientname_unestablished;
+  out["termname"]["clientname"]["nonexistent"] = in.termname_clientname_nonexistent;
 
   out["attr"]["valid"] = in.attr_valid;
   out["attr"]["invalid"] = in.attr_invalid;

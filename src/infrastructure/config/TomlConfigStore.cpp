@@ -10,9 +10,8 @@
 namespace {
 using DocumentKind = AMDomain::config::DocumentKind;
 
-constexpr std::array<DocumentKind, 4> kRequiredKinds = {
-    DocumentKind::Config, DocumentKind::Settings, DocumentKind::KnownHosts,
-    DocumentKind::History};
+constexpr std::array<DocumentKind, 3> kRequiredKinds = {
+    DocumentKind::Config, DocumentKind::Settings, DocumentKind::KnownHosts};
 
 bool IsBackupStampFolder_(const std::string &name) {
   auto match_pattern = [&](const std::array<size_t, 4> &dash_pos,

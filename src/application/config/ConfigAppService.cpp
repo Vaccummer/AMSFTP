@@ -13,11 +13,10 @@ namespace {
 using AMDomain::config::ConfigBackupSet;
 using AMDomain::config::DocumentKind;
 
-constexpr std::array<DocumentKind, 4> kDocumentKindOrder = {
+constexpr std::array<DocumentKind, 3> kDocumentKindOrder = {
     DocumentKind::Config,
     DocumentKind::Settings,
     DocumentKind::KnownHosts,
-    DocumentKind::History,
 };
 } // namespace
 
@@ -106,7 +105,7 @@ ECM ConfigAppService::Dump(AMDomain::config::DocumentKind kind,
     TraceConfig_(rcm, AMStr::ToString(kind), "config.dump");
     return rcm;
   }
-  if (dst_path.empty() && kind != DocumentKind::History) {
+  if (dst_path.empty()) {
     const ECM lock_rcm = EnsureConfigWriteLock();
     if (!(lock_rcm)) {
       TraceConfig_(lock_rcm, AMStr::ToString(kind), "config.dump",
@@ -137,6 +136,14 @@ ECM ConfigAppService::EnsureConfigWriteLock() {
 
 bool ConfigAppService::HasConfigWriteLock() const {
   return !write_lock_ || write_lock_->IsHeld();
+}
+
+std::filesystem::path ConfigAppService::GetConfigWriteLockPath() const {
+  return write_lock_ ? write_lock_->LockPath() : std::filesystem::path();
+}
+
+std::string ConfigAppService::GetConfigWriteLockOwnerInfo() const {
+  return write_lock_ ? write_lock_->OwnerInfo() : std::string();
 }
 
 /**
@@ -337,7 +344,7 @@ ECM ConfigAppService::FlushDirtyParticipants() {
   return first_error;
 }
 
-ECM ConfigAppService::FlushAndDumpDirtyDocuments(bool include_history) {
+ECM ConfigAppService::FlushAndDumpDirtyDocuments() {
   ECM rcm = FlushDirtyParticipants();
   if (!(rcm)) {
     return rcm;
@@ -346,9 +353,6 @@ ECM ConfigAppService::FlushAndDumpDirtyDocuments(bool include_history) {
   ECM first_error = OK;
   for (const ConfigDocumentState &doc : ListDocuments()) {
     if (doc.status != ConfigDocumentStatus::Dirty) {
-      continue;
-    }
-    if (!include_history && doc.kind == DocumentKind::History) {
       continue;
     }
     const ECM dump_rcm = Dump(doc.kind, "", false);
@@ -528,7 +532,6 @@ ConfigAppService::BuildBackupTargets_(int64_t backup_time_s) const {
   out.config_file = out.stamp_dir / "config.toml";
   out.settings_file = out.stamp_dir / "settings.toml";
   out.known_hosts_file = out.stamp_dir / "known_hosts.toml";
-  out.history_file = out.stamp_dir / "history.toml";
   return out;
 }
 
@@ -543,9 +546,6 @@ ConfigAppService::ResolveBackupPath_(const BackupTargets &targets,
   }
   if (kind == DocumentKind::KnownHosts) {
     return targets.known_hosts_file;
-  }
-  if (kind == DocumentKind::History) {
-    return targets.history_file;
   }
   return {};
 }

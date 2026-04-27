@@ -11,8 +11,7 @@ namespace AMDomain::config {
 enum class DocumentKind {
   Config = 1,
   Settings = 2,
-  KnownHosts = 3,
-  History = 4
+  KnownHosts = 3
 };
 
 /**

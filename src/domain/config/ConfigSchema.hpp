@@ -945,25 +945,6 @@ inline constexpr const char *kKnownHostsTomlSchemaJson = R"json(
 }
 )json";
 
-inline constexpr const char *kHistoryTomlSchemaJson = R"json(
-{
-  "type": "object",
-  "additionalProperties": {
-    "type": "object",
-    "properties": {
-      "commands": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "uniqueItems": false
-      }
-    },
-    "additionalProperties": false
-  }
-}
-)json";
-
 [[nodiscard]] inline const char *GetSchemaJson(DocumentKind kind) {
   switch (kind) {
   case DocumentKind::Config:
@@ -972,8 +953,6 @@ inline constexpr const char *kHistoryTomlSchemaJson = R"json(
     return kSettingsTomlSchemaJson;
   case DocumentKind::KnownHosts:
     return kKnownHostsTomlSchemaJson;
-  case DocumentKind::History:
-    return kHistoryTomlSchemaJson;
   default:
     return "{}";
   }

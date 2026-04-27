@@ -406,11 +406,6 @@ ECM RegisterConfigSyncPorts_(ApplicationAssemblyState *state) {
   if (!rcm) {
     return rcm;
   }
-  rcm = register_port(state->prompt_history_manager.get(),
-                      "PromptHistoryManager");
-  if (!rcm) {
-    return rcm;
-  }
   return OK;
 }
 
@@ -1079,15 +1074,6 @@ ECM ShutdownRuntime_(AppRuntime &runtime) {
   }
   if (runtime.managers.application.transfer_service.IsReady()) {
     runtime.managers.application.transfer_service.SetInstance(nullptr);
-  }
-  if (!runtime.run_ctx.force_exit &&
-      runtime.managers.interfaces.config_interface_service.IsReady() &&
-      (!runtime.managers.application.config_service.IsReady() ||
-       runtime.managers.application.config_service->HasConfigWriteLock())) {
-    const ECM save_rcm =
-        runtime.managers.interfaces.config_interface_service->SaveAll();
-    trace_runtime(save_rcm, "runtime.shutdown.save_config", "<config>");
-    (void)RecordCleanupError_(save_rcm, &first_error, "save config");
   }
   if (runtime.managers.application.log_manager.IsReady()) {
     runtime.managers.application.log_manager->ClearLoggers();

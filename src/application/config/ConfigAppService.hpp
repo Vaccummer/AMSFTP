@@ -118,6 +118,16 @@ public:
   [[nodiscard]] bool HasConfigWriteLock() const;
 
   /**
+   * @brief Return the config write lock file path.
+   */
+  [[nodiscard]] std::filesystem::path GetConfigWriteLockPath() const;
+
+  /**
+   * @brief Return owner info for the config write lock.
+   */
+  [[nodiscard]] std::string GetConfigWriteLockOwnerInfo() const;
+
+  /**
    * @brief Close store resources and reset app state.
    */
   void CloseHandles();
@@ -162,7 +172,7 @@ public:
    * @brief Flush dirty sync participants and dump dirty documents in one
    * command-boundary transaction.
    */
-  ECM FlushAndDumpDirtyDocuments(bool include_history = false);
+  ECM FlushAndDumpDirtyDocuments();
 
   /**
    * @brief Return all configured document kinds with current status.
@@ -249,7 +259,6 @@ private:
     std::filesystem::path config_file = {};
     std::filesystem::path settings_file = {};
     std::filesystem::path known_hosts_file = {};
-    std::filesystem::path history_file = {};
   };
 
   struct BackupContext {

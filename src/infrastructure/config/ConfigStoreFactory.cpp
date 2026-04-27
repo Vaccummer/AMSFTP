@@ -15,9 +15,7 @@ BuildDefaultConfigStoreInitArg(const std::filesystem::path &root_dir) {
       {DocumentKind::Settings,
        {DocumentKind::Settings, root_dir / "config" / "settings.toml"}},
       {DocumentKind::KnownHosts,
-       {DocumentKind::KnownHosts, root_dir / "config" / "known_hosts.toml"}},
-      {DocumentKind::History,
-       {DocumentKind::History, root_dir / "config" / "history.toml"}}};
+       {DocumentKind::KnownHosts, root_dir / "config" / "known_hosts.toml"}}};
   return arg;
 }
 
