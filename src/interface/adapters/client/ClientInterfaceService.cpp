@@ -721,16 +721,6 @@ DedupTargets_(const std::vector<std::string> &targets) {
       normalized, [](const std::string &value) { return value; });
 }
 
-std::string ResolveLocalUsername_() {
-  std::string local_user = "";
-#ifdef _WIN32
-  AMStr::GetEnv("USERNAME", &local_user);
-#else
-  AMStr::GetEnv("USER", &local_user);
-#endif
-  return local_user.empty() ? std::string("local") : local_user;
-}
-
 int DefaultPortForProtocol_(ClientProtocol protocol) {
   (void)protocol;
   return AMDomain::host::DefaultSFTPPort;

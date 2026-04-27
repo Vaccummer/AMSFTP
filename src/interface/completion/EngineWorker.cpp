@@ -620,8 +620,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     } else {
       push_target(AMCompletionTarget::Path);
     }
-  } else if (!semantic_terminal &&
-             (has_at || IsPathLikeText(ctx.token_prefix, false))) {
+  } else if (!semantic_terminal && prefix_has_path_sign) {
     push_target(AMCompletionTarget::Path);
   }
 

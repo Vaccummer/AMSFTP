@@ -19,6 +19,12 @@
 #include <windows.h>
 #include <winsock2.h>
 
+#else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <poll.h>
+#include <unistd.h>
 #endif
 
 namespace AMInfra::terminal::SFTP {
@@ -72,6 +78,16 @@ struct ChannelLoopEvents_ {
   HANDLE stop_event = nullptr;
   HANDLE state_event = nullptr;
   HANDLE interrupt_event = nullptr;
+  std::unique_ptr<AMDomain::client::InterruptWakeupSafeGuard>
+      foreground_wake_guard = nullptr;
+};
+#else
+struct ChannelLoopEvents_ {
+  SOCKET remote_socket = INVALID_SOCKET;
+  int wake_pipe[2] = {-1, -1};
+  int stop_pipe[2] = {-1, -1};
+  int state_pipe[2] = {-1, -1};
+  int interrupt_pipe[2] = {-1, -1};
   std::unique_ptr<AMDomain::client::InterruptWakeupSafeGuard>
       foreground_wake_guard = nullptr;
 };
@@ -402,9 +418,38 @@ public:
     NotifyState_();
     return OK;
 #else
-    (void)start_args;
-    return Err(EC::OperationUnsupported, "terminal.channel.loop.start",
-               GetChannelName(), "Realtime loop is Windows-only");
+    auto socket_result = GetWaitHandle();
+    if (!socket_result.rcm || socket_result.data == INVALID_SOCKET) {
+      return socket_result.rcm
+                 ? Err(EC::NoConnection, "terminal.channel.loop.start",
+                       GetChannelName(), "Remote socket is invalid")
+                 : socket_result.rcm;
+    }
+
+    loop_events_.remote_socket = socket_result.data;
+    if (!EnsureLoopEvents_()) {
+      return Err(EC::CommonFailure, "terminal.channel.loop.start",
+                 GetChannelName(), std::strerror(errno));
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (start_args.write_kick_timeout_ms >= 0) {
+        foreground_.write_kick_timeout_ms = start_args.write_kick_timeout_ms;
+      }
+    }
+
+    if (loop_started_.load(std::memory_order_acquire)) {
+      return OK;
+    }
+
+    stop_requested_.store(false, std::memory_order_release);
+    DrainPipe_(loop_events_.stop_pipe[0]);
+    DrainPipe_(loop_events_.wake_pipe[0]);
+    loop_thread_ = std::thread([this]() { RunLoop_(); });
+    loop_started_.store(true, std::memory_order_release);
+    NotifyState_();
+    return OK;
 #endif
   }
 
@@ -443,14 +488,21 @@ public:
           std::max(0, bind_args.write_kick_timeout_ms);
       key_ctrl_state_.store(false, std::memory_order_release);
       foreground_.control_token = bind_args.control.ControlToken();
-#ifdef _WIN32
       loop_events_.foreground_wake_guard.reset();
+#ifdef _WIN32
       if (loop_events_.interrupt_event != nullptr &&
           foreground_.control_token) {
         loop_events_.foreground_wake_guard =
             std::make_unique<AMDomain::client::InterruptWakeupSafeGuard>(
                 foreground_.control_token,
                 [this]() { (void)SetEvent(loop_events_.interrupt_event); });
+      }
+#else
+      if (loop_events_.interrupt_pipe[1] >= 0 && foreground_.control_token) {
+        loop_events_.foreground_wake_guard =
+            std::make_unique<AMDomain::client::InterruptWakeupSafeGuard>(
+                foreground_.control_token,
+                [this]() { SignalPipe_(loop_events_.interrupt_pipe[1]); });
       }
 #endif
     }
@@ -469,9 +521,7 @@ public:
       foreground_.input_transformer = {};
       foreground_.control_token = nullptr;
       key_ctrl_state_.store(false, std::memory_order_release);
-#ifdef _WIN32
       loop_events_.foreground_wake_guard.reset();
-#endif
     }
     (void)DetachConsumer();
     NotifyWake_();
@@ -489,9 +539,7 @@ public:
       foreground_.input_transformer = {};
       foreground_.control_token = nullptr;
       key_ctrl_state_.store(false, std::memory_order_release);
-#ifdef _WIN32
       loop_events_.foreground_wake_guard.reset();
-#endif
     }
     (void)DetachConsumer();
     NotifyWake_();
@@ -512,7 +560,7 @@ public:
     out.state_wait_handle =
         reinterpret_cast<std::intptr_t>(loop_events_.state_event);
 #else
-    out.state_wait_handle = -1;
+    out.state_wait_handle = loop_events_.state_pipe[0];
 #endif
     return out;
   }
@@ -910,12 +958,14 @@ private:
 
     while (!stop_requested_.load(std::memory_order_acquire)) {
       bool fg = false;
+      bool has_pending_send = false;
       std::intptr_t key_handle = -1;
       AMAtomic<std::vector<char>> *key_cache = nullptr;
       int write_kick_timeout_ms = 0;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         fg = foreground_.foreground_bound;
+        has_pending_send = !foreground_.send_buffer.empty();
         key_handle = foreground_.key_event_handle;
         key_cache = foreground_.key_cache;
         write_kick_timeout_ms = foreground_.write_kick_timeout_ms;
@@ -925,7 +975,7 @@ private:
       }
 
       long mask = FD_READ | FD_CLOSE;
-      if (!foreground_.send_buffer.empty()) {
+      if (has_pending_send) {
         mask |= FD_WRITE;
       }
       if (WSAEventSelect(loop_events_.remote_socket, loop_events_.socket_event,
@@ -1164,11 +1214,344 @@ private:
     FlushSend_();
   }
 #else
-  void CloseLoopEvents_() {}
-  void RequestStop_() {}
-  void JoinLoop_() {}
-  void NotifyState_() const {}
-  void NotifyWake_() const {}
+  static void ClosePipe_(int pipefd[2]) {
+    if (pipefd[0] >= 0) {
+      (void)close(pipefd[0]);
+      pipefd[0] = -1;
+    }
+    if (pipefd[1] >= 0) {
+      (void)close(pipefd[1]);
+      pipefd[1] = -1;
+    }
+  }
+
+  static void DrainPipe_(int fd) {
+    if (fd < 0) {
+      return;
+    }
+    std::array<char, 64> buffer = {};
+    while (read(fd, buffer.data(), buffer.size()) > 0) {
+    }
+  }
+
+  static bool EnsurePipe_(int pipefd[2]) {
+    if (pipefd[0] >= 0 && pipefd[1] >= 0) {
+      return true;
+    }
+    ClosePipe_(pipefd);
+    if (pipe(pipefd) != 0) {
+      pipefd[0] = -1;
+      pipefd[1] = -1;
+      return false;
+    }
+    for (int i = 0; i < 2; ++i) {
+      const int flags = fcntl(pipefd[i], F_GETFL, 0);
+      if (flags >= 0) {
+        (void)fcntl(pipefd[i], F_SETFL, flags | O_NONBLOCK);
+      }
+    }
+    return true;
+  }
+
+  static void SignalPipe_(int fd) {
+    if (fd < 0) {
+      return;
+    }
+    const char value = 1;
+    (void)write(fd, &value, 1);
+  }
+
+  bool EnsureLoopEvents_() {
+    return EnsurePipe_(loop_events_.wake_pipe) &&
+           EnsurePipe_(loop_events_.stop_pipe) &&
+           EnsurePipe_(loop_events_.state_pipe) &&
+           EnsurePipe_(loop_events_.interrupt_pipe);
+  }
+
+  void CloseLoopEvents_() {
+    loop_events_.foreground_wake_guard.reset();
+    ClosePipe_(loop_events_.interrupt_pipe);
+    ClosePipe_(loop_events_.state_pipe);
+    ClosePipe_(loop_events_.stop_pipe);
+    ClosePipe_(loop_events_.wake_pipe);
+  }
+
+  void NotifyState_() const { SignalPipe_(loop_events_.state_pipe[1]); }
+
+  void NotifyWake_() const { SignalPipe_(loop_events_.wake_pipe[1]); }
+
+  void RequestStop_() {
+    stop_requested_.store(true, std::memory_order_release);
+    SignalPipe_(loop_events_.stop_pipe[1]);
+    NotifyWake_();
+  }
+
+  void JoinLoop_() {
+    if (loop_thread_.joinable()) {
+      loop_thread_.join();
+    }
+    loop_running_.store(false, std::memory_order_release);
+    loop_started_.store(false, std::memory_order_release);
+  }
+
+  void RunLoop_() {
+    loop_running_.store(true, std::memory_order_release);
+    NotifyState_();
+
+    while (!stop_requested_.load(std::memory_order_acquire)) {
+      bool fg = false;
+      bool has_pending_send = false;
+      std::intptr_t key_handle = -1;
+      AMAtomic<std::vector<char>> *key_cache = nullptr;
+      int write_kick_timeout_ms = 0;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fg = foreground_.foreground_bound;
+        has_pending_send = !foreground_.send_buffer.empty();
+        key_handle = foreground_.key_event_handle;
+        key_cache = foreground_.key_cache;
+        write_kick_timeout_ms = foreground_.write_kick_timeout_ms;
+        if (foreground_.closed) {
+          break;
+        }
+      }
+
+      std::array<pollfd, 6> waiters = {};
+      nfds_t count = 0;
+      waiters[count++] = {loop_events_.stop_pipe[0], POLLIN, 0};
+      waiters[count++] = {loop_events_.wake_pipe[0], POLLIN, 0};
+      waiters[count++] = {loop_events_.remote_socket, POLLIN, 0};
+      const nfds_t socket_idx = 2;
+      if (has_pending_send) {
+        waiters[socket_idx].events =
+            static_cast<short>(waiters[socket_idx].events | POLLOUT);
+      }
+      nfds_t key_idx = static_cast<nfds_t>(-1);
+      nfds_t interrupt_idx = static_cast<nfds_t>(-1);
+      if (fg && key_handle >= 0) {
+        key_idx = count;
+        waiters[count++] = {static_cast<int>(key_handle), POLLIN, 0};
+      }
+      if (fg && loop_events_.interrupt_pipe[0] >= 0) {
+        interrupt_idx = count;
+        waiters[count++] = {loop_events_.interrupt_pipe[0], POLLIN, 0};
+      }
+
+      const int wait_rc = poll(waiters.data(), count, -1);
+      if (wait_rc < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        foreground_.last_error =
+            Err(EC::SocketRecvError, "terminal.channel.loop.wait",
+                GetChannelName(), std::strerror(errno));
+        foreground_.closed = true;
+        break;
+      }
+
+      if ((waiters[0].revents & POLLIN) != 0) {
+        DrainPipe_(loop_events_.stop_pipe[0]);
+        break;
+      }
+      if ((waiters[1].revents & POLLIN) != 0) {
+        DrainPipe_(loop_events_.wake_pipe[0]);
+      }
+      if (interrupt_idx != static_cast<nfds_t>(-1) &&
+          (waiters[interrupt_idx].revents & POLLIN) != 0) {
+        DrainPipe_(loop_events_.interrupt_pipe[0]);
+        (void)RequestForegroundDetach();
+        continue;
+      }
+      if (key_idx != static_cast<nfds_t>(-1) &&
+          (waiters[key_idx].revents & POLLIN) != 0) {
+        HandleKeyInput_(key_cache, write_kick_timeout_ms);
+      }
+
+      const short socket_events = waiters[socket_idx].revents;
+      if ((socket_events & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        DrainRemote_();
+      }
+      if ((socket_events & POLLIN) != 0) {
+        DrainRemote_();
+      }
+      if ((socket_events & POLLOUT) != 0) {
+        FlushSend_();
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      foreground_.foreground_bound = false;
+      foreground_.key_event_handle = -1;
+      foreground_.key_cache = nullptr;
+      foreground_.input_transformer = {};
+      foreground_.control_token = nullptr;
+      key_ctrl_state_.store(false, std::memory_order_release);
+      foreground_.closed = true;
+      loop_events_.foreground_wake_guard.reset();
+    }
+    (void)DetachConsumer();
+    loop_running_.store(false, std::memory_order_release);
+    loop_started_.store(false, std::memory_order_release);
+    cache_.MarkChannelClosed(foreground_.last_error);
+    NotifyState_();
+  }
+
+  void DrainRemote_() {
+    for (int i = 0; i < 32; ++i) {
+      auto r = ReadWrapped({32U * 1024U}, {});
+      if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
+        if (r.data.hard_limit_hit) {
+          (void)RawClose_(true, 1500, {});
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!(r.rcm)) {
+          foreground_.last_error = r.rcm;
+        } else if (!(r.data.last_error)) {
+          foreground_.last_error = r.data.last_error;
+        }
+        if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
+          foreground_.closed = true;
+          stop_requested_.store(true, std::memory_order_release);
+          SignalPipe_(loop_events_.stop_pipe[1]);
+          NotifyState_();
+        }
+        return;
+      }
+      if (r.data.output.empty()) {
+        return;
+      }
+    }
+  }
+
+  void FlushSend_() {
+    for (int i = 0; i < 16; ++i) {
+      std::string chunk = {};
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (foreground_.send_buffer.empty()) {
+          return;
+        }
+        size_t const n =
+            std::min<size_t>(32U * 1024U, foreground_.send_buffer.size());
+        chunk.assign(foreground_.send_buffer.data(), n);
+      }
+
+      auto w = WriteRaw({chunk}, {});
+      if (!(w.rcm)) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        foreground_.last_error = w.rcm;
+        if (w.rcm.code == EC::NoConnection ||
+            w.rcm.code == EC::ConnectionLost || w.rcm.code == EC::NoSession ||
+            w.rcm.code == EC::ClientNotFound) {
+          foreground_.closed = true;
+          stop_requested_.store(true, std::memory_order_release);
+          SignalPipe_(loop_events_.stop_pipe[1]);
+          NotifyState_();
+        }
+        return;
+      }
+
+      size_t const consumed =
+          std::min(chunk.size(), static_cast<size_t>(w.data.bytes_written));
+      if (consumed == 0U) {
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (consumed <= foreground_.send_buffer.size()) {
+          foreground_.send_buffer.erase(0, consumed);
+        } else {
+          foreground_.send_buffer.clear();
+        }
+      }
+      if (consumed < chunk.size()) {
+        return;
+      }
+    }
+  }
+
+  void HandleKeyInput_(AMAtomic<std::vector<char>> *key_cache,
+                       int kick_timeout_ms) {
+    if (key_cache == nullptr) {
+      return;
+    }
+    std::vector<char> keys = {};
+    {
+      auto guard = key_cache->lock();
+      if (!guard->empty()) {
+        keys.swap(*guard);
+      }
+    }
+    if (keys.empty()) {
+      return;
+    }
+
+    AMT::ChannelInputTransformer input_transformer = {};
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      input_transformer = foreground_.input_transformer;
+    }
+    if (input_transformer) {
+      std::string transformed =
+          input_transformer(std::string_view(keys.data(), keys.size()));
+      keys.assign(transformed.begin(), transformed.end());
+    }
+    if (keys.empty()) {
+      return;
+    }
+
+    bool detach = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (char const ch : keys) {
+        if (!key_ctrl_state_.load(std::memory_order_acquire)) {
+          if (ch == '\x1d') {
+            key_ctrl_state_.store(true, std::memory_order_release);
+            continue;
+          }
+          foreground_.send_buffer.push_back(ch);
+          continue;
+        }
+
+        if (ch == 'q' || ch == 'Q') {
+          detach = true;
+          key_ctrl_state_.store(false, std::memory_order_release);
+          continue;
+        }
+
+        key_ctrl_state_.store(false, std::memory_order_release);
+        foreground_.send_buffer.push_back(ch);
+      }
+    }
+
+    if (detach) {
+      (void)RequestForegroundDetach();
+      return;
+    }
+
+    FlushSend_();
+    if (kick_timeout_ms <= 0) {
+      return;
+    }
+
+    std::array<pollfd, 3> waiters = {};
+    waiters[0] = {loop_events_.stop_pipe[0], POLLIN, 0};
+    waiters[1] = {loop_events_.wake_pipe[0], POLLIN, 0};
+    waiters[2] = {loop_events_.interrupt_pipe[0], POLLIN, 0};
+    const int wait_rc = poll(waiters.data(), waiters.size(), kick_timeout_ms);
+    if (wait_rc > 0) {
+      if ((waiters[2].revents & POLLIN) != 0) {
+        DrainPipe_(loop_events_.interrupt_pipe[0]);
+        (void)RequestForegroundDetach();
+      }
+      if ((waiters[1].revents & POLLIN) != 0) {
+        DrainPipe_(loop_events_.wake_pipe[0]);
+      }
+    }
+    FlushSend_();
+  }
 #endif
 
   detail::ChannelBinding_ binding_ = {};
@@ -1185,9 +1568,7 @@ private:
   std::atomic<bool> stop_requested_ = false;
   std::atomic<bool> key_ctrl_state_ = false;
 
-#ifdef _WIN32
   detail::ChannelLoopEvents_ loop_events_ = {};
-#endif
 };
 
 } // namespace AMInfra::terminal::SFTP

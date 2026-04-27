@@ -23,8 +23,11 @@
 #else
 #include <cerrno>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <poll.h>
+#include <pwd.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/types.h>
@@ -266,8 +269,9 @@ inline void UpdateWindowsProcessState_(ChannelRuntimeAttrs_ *runtime) {
   }
 }
 
-inline ECM OpenChannelWindows_(ChannelRuntimeAttrs_ *runtime,
-                               const AMT::ChannelInitArgs &init_args) {
+inline ECM OpenChannelWindows_(
+    ChannelRuntimeAttrs_ *runtime, const AMT::ChannelInitArgs &init_args,
+    const AMT::TerminalManagerArg &terminal_manager_arg) {
   if (runtime == nullptr) {
     return Err(EC::InvalidArg, "terminal.channel.init", "channel",
                "Channel runtime is null");
@@ -347,7 +351,9 @@ inline ECM OpenChannelWindows_(ChannelRuntimeAttrs_ *runtime,
   startup.StartupInfo.cb = sizeof(STARTUPINFOEXW);
   startup.lpAttributeList = attr_list;
   PROCESS_INFORMATION proc = {};
-  std::wstring cmd = L"cmd.exe";
+  const std::string init_cmd = AMStr::Strip(terminal_manager_arg.init_cmd);
+  std::wstring cmd =
+      AMStr::wstr(init_cmd.empty() ? std::string("cmd.exe") : init_cmd);
   const BOOL created =
       CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
                      EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
@@ -489,8 +495,9 @@ inline void UpdatePosixProcessState_(ChannelRuntimeAttrs_ *runtime) {
   }
 }
 
-inline ECM OpenChannelPosix_(ChannelRuntimeAttrs_ *runtime,
-                             const AMT::ChannelInitArgs &init_args) {
+inline ECM OpenChannelPosix_(
+    ChannelRuntimeAttrs_ *runtime, const AMT::ChannelInitArgs &init_args,
+    const AMT::TerminalManagerArg &terminal_manager_arg) {
   if (runtime == nullptr) {
     return Err(EC::InvalidArg, "terminal.channel.init", "channel",
                "Channel runtime is null");
@@ -501,13 +508,50 @@ inline ECM OpenChannelPosix_(ChannelRuntimeAttrs_ *runtime,
   ws.ws_xpixel = static_cast<unsigned short>(std::max(0, init_args.width));
   ws.ws_ypixel = static_cast<unsigned short>(std::max(0, init_args.height));
   int master_fd = -1;
+  const char *shell_env = std::getenv("SHELL");
+  std::string shell_path =
+      (shell_env != nullptr && shell_env[0] != '\0') ? shell_env : "";
+  if (shell_path.empty()) {
+    if (const passwd *entry = getpwuid(getuid());
+        entry != nullptr && entry->pw_shell != nullptr &&
+        entry->pw_shell[0] != '\0') {
+      shell_path = entry->pw_shell;
+    }
+  }
+#if defined(__APPLE__)
+  if (shell_path.empty()) {
+    shell_path = "/bin/zsh";
+  }
+#endif
+  if (shell_path.empty()) {
+    shell_path = "/bin/sh";
+  }
+  std::string shell_name = shell_path;
+  const size_t slash = shell_name.find_last_of('/');
+  if (slash != std::string::npos && slash + 1U < shell_name.size()) {
+    shell_name = shell_name.substr(slash + 1U);
+  }
+  const std::string init_cmd = AMStr::Strip(terminal_manager_arg.init_cmd);
+  const std::string shell_exec_cmd =
+      init_cmd.empty() ? std::string() : "exec " + init_cmd;
+
   const pid_t pid = forkpty(&master_fd, nullptr, nullptr, &ws);
   if (pid < 0) {
     return Err(fec(std::error_code(errno, std::generic_category())),
                "terminal.channel.init", "/bin/sh", std::strerror(errno));
   }
   if (pid == 0) {
-    execl("/bin/sh", "sh", static_cast<char *>(nullptr));
+    (void)setenv("TERM",
+                 init_args.term.empty() ? "xterm-256color"
+                                        : init_args.term.c_str(),
+                 1);
+    (void)setenv("COLORTERM", "truecolor", 0);
+    if (!init_cmd.empty()) {
+      execl("/bin/sh", "sh", "-lc", shell_exec_cmd.c_str(),
+            static_cast<char *>(nullptr));
+      _exit(127);
+    }
+    execl(shell_path.c_str(), shell_name.c_str(), static_cast<char *>(nullptr));
     _exit(127);
   }
   const int flags = fcntl(master_fd, F_GETFL, 0);
@@ -827,7 +871,11 @@ private:
       }
 
       if (!progressed) {
+#ifndef _WIN32
+        WaitForLoopActivity_(25);
+#else
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+#endif
       }
     }
 
@@ -844,6 +892,33 @@ private:
       SignalLoopStateChanged_();
     }
   }
+
+#ifndef _WIN32
+  void WaitForLoopActivity_(int timeout_ms) {
+    std::array<pollfd, 2> waiters = {};
+    nfds_t count = 0;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      if (runtime_.master_fd >= 0) {
+        waiters[count++] = {runtime_.master_fd, POLLIN, 0};
+      }
+      if (foreground_.foreground_bound && foreground_.key_event_handle >= 0) {
+        waiters[count++] = {static_cast<int>(foreground_.key_event_handle),
+                            POLLIN, 0};
+      }
+    }
+    if (count == 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms));
+      return;
+    }
+    while (!stop_requested_.load(std::memory_order_acquire)) {
+      const int rc = poll(waiters.data(), count, timeout_ms);
+      if (rc >= 0 || errno != EINTR) {
+        return;
+      }
+    }
+  }
+#endif
 
   [[nodiscard]] ECMData<AMT::ChannelReadResult>
   RawRead_(const AMT::ChannelReadArgs &read_args,
@@ -1118,9 +1193,11 @@ public:
                    AMT::BufferExceedCallback buffer_exceed_callback = {},
                    AMT::TerminalManagerArg terminal_manager_arg = {})
       : identity_(std::move(terminal_key), AMStr::Strip(channel_name)),
+        terminal_manager_arg_(terminal_manager_arg),
         cache_(identity_.terminal_key, identity_.channel_name,
-               std::move(buffer_exceed_callback),
-               std::move(terminal_manager_arg)) {}
+               std::move(buffer_exceed_callback), terminal_manager_arg_) {
+    AMT::NormalizeTerminalManagerArg(&terminal_manager_arg_);
+  }
 
   ~LocalChannelPort() override {
     RequestStop_();
@@ -1212,9 +1289,11 @@ public:
     runtime_.state = OK;
 
 #ifdef _WIN32
-    runtime_.state = detail::OpenChannelWindows_(&runtime_, init_args);
+    runtime_.state =
+        detail::OpenChannelWindows_(&runtime_, init_args, terminal_manager_arg_);
 #else
-    runtime_.state = detail::OpenChannelPosix_(&runtime_, init_args);
+    runtime_.state =
+        detail::OpenChannelPosix_(&runtime_, init_args, terminal_manager_arg_);
 #endif
     foreground_.closed = !(runtime_.state);
     foreground_.last_error = runtime_.state;
@@ -1470,6 +1549,7 @@ public:
 
 private:
   detail::ChannelIdentity_ identity_ = {};
+  AMT::TerminalManagerArg terminal_manager_arg_ = {};
   ChannelCacheStore cache_;
   detail::ChannelRuntimeAttrs_ runtime_ = {};
   detail::ChannelForegroundAttrs_ foreground_ = {};

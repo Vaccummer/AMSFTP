@@ -101,8 +101,6 @@ inline constexpr const char *kKeyFileKey = "keyfile";
 inline constexpr const char *kCompressionKey = "compression";
 inline constexpr const char *kCmdTemplateKey = "cmd_template";
 inline constexpr int kDefaultSFTPPort = 22;
-inline constexpr int kDefaultFTPPort = 21;
-inline constexpr int kDefaultHTTPPort = 80;
 
 bool DecodeHostConfig_(const std::string &nickname, const Json &json,
                        AMDomain::host::HostConfig *out, std::string *error) {
@@ -625,6 +623,8 @@ public:
     *typed = {};
 
     const Json options = OptionsRoot_(root);
+    (void)AMJson::QueryKey(options, {"TerminalManager", "init_cmd"},
+                           &typed->init_cmd);
     (void)AMJson::QueryKey(options, {"TerminalManager", "read_timeout_ms"},
                            &typed->read_timeout_ms);
     (void)AMJson::QueryKey(options, {"TerminalManager", "send_timeout_ms"},
@@ -655,6 +655,7 @@ public:
     (void)AMJson::DelKey(*root,
                          {"Options", "TerminalManager",
                           "channel_cache_threshold_Bytes"});
+    (*root)["Options"]["TerminalManager"]["init_cmd"] = typed.init_cmd;
     (*root)["Options"]["TerminalManager"]["read_timeout_ms"] =
         typed.read_timeout_ms;
     (*root)["Options"]["TerminalManager"]["send_timeout_ms"] =

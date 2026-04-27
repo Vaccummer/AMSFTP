@@ -154,6 +154,9 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
         "TerminalManager": {
           "type": "object",
           "properties": {
+            "init_cmd": {
+              "type": "string"
+            },
             "read_timeout_ms": {
               "type": "integer",
               "anyOf": [

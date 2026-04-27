@@ -1972,8 +1972,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
       protocol != AMDomain::host::ClientProtocol::LOCAL) {
     const ECM rcm =
         Err(EC::OperationUnsupported, "", target.client_name,
-            "Windows realtime terminal launch currently supports SFTP and "
-            "LOCAL channels only");
+            "Realtime terminal launch currently supports SFTP and LOCAL "
+            "channels only");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -2763,7 +2763,19 @@ ECM TerminalInterfaceService::LaunchTerminal(
       detached = true;
       break;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    if (loop_state.state_wait_handle > 0) {
+      pollfd waiter = {};
+      waiter.fd = static_cast<int>(loop_state.state_wait_handle);
+      waiter.events = POLLIN;
+      const int wait_rc = poll(&waiter, 1, 40);
+      if (wait_rc > 0 && (waiter.revents & POLLIN) != 0) {
+        std::array<char, 64> buffer = {};
+        while (read(waiter.fd, buffer.data(), buffer.size()) > 0) {
+        }
+      }
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
     sync_channel_resize_if_needed();
 #endif
   }
