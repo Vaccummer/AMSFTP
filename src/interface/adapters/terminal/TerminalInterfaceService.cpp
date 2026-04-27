@@ -680,6 +680,90 @@ BuildBackgroundAnsi_(std::string_view raw_background) {
   return AMStr::fmt("\x1b[38;2;{};{};{}m", (*rgb)[0], (*rgb)[1], (*rgb)[2]);
 }
 
+[[nodiscard]] bool AppendTerminalBbcodeTokenAnsi_(std::string_view token,
+                                                  std::string *out) {
+  if (out == nullptr) {
+    return false;
+  }
+  const std::string text = AMStr::Strip(std::string(token));
+  if (text.empty()) {
+    return false;
+  }
+  if (text == "/") {
+    *out += "\x1b[0m";
+    return true;
+  }
+
+  bool handled = false;
+  size_t pos = 0U;
+  while (pos < text.size()) {
+    while (pos < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[pos])) != 0) {
+      ++pos;
+    }
+    const size_t start = pos;
+    while (pos < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[pos])) == 0) {
+      ++pos;
+    }
+    if (start == pos) {
+      continue;
+    }
+
+    const std::string_view part(text.data() + start, pos - start);
+    if (part == "b" || part == "bold") {
+      *out += "\x1b[1m";
+      handled = true;
+    } else if (part == "u" || part == "underline") {
+      *out += "\x1b[4m";
+      handled = true;
+    } else if (part == "i" || part == "italic") {
+      *out += "\x1b[3m";
+      handled = true;
+    } else if (part == "!b") {
+      *out += "\x1b[22m";
+      handled = true;
+    } else if (part == "!u") {
+      *out += "\x1b[24m";
+      handled = true;
+    } else if (part == "!i") {
+      *out += "\x1b[23m";
+      handled = true;
+    } else if (part.size() == 7U && part.front() == '#') {
+      *out += BuildForegroundAnsi_(part);
+      handled = true;
+    }
+  }
+  return handled;
+}
+
+[[nodiscard]] std::string RenderTerminalBbcodeAnsi_(const std::string &line) {
+  std::string out = {};
+  out.reserve(line.size() + 32U);
+  for (size_t i = 0U; i < line.size(); ++i) {
+    const char ch = line[i];
+    if (ch == '\\' && i + 1U < line.size() &&
+        (line[i + 1U] == '[' || line[i + 1U] == ']')) {
+      out.push_back(line[i + 1U]);
+      ++i;
+      continue;
+    }
+    if (ch == '[') {
+      const size_t close = line.find(']', i + 1U);
+      if (close != std::string::npos) {
+        const std::string_view token(line.data() + i + 1U, close - i - 1U);
+        if (AMPromptUI::detail::IsLegalBBCodeTagToken(token)) {
+          (void)AppendTerminalBbcodeTokenAnsi_(token, &out);
+          i = close;
+          continue;
+        }
+      }
+    }
+    out.push_back(ch);
+  }
+  return out;
+}
+
 [[nodiscard]] size_t MeasureBannerLineWidth_(const std::string &line) {
   std::string plain = AMPromptUI::StripStyleForMeasure(line);
   plain = AMPromptUI::NormalizeMeasureLine(plain);
@@ -704,46 +788,50 @@ ComputeBannerPadding_(const std::string &line, int cols,
   return {0U, padding};
 }
 
-void WriteTerminalFixedLine_(int row, int cols, const std::string &line,
-                             const std::string &background_ansi,
-                             const std::string &foreground_ansi,
-                             TerminalBannerAlign_ align) {
-  WriteTerminalBytes_(AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row));
+void AppendTerminalFixedLine_(std::string *out, int row, int cols,
+                              const std::string &line,
+                              const std::string &background_ansi,
+                              const std::string &foreground_ansi,
+                              TerminalBannerAlign_ align) {
+  if (out == nullptr) {
+    return;
+  }
+  *out += AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row);
   const auto [left_pad, right_pad] = ComputeBannerPadding_(line, cols, align);
   if (!background_ansi.empty()) {
-    WriteTerminalBytes_(background_ansi);
+    *out += background_ansi;
   }
   if (!foreground_ansi.empty()) {
-    WriteTerminalBytes_(foreground_ansi);
+    *out += foreground_ansi;
   }
   if (left_pad > 0U) {
-    WriteTerminalBytes_(std::string(left_pad, ' '));
+    *out += std::string(left_pad, ' ');
   }
   if (!line.empty()) {
-    ic_term_write_bbcode(line.c_str());
-    ic_term_flush();
+    *out += RenderTerminalBbcodeAnsi_(line);
   }
   if (!background_ansi.empty()) {
-    WriteTerminalBytes_(background_ansi);
+    *out += background_ansi;
   }
   if (!foreground_ansi.empty()) {
-    WriteTerminalBytes_(foreground_ansi);
+    *out += foreground_ansi;
   }
   if (right_pad > 0U) {
-    WriteTerminalBytes_(std::string(right_pad, ' '));
+    *out += std::string(right_pad, ' ');
   }
   if (!background_ansi.empty() || !foreground_ansi.empty()) {
-    WriteTerminalBytes_("\x1b[0m");
+    *out += "\x1b[0m";
   }
 }
 
-void WriteTerminalFixedHeader_(const std::vector<std::string> &banner_lines,
-                               const TerminalBannerConfig_ &banner_config,
-                               const std::vector<std::string> &control_lines,
-                               const TerminalBannerConfig_ &control_config,
-                               bool show_control, int visible_header_rows,
-                               int cols) {
-  if (visible_header_rows <= 0) {
+void AppendTerminalFixedHeader_(std::string *out,
+                                const std::vector<std::string> &banner_lines,
+                                const TerminalBannerConfig_ &banner_config,
+                                const std::vector<std::string> &control_lines,
+                                const TerminalBannerConfig_ &control_config,
+                                bool show_control, int visible_header_rows,
+                                int cols) {
+  if (out == nullptr || visible_header_rows <= 0) {
     return;
   }
   const std::string banner_background_ansi =
@@ -759,8 +847,8 @@ void WriteTerminalFixedHeader_(const std::vector<std::string> &banner_lines,
     if (row > visible_header_rows) {
       return;
     }
-    WriteTerminalFixedLine_(row, cols, line, banner_background_ansi,
-                            banner_foreground_ansi, banner_config.align);
+    AppendTerminalFixedLine_(out, row, cols, line, banner_background_ansi,
+                             banner_foreground_ansi, banner_config.align);
     ++row;
   }
   if (!show_control) {
@@ -770,8 +858,8 @@ void WriteTerminalFixedHeader_(const std::vector<std::string> &banner_lines,
     if (row > visible_header_rows) {
       return;
     }
-    WriteTerminalFixedLine_(row, cols, line, control_background_ansi,
-                            control_foreground_ansi, control_config.align);
+    AppendTerminalFixedLine_(out, row, cols, line, control_background_ansi,
+                             control_foreground_ansi, control_config.align);
     ++row;
   }
 }
@@ -2205,23 +2293,21 @@ ECM TerminalInterfaceService::LaunchTerminal(
           AMStr::fmt("\x1b[{};{}H", cursor_row, cursor_col);
       restore_cursor_after_banner +=
           vt_snapshot.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
-      repaint += restore_cursor_after_banner;
       have_last_server_screen_state = true;
       last_server_in_alternate_screen = vt_snapshot.in_alternate_screen;
     } else {
       restore_cursor_after_banner = "\x1b[?25h";
-      repaint += restore_cursor_after_banner;
       have_last_server_screen_state = false;
       last_server_in_alternate_screen = false;
     }
-    WriteTerminalBytes_(repaint);
     if (row_offset > 0) {
-      WriteTerminalFixedHeader_(
-          terminal_banner_lines, terminal_banner, terminal_control_note_lines,
-          terminal_control_note, control_active, row_offset,
-          current_geometry.cols);
-      WriteTerminalBytes_(restore_cursor_after_banner);
+      AppendTerminalFixedHeader_(
+          &repaint, terminal_banner_lines, terminal_banner,
+          terminal_control_note_lines, terminal_control_note, control_active,
+          row_offset, current_geometry.cols);
     }
+    repaint += restore_cursor_after_banner;
+    WriteTerminalBytes_(repaint);
     last_rendered_lines = current_lines;
     last_local_input_active = local_input_active;
     last_render_geometry = current_geometry;
@@ -2392,10 +2478,19 @@ ECM TerminalInterfaceService::LaunchTerminal(
           request_term_switch(1);
           continue;
         }
-        if (pending_local_input.front() == 'q') {
+        if (pending_local_input.front() == 'q' ||
+            pending_local_input.front() == 'Q') {
           pending_local_input.erase(0, 1U);
           control_layer_active.store(false, std::memory_order_release);
           (void)channel_port->RequestForegroundDetach();
+          continue;
+        }
+        if (pending_local_input.front() == 'e' ||
+            pending_local_input.front() == 'E') {
+          pending_local_input.erase(0, 1U);
+          control_layer_active.store(false, std::memory_order_release);
+          (void)exit_local_scrollback();
+          render_current_frame();
           continue;
         }
         if (StartsWithAny_(pending_local_input,
