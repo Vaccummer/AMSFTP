@@ -1497,6 +1497,14 @@ void DecodeTerminalStyle_(const Json &json, TerminalStyle *out) {
   (void)AMJson::QueryKey(json, {"banner", "background"},
                          &out->banner.background);
   (void)AMJson::QueryKey(json, {"banner", "align"}, &out->banner.align);
+  (void)AMJson::QueryKey(json, {"control_note", "template"},
+                         &out->control_note.template_text);
+  (void)AMJson::QueryKey(json, {"control_note", "background"},
+                         &out->control_note.background);
+  (void)AMJson::QueryKey(json, {"control_note", "foreground"},
+                         &out->control_note.foreground);
+  (void)AMJson::QueryKey(json, {"control_note", "align"},
+                         &out->control_note.align);
   const bool has_legacy_banner_template =
       AMJson::QueryKey(json, {"banner_template"}, &out->banner_template);
   if (!has_banner_template && has_legacy_banner_template &&
@@ -1511,6 +1519,10 @@ Json EncodeTerminalStyle_(const TerminalStyle &in) {
   out["banner"]["template"] = in.banner.template_text;
   out["banner"]["background"] = in.banner.background;
   out["banner"]["align"] = in.banner.align;
+  out["control_note"]["template"] = in.control_note.template_text;
+  out["control_note"]["background"] = in.control_note.background;
+  out["control_note"]["foreground"] = in.control_note.foreground;
+  out["control_note"]["align"] = in.control_note.align;
   return out;
 }
 

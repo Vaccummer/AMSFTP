@@ -381,6 +381,13 @@ void NormalizeTerminalStyle(TerminalStyle *style) {
     align = "left";
   }
   style->banner.align = std::move(align);
+
+  std::string control_note_align = LowerTrim_(style->control_note.align);
+  if (control_note_align != "left" && control_note_align != "center" &&
+      control_note_align != "right") {
+    control_note_align = "left";
+  }
+  style->control_note.align = std::move(control_note_align);
 }
 
 void NormalizeStyleConfig(StyleConfig *config) {
