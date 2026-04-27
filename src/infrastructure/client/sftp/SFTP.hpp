@@ -49,6 +49,9 @@
 #include "foundation/core/DataClass.hpp"
 #include "foundation/tools/auth.hpp"
 #include "infrastructure/client/common/Base.hpp"
+// Internal dependencies
+#include "foundation/tools/path.hpp"
+#include "infrastructure/client/common/Base.hpp"
 #include <curl/curl.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -57,6 +60,7 @@
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
 
+#ifndef _WIN32
 #ifndef POSIX_SOCKET_TYPEDEFS_DEFINED
 #define POSIX_SOCKET_TYPEDEFS_DEFINED
 using SOCKET = int;
@@ -66,6 +70,7 @@ constexpr int SOCKET_ERROR = -1;
 #ifndef POSIX_CLOSESOCKET_DEFINED
 #define POSIX_CLOSESOCKET_DEFINED
 inline int closesocket(SOCKET s) { return close(s); }
+#endif
 #endif
 
 namespace AMInfra::client::SFTP {
@@ -1260,8 +1265,7 @@ protected:
           keepalive_.wake_seq.load(std::memory_order_acquire);
       std::unique_lock<std::mutex> wait_lock(keepalive_.wait_mtx);
       (void)keepalive_.cv.wait_for(
-          wait_lock, std::chrono::seconds(interval_s),
-          [this, wake_seq]() {
+          wait_lock, std::chrono::seconds(interval_s), [this, wake_seq]() {
             if (keepalive_.shutdown.load(std::memory_order_acquire)) {
               return true;
             }
@@ -1475,8 +1479,7 @@ public:
                                       detail::ResolveTimeoutMs_(control),
                                       AMTime::miliseconds());
     const int close_grace_ms = grace_period_ms < 0 ? 0 : grace_period_ms;
-    ECM close_rcm =
-        channel_handle->graceful_exit(!force, close_grace_ms, true);
+    ECM close_rcm = channel_handle->graceful_exit(!force, close_grace_ms, true);
     channel_handle.reset();
     return close_rcm;
   }
@@ -1547,8 +1550,7 @@ public:
         return {rc, {}};
       }
       const int dir = libssh2_session_block_directions(session);
-      const bool wait_read =
-          dir == 0 || (dir & LIBSSH2_SESSION_BLOCK_INBOUND);
+      const bool wait_read = dir == 0 || (dir & LIBSSH2_SESSION_BLOCK_INBOUND);
       const bool wait_write =
           dir == 0 || (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND);
 

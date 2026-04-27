@@ -1,7 +1,7 @@
 #pragma once
 
 #include "application/client/ClientAppService.hpp"
-#include "application/filesystem/FileSystemAppService.hpp"
+#include "application/filesystem/FilesystemAppService.hpp"
 #include "application/terminal/TermAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "interface/adapters/terminal/TerminalInterfaceDTO.hpp"

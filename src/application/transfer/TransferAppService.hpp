@@ -1,7 +1,7 @@
 #pragma once
 
 #include "application/client/ClientAppService.hpp"
-#include "application/filesystem/FileSystemAppService.hpp"
+#include "application/filesystem/FilesystemAppService.hpp"
 #include "application/transfer/TransferAppDTO.hpp"
 #include "domain/transfer/TransferDomainModel.hpp"
 #include "domain/transfer/TransferPort.hpp"

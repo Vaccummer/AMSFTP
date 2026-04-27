@@ -1,7 +1,6 @@
 #pragma once
 // Standard library
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <climits>
 #include <cstddef>
@@ -21,6 +20,7 @@
 #include "foundation/core/DataClass.hpp"
 #include "foundation/core/Enum.hpp"
 #include "foundation/tools/auth.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/client/common/Base.hpp"
 
@@ -245,15 +245,32 @@ PathInfo ParseDOSListLine(const std::string &line,
     int month = 0;
     int day = 0;
     int year = 0;
-    if (sscanf(date_str.c_str(), "%d-%d-%d", &month, &day, &year) == 3) {
+    const size_t first_dash = date_str.find('-');
+    const size_t second_dash = first_dash == std::string::npos
+                                   ? std::string::npos
+                                   : date_str.find('-', first_dash + 1);
+    if (first_dash != std::string::npos && second_dash != std::string::npos) {
+      month = std::stoi(date_str.substr(0, first_dash));
+      day = std::stoi(
+          date_str.substr(first_dash + 1, second_dash - first_dash - 1));
+      year = std::stoi(date_str.substr(second_dash + 1));
       if (year < 100) {
         year += (year >= 70) ? 1900 : 2000;
       }
 
       int hour = 0;
       int minute = 0;
-      std::array<char, 3> ampm = {0};
-      if (sscanf(time_str.c_str(), "%d:%d%2s", &hour, &minute, ampm.data()) >= 2) {        std::string ampm_str(ampm.data());
+      const size_t colon_pos = time_str.find(':');
+      if (colon_pos != std::string::npos) {
+        hour = std::stoi(time_str.substr(0, colon_pos));
+        size_t minute_end = colon_pos + 1;
+        while (minute_end < time_str.size() &&
+               std::isdigit(static_cast<unsigned char>(time_str[minute_end]))) {
+          ++minute_end;
+        }
+        minute = std::stoi(
+            time_str.substr(colon_pos + 1, minute_end - colon_pos - 1));
+        std::string ampm_str = time_str.substr(minute_end);
         std::transform(ampm_str.begin(), ampm_str.end(), ampm_str.begin(),
                        ::toupper);
         if (ampm_str == "PM" && hour != 12) {

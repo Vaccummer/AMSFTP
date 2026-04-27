@@ -5,12 +5,14 @@
 #include "foundation/core/DataClass.hpp"
 
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #ifndef POSIX_SOCKET_TYPEDEFS_DEFINED
 #define POSIX_SOCKET_TYPEDEFS_DEFINED
 using SOCKET = int;
@@ -21,6 +23,7 @@ constexpr int SOCKET_ERROR = -1;
 #define POSIX_CLOSESOCKET_DEFINED
 #include <unistd.h>
 inline int closesocket(SOCKET s) { return close(s); }
+#endif
 #endif
 
 namespace AMDomain::terminal {

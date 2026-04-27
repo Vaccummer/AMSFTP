@@ -1,19 +1,33 @@
 #pragma once
 // standard library
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <concepts>
-#include <pwd.h>
+#include <filesystem>
 #include <regex>
+#include <system_error>
 #include <type_traits>
 #include <unordered_map>
 #include <variant>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #define _WINSOCKAPI_
 #include <accctrl.h> // Define SE_OBJECT_TYPE enum
 #include <aclapi.h>  // Define security operation APIs
-#include <filesystem>
 #include <shlobj.h>
 #include <windows.h>
-
+#else
+#include <cerrno>
+#include <cstring>
+#include <pwd.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 // project header
@@ -935,8 +949,8 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
   info.access_time = timespec_to_double(file_stat.st_atimespec);
   info.modify_time = timespec_to_double(file_stat.st_mtimespec);
   info.create_time = timespec_to_double(file_stat.st_birthtimespec);
-  return {OK, info};
 #endif
+  return {OK, info};
 }
 
 inline std::pair<ECM, std::vector<PathInfo>>

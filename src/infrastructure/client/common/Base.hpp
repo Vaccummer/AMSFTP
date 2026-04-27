@@ -5,7 +5,6 @@
 #include "domain/host/HostModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/core/Enum.hpp"
-#include "foundation/tools/path.hpp"
 
 #include <magic_enum/magic_enum.hpp>
 #include <mutex>
