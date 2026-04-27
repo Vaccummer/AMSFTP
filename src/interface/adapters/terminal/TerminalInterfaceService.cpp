@@ -2292,9 +2292,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const std::string input_protocol_ansi =
         BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active);
 #ifdef _WIN32
-    mouse_wheel_monitor.SetEnabled(
-        vt_snapshot.available && !vt_snapshot.in_alternate_screen &&
-        !vt_snapshot.mouse_reporting_active);
+    mouse_wheel_monitor.SetEnabled(vt_snapshot.available &&
+                                   !vt_snapshot.in_alternate_screen);
 #endif
     const bool force_full_clear =
         !have_last_server_screen_state ||
@@ -2576,23 +2575,19 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
       auto const vt_snapshot = load_vt_snapshot();
       bool const wheel = (button & 64U) != 0U && (button & 3U) <= 1U;
+      if (wheel && vt_snapshot.available && !vt_snapshot.in_alternate_screen) {
+        local_browse_active.store(true, std::memory_order_release);
+        apply_local_mouse_wheel(button);
+        return true;
+      }
+
       if (local_browse_active.load(std::memory_order_acquire)) {
-        if (wheel) {
-          apply_local_mouse_wheel(button);
-        } else {
-          (void)exit_local_scrollback();
-        }
+        (void)exit_local_scrollback();
         return true;
       }
 
       if (vt_snapshot.available && vt_snapshot.mouse_reporting_active) {
         passthrough.append(seq);
-        return true;
-      }
-
-      if (wheel && vt_snapshot.available && !vt_snapshot.in_alternate_screen) {
-        local_browse_active.store(true, std::memory_order_release);
-        apply_local_mouse_wheel(button);
         return true;
       }
 
