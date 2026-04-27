@@ -22,6 +22,7 @@ struct ChannelCacheThresholdBytes {
  * @brief Settings payload for `Options.TerminalManager`.
  */
 struct TerminalManagerArg {
+  std::string init_cmd = "";
   int read_timeout_ms = -1;
   int send_timeout_ms = 0;
   ChannelCacheThresholdBytes channel_cache_threshold_bytes = {};
