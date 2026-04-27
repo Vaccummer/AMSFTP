@@ -65,14 +65,13 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
 }
 
 constexpr const char *kDefaultTerminalType_ = "xterm-256color";
-constexpr std::string_view kLocalWheelUpInput_("\0AMSFTP_WHEEL_UP\0", 17);
-constexpr std::string_view kLocalWheelDownInput_("\0AMSFTP_WHEEL_DOWN\0", 19);
 
 enum class TerminalBannerAlign_ { Left = 0, Center = 1, Right = 2 };
 
 struct TerminalBannerConfig_ {
   std::string text = {};
   std::string background = {};
+  std::string foreground = {};
   TerminalBannerAlign_ align = TerminalBannerAlign_::Left;
 };
 
@@ -350,7 +349,7 @@ void RestoreCliPromptStateAfterTerminalExit_() {
 
 [[nodiscard]] std::string BuildTerminalInputProtocolAnsi_(
     const AMDomain::terminal::ChannelVtSnapshot &vt_snapshot,
-    bool local_browse_active) {
+    bool local_input_active) {
   constexpr std::string_view kDisableMouseProtocols =
       "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1007l";
   std::string out(kDisableMouseProtocols);
@@ -358,7 +357,7 @@ void RestoreCliPromptStateAfterTerminalExit_() {
   out += "\x1b>";
 
   if (vt_snapshot.available) {
-    if (!local_browse_active && vt_snapshot.mouse_reporting_active) {
+    if (!local_input_active && vt_snapshot.mouse_reporting_active) {
       if (vt_snapshot.mouse_report_click) {
         out += "\x1b[?1000h";
       }
@@ -375,7 +374,7 @@ void RestoreCliPromptStateAfterTerminalExit_() {
         out += "\x1b[?1006h";
       }
     }
-    if (!local_browse_active && vt_snapshot.in_alternate_screen &&
+    if (!local_input_active && vt_snapshot.in_alternate_screen &&
         !vt_snapshot.mouse_reporting_active && vt_snapshot.alternate_scroll) {
       out += "\x1b[?1007h";
     }
@@ -540,6 +539,33 @@ TerminalBannerConfig_ ResolveTerminalBanner_(
   return out;
 }
 
+TerminalBannerConfig_ ResolveTerminalControlNote_(
+    const AMInterface::style::AMStyleService &style_service,
+    const TerminalTargetSpec_ &target,
+    const AMDomain::host::ConRequest &request,
+    AMDomain::client::OS_TYPE os_type) {
+  TerminalBannerConfig_ out = {};
+  const auto style_config = style_service.GetInitArg().style;
+  const auto &control_note = style_config.terminal.control_note;
+  out.background = control_note.background;
+  out.foreground = control_note.foreground;
+  out.align = ParseTerminalBannerAlign_(control_note.align);
+  if (AMStr::Strip(control_note.template_text).empty()) {
+    return out;
+  }
+
+  const auto render = AMInterface::prompt::LUARender(
+      {control_note.template_text},
+      BuildTerminalBannerLuaVars_(target, request, os_type,
+                                  style_config.cli_prompt.icons));
+  if (!(render.rcm)) {
+    out.text = control_note.template_text;
+    return out;
+  }
+  out.text = render.data;
+  return out;
+}
+
 enum class LocalInputPollStatus_ { Ready, Closed, Error };
 void WriteTerminalBytes_(std::string_view text) {
   if (text.empty()) {
@@ -604,11 +630,6 @@ SplitTerminalBannerLines_(std::string_view banner) {
   return lines;
 }
 
-[[nodiscard]] std::vector<std::string> BuildGodModeHintLines_() {
-  return {"[#d7d7d7 b]Ctrl+][/]: [#d7d7d7]Tab/Right next | "
-          "Shift+Tab/Left previous | q detach | Esc back | Ctrl+] send[/]"};
-}
-
 [[nodiscard]] std::optional<std::array<int, 3>>
 ParseBannerBackgroundRgb_(std::string_view raw_background) {
   const std::string text = AMStr::Strip(std::string(raw_background));
@@ -651,6 +672,14 @@ BuildBackgroundAnsi_(std::string_view raw_background) {
   return AMStr::fmt("\x1b[48;2;{};{};{}m", (*rgb)[0], (*rgb)[1], (*rgb)[2]);
 }
 
+[[nodiscard]] std::string BuildForegroundAnsi_(std::string_view raw_foreground) {
+  const auto rgb = ParseBannerBackgroundRgb_(raw_foreground);
+  if (!rgb.has_value()) {
+    return {};
+  }
+  return AMStr::fmt("\x1b[38;2;{};{};{}m", (*rgb)[0], (*rgb)[1], (*rgb)[2]);
+}
+
 [[nodiscard]] size_t MeasureBannerLineWidth_(const std::string &line) {
   std::string plain = AMPromptUI::StripStyleForMeasure(line);
   plain = AMPromptUI::NormalizeMeasureLine(plain);
@@ -677,11 +706,15 @@ ComputeBannerPadding_(const std::string &line, int cols,
 
 void WriteTerminalFixedLine_(int row, int cols, const std::string &line,
                              const std::string &background_ansi,
+                             const std::string &foreground_ansi,
                              TerminalBannerAlign_ align) {
   WriteTerminalBytes_(AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row));
   const auto [left_pad, right_pad] = ComputeBannerPadding_(line, cols, align);
   if (!background_ansi.empty()) {
     WriteTerminalBytes_(background_ansi);
+  }
+  if (!foreground_ansi.empty()) {
+    WriteTerminalBytes_(foreground_ansi);
   }
   if (left_pad > 0U) {
     WriteTerminalBytes_(std::string(left_pad, ' '));
@@ -693,40 +726,52 @@ void WriteTerminalFixedLine_(int row, int cols, const std::string &line,
   if (!background_ansi.empty()) {
     WriteTerminalBytes_(background_ansi);
   }
+  if (!foreground_ansi.empty()) {
+    WriteTerminalBytes_(foreground_ansi);
+  }
   if (right_pad > 0U) {
     WriteTerminalBytes_(std::string(right_pad, ' '));
   }
-  if (!background_ansi.empty()) {
+  if (!background_ansi.empty() || !foreground_ansi.empty()) {
     WriteTerminalBytes_("\x1b[0m");
   }
 }
 
 void WriteTerminalFixedHeader_(const std::vector<std::string> &banner_lines,
-                               const std::vector<std::string> &hint_lines,
-                               const std::string &banner_background,
-                               TerminalBannerAlign_ banner_align,
-                               bool show_hint, int visible_header_rows,
+                               const TerminalBannerConfig_ &banner_config,
+                               const std::vector<std::string> &control_lines,
+                               const TerminalBannerConfig_ &control_config,
+                               bool show_control, int visible_header_rows,
                                int cols) {
   if (visible_header_rows <= 0) {
     return;
   }
-  const std::string background_ansi = BuildBackgroundAnsi_(banner_background);
+  const std::string banner_background_ansi =
+      BuildBackgroundAnsi_(banner_config.background);
+  const std::string banner_foreground_ansi =
+      BuildForegroundAnsi_(banner_config.foreground);
+  const std::string control_background_ansi =
+      BuildBackgroundAnsi_(control_config.background);
+  const std::string control_foreground_ansi =
+      BuildForegroundAnsi_(control_config.foreground);
   int row = 1;
   for (const auto &line : banner_lines) {
     if (row > visible_header_rows) {
       return;
     }
-    WriteTerminalFixedLine_(row, cols, line, background_ansi, banner_align);
+    WriteTerminalFixedLine_(row, cols, line, banner_background_ansi,
+                            banner_foreground_ansi, banner_config.align);
     ++row;
   }
-  if (!show_hint) {
+  if (!show_control) {
     return;
   }
-  for (const auto &line : hint_lines) {
+  for (const auto &line : control_lines) {
     if (row > visible_header_rows) {
       return;
     }
-    WriteTerminalFixedLine_(row, cols, line, {}, TerminalBannerAlign_::Left);
+    WriteTerminalFixedLine_(row, cols, line, control_background_ansi,
+                            control_foreground_ansi, control_config.align);
     ++row;
   }
 }
@@ -1013,14 +1058,12 @@ public:
     raw_input_mode &=
         ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
     raw_input_mode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_EXTENDED_FLAGS;
-    raw_input_mode &= ~(ENABLE_WINDOW_INPUT | ENABLE_QUICK_EDIT_MODE);
+    raw_input_mode &= ~ENABLE_WINDOW_INPUT;
     raw_input_mode &= ~ENABLE_MOUSE_INPUT;
     if (SetConsoleMode(input_, raw_input_mode) == 0) {
       error_ = "Failed to enable raw console input";
       return false;
     }
-    raw_input_mode_ = raw_input_mode;
-    mouse_input_enabled_ = false;
 
     DWORD raw_output_mode = output_mode_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
     (void)SetConsoleMode(output_, raw_output_mode);
@@ -1072,28 +1115,6 @@ public:
 
   [[nodiscard]] const std::string &Error() const { return error_; }
 
-#ifdef _WIN32
-  void SetMouseInputEnabled(bool enabled) {
-    if (!active_ || input_ == INVALID_HANDLE_VALUE) {
-      return;
-    }
-    if (mouse_input_enabled_ == enabled) {
-      return;
-    }
-    DWORD mode = raw_input_mode_;
-    if (enabled) {
-      mode |= ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT;
-    } else {
-      mode &= ~(ENABLE_MOUSE_INPUT | ENABLE_WINDOW_INPUT);
-    }
-    if (SetConsoleMode(input_, mode) == 0) {
-      return;
-    }
-    raw_input_mode_ = mode;
-    mouse_input_enabled_ = enabled;
-  }
-#endif
-
 private:
   bool active_ = false;
   std::string error_ = {};
@@ -1102,8 +1123,6 @@ private:
   HANDLE output_ = INVALID_HANDLE_VALUE;
   DWORD input_mode_ = 0;
   DWORD output_mode_ = 0;
-  DWORD raw_input_mode_ = 0;
-  bool mouse_input_enabled_ = false;
 #else
   termios termios_ = {};
   int stdin_flags_ = -1;
@@ -1151,15 +1170,6 @@ PollLocalTerminalInput_(std::string *out, std::string *error) {
         return LocalInputPollStatus_::Error;
       }
       if (consumed == 0) {
-        return LocalInputPollStatus_::Ready;
-      }
-
-      auto const &mouse = record.Event.MouseEvent;
-      if ((mouse.dwEventFlags & (MOUSE_WHEELED | MOUSE_HWHEELED)) != 0U) {
-        SHORT const delta = static_cast<SHORT>(HIWORD(mouse.dwButtonState));
-        std::string_view const token =
-            (delta > 0) ? kLocalWheelUpInput_ : kLocalWheelDownInput_;
-        out->assign(token.data(), token.size());
         return LocalInputPollStatus_::Ready;
       }
       continue;
@@ -1651,168 +1661,6 @@ private:
 #endif
 };
 
-#ifdef _WIN32
-class MouseWheelMonitor_ final : NonCopyableNonMovable {
-public:
-  using WheelCallback = std::function<void(std::string_view)>;
-
-  MouseWheelMonitor_() = default;
-  ~MouseWheelMonitor_() override { Stop(); }
-
-  ECM Start(HWND target_window, WheelCallback callback) {
-    if (running_) {
-      return OK;
-    }
-    target_window_ =
-        target_window == nullptr ? nullptr : GetAncestor(target_window, GA_ROOT);
-    if (target_window_ == nullptr) {
-      return Err(EC::InvalidArg, "terminal.mouse_wheel.start", "<window>",
-                 "Foreground terminal window is unavailable");
-    }
-    if (!callback) {
-      return Err(EC::InvalidArg, "terminal.mouse_wheel.start", "<callback>",
-                 "Mouse wheel callback is empty");
-    }
-
-    ready_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (ready_event_ == nullptr) {
-      return Err(EC::CommonFailure, "terminal.mouse_wheel.start", "<event>",
-                 "Failed to create mouse hook ready event");
-    }
-
-    callback_ = std::move(callback);
-    enabled_.store(false, std::memory_order_release);
-    stop_requested_.store(false, std::memory_order_release);
-
-    try {
-      hook_thread_ = std::jthread([this]() { HookLoop_(); });
-    } catch (...) {
-      CloseReadyEvent_();
-      callback_ = {};
-      return Err(EC::CommonFailure, "terminal.mouse_wheel.start", "<thread>",
-                 "Failed to create mouse hook thread");
-    }
-
-    const DWORD wait_rc = WaitForSingleObject(ready_event_, 3000);
-    if (wait_rc != WAIT_OBJECT_0 || hook_ == nullptr) {
-      Stop();
-      return Err(EC::CommonFailure, "terminal.mouse_wheel.start", "<hook>",
-                 "Failed to install mouse wheel hook");
-    }
-
-    running_ = true;
-    return OK;
-  }
-
-  void Stop() {
-    stop_requested_.store(true, std::memory_order_release);
-    enabled_.store(false, std::memory_order_release);
-    if (hook_thread_id_ != 0U) {
-      (void)PostThreadMessageW(hook_thread_id_, WM_QUIT, 0, 0);
-    }
-    if (hook_thread_.joinable()) {
-      hook_thread_.request_stop();
-      hook_thread_.join();
-    }
-    running_ = false;
-    callback_ = {};
-    target_window_ = nullptr;
-    CloseReadyEvent_();
-  }
-
-  void SetEnabled(bool enabled) {
-    enabled_.store(enabled, std::memory_order_release);
-  }
-
-private:
-  void HookLoop_() {
-    hook_thread_id_ = GetCurrentThreadId();
-    active_instance_ = this;
-    MSG queue_warmup = {};
-    (void)PeekMessageW(&queue_warmup, nullptr, WM_USER, WM_USER,
-                       PM_NOREMOVE);
-    hook_ = SetWindowsHookExW(WH_MOUSE_LL, &MouseWheelMonitor_::HookProc_,
-                              GetModuleHandleW(nullptr), 0);
-    if (ready_event_ != nullptr) {
-      (void)SetEvent(ready_event_);
-    }
-
-    MSG msg = {};
-    while (!stop_requested_.load(std::memory_order_acquire) &&
-           GetMessageW(&msg, nullptr, 0, 0) > 0) {
-      TranslateMessage(&msg);
-      DispatchMessageW(&msg);
-    }
-
-    if (hook_ != nullptr) {
-      (void)UnhookWindowsHookEx(hook_);
-      hook_ = nullptr;
-    }
-    if (active_instance_ == this) {
-      active_instance_ = nullptr;
-    }
-    hook_thread_id_ = 0U;
-  }
-
-  [[nodiscard]] bool ForegroundMatchesTarget_() const {
-    HWND foreground = GetForegroundWindow();
-    if (foreground == nullptr || target_window_ == nullptr) {
-      return false;
-    }
-    foreground = GetAncestor(foreground, GA_ROOT);
-    return foreground == target_window_;
-  }
-
-  [[nodiscard]] LRESULT HandleHook_(int code, WPARAM wparam,
-                                    LPARAM lparam) {
-    if (code != HC_ACTION || wparam != WM_MOUSEWHEEL ||
-        !enabled_.load(std::memory_order_acquire) ||
-        !ForegroundMatchesTarget_()) {
-      return CallNextHookEx(hook_, code, wparam, lparam);
-    }
-
-    auto const *info = reinterpret_cast<const MSLLHOOKSTRUCT *>(lparam);
-    if (info == nullptr) {
-      return CallNextHookEx(hook_, code, wparam, lparam);
-    }
-    const SHORT delta = static_cast<SHORT>(HIWORD(info->mouseData));
-    std::string_view const token =
-        delta > 0 ? kLocalWheelUpInput_ : kLocalWheelDownInput_;
-    if (callback_) {
-      callback_(token);
-    }
-    return CallNextHookEx(hook_, code, wparam, lparam);
-  }
-
-  static LRESULT CALLBACK HookProc_(int code, WPARAM wparam, LPARAM lparam) {
-    if (active_instance_ == nullptr) {
-      return CallNextHookEx(nullptr, code, wparam, lparam);
-    }
-    return active_instance_->HandleHook_(code, wparam, lparam);
-  }
-
-  void CloseReadyEvent_() {
-    if (ready_event_ != nullptr) {
-      (void)CloseHandle(ready_event_);
-      ready_event_ = nullptr;
-    }
-  }
-
-private:
-  inline static MouseWheelMonitor_ *active_instance_ = nullptr;
-
-  std::atomic<bool> enabled_ = false;
-  std::atomic<bool> stop_requested_ = false;
-  bool running_ = false;
-  HWND target_window_ = nullptr;
-  HHOOK hook_ = nullptr;
-  HANDLE ready_event_ = nullptr;
-  DWORD hook_thread_id_ = 0U;
-  std::jthread hook_thread_ = {};
-  WheelCallback callback_ = {};
-};
-#endif
-
 struct TerminalInterfaceService::SharedKeyboardMonitor_ {
   KeyboardInputMonitor_ monitor = {};
   mutable std::mutex session_mutex = {};
@@ -2055,15 +1903,18 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
   const TerminalBannerConfig_ terminal_banner = ResolveTerminalBanner_(
       style_service_, target, terminal_request, terminal_os_type);
+  const TerminalBannerConfig_ terminal_control_note =
+      ResolveTerminalControlNote_(style_service_, target, terminal_request,
+                                  terminal_os_type);
   const std::vector<std::string> terminal_banner_lines =
       SplitTerminalBannerLines_(terminal_banner.text);
-  const std::vector<std::string> god_mode_hint_lines =
-      BuildGodModeHintLines_();
+  const std::vector<std::string> terminal_control_note_lines =
+      SplitTerminalBannerLines_(terminal_control_note.text);
   const AMTerminalTools::TerminalViewportInfo geometry =
       AMTerminalTools::GetTerminalViewportInfo();
   const int initial_header_rows = FixedHeaderLineCount_(
-      terminal_banner_lines, god_mode_hint_lines, arg.start_in_god_mode,
-      geometry.rows);
+      terminal_banner_lines, terminal_control_note_lines,
+      arg.start_in_god_mode, geometry.rows);
   const AMTerminalTools::TerminalViewportInfo initial_content_geometry =
       BuildContentGeometry_(geometry, initial_header_rows);
   std::string channel_name = AMStr::Strip(status_result.data.current_channel);
@@ -2158,42 +2009,20 @@ ECM TerminalInterfaceService::LaunchTerminal(
   bool physical_alt_screen_active = false;
   bool have_last_server_screen_state = false;
   bool last_server_in_alternate_screen = false;
-  bool last_local_browse_active = false;
+  bool last_local_input_active = false;
   AMTerminalTools::TerminalViewportInfo last_render_geometry = geometry;
   std::vector<std::string> last_rendered_lines = {};
   bool have_last_vt_snapshot = false;
   AMDomain::terminal::ChannelVtSnapshot last_vt_snapshot = {};
-  bool last_god_mode = false;
+  bool last_control_layer_active = false;
   std::atomic<uint64_t> local_viewport_offset = 0;
   std::atomic<bool> local_browse_active = false;
-  std::atomic<bool> god_mode_active{arg.start_in_god_mode};
+  std::atomic<bool> control_layer_active{arg.start_in_god_mode};
   std::string pending_local_input = {};
   std::mutex requested_switch_mutex = {};
   std::string requested_switch_key = {};
   AMTerminalTools::TerminalViewportInfo last_geometry = {};
   int last_fixed_header_rows = -1;
-#ifdef _WIN32
-  MouseWheelMonitor_ mouse_wheel_monitor = {};
-  HWND const terminal_foreground_window =
-      GetAncestor(GetForegroundWindow(), GA_ROOT);
-  const ECM mouse_wheel_start_rcm =
-      mouse_wheel_monitor.Start(terminal_foreground_window,
-                                [keyboard_monitor](std::string_view token) {
-                                  if (keyboard_monitor != nullptr) {
-                                    keyboard_monitor->InjectInput(token);
-                                  }
-                                });
-  if (!(mouse_wheel_start_rcm)) {
-    keyboard_monitor->DeactivateCapture();
-    keyboard_monitor->DrainSignal();
-    raw_terminal.Restore();
-    RestoreCliPromptStateAfterTerminalExit_();
-    prompt_cache_guard.Disable();
-    prompt_io_manager_.Print("");
-    prompt_io_manager_.ErrorFormat(mouse_wheel_start_rcm);
-    return mouse_wheel_start_rcm;
-  }
-#endif
   auto clear_keyboard_capture_buffers = [&]() {
     if (keyboard_monitor == nullptr) {
       return;
@@ -2226,25 +2055,21 @@ ECM TerminalInterfaceService::LaunchTerminal(
       if (!physical_alt_screen_active) {
         return;
       }
-#ifdef _WIN32
-      mouse_wheel_monitor.SetEnabled(false);
-      raw_terminal.SetMouseInputEnabled(false);
-#endif
       WriteTerminalBytes_(BuildTerminalInputProtocolAnsi_({}, false));
       WriteTerminalBytes_(kTerminalExitAlternateScreen_);
       physical_alt_screen_active = false;
       have_last_server_screen_state = false;
       last_server_in_alternate_screen = false;
-      last_local_browse_active = false;
+      last_local_input_active = false;
       last_render_geometry = geometry;
       last_rendered_lines.clear();
       have_last_vt_snapshot = false;
       last_vt_snapshot = {};
-      last_god_mode = false;
+      last_control_layer_active = false;
     }
     local_viewport_offset.store(0, std::memory_order_release);
     local_browse_active.store(false, std::memory_order_release);
-    god_mode_active.store(false, std::memory_order_release);
+    control_layer_active.store(false, std::memory_order_release);
     {
       std::lock_guard<std::mutex> input_guard(local_input_mutex);
       pending_local_input.clear();
@@ -2258,40 +2083,39 @@ ECM TerminalInterfaceService::LaunchTerminal(
     }
     AMDomain::terminal::ChannelVtSnapshot vt_snapshot =
         frame_result.vt_snapshot;
-    bool const browse_active = local_browse_active.load(std::memory_order_acquire);
+    bool const browse_active =
+        local_browse_active.load(std::memory_order_acquire);
     const uint64_t viewport_offset =
         local_viewport_offset.load(std::memory_order_acquire);
-    if (browse_active || viewport_offset != 0U) {
+    const bool control_active =
+        control_layer_active.load(std::memory_order_acquire);
+    if (browse_active || viewport_offset != 0U || control_active) {
       vt_snapshot.cursor_visible = false;
     }
-    const bool god_mode = god_mode_active.load(std::memory_order_acquire);
     std::lock_guard<std::mutex> guard(render_mutex);
     if (!physical_alt_screen_active) {
       return;
     }
     auto const current_geometry = AMTerminalTools::GetTerminalViewportInfo();
     const int row_offset = FixedHeaderLineCount_(
-        terminal_banner_lines, god_mode_hint_lines, god_mode,
+        terminal_banner_lines, terminal_control_note_lines, control_active,
         current_geometry.rows);
     const std::vector<std::string> current_lines = SplitAnsiFrameLines_(frame);
+    const bool local_input_active = browse_active || control_active;
     const std::string input_protocol_ansi =
-        BuildTerminalInputProtocolAnsi_(vt_snapshot, browse_active);
-#ifdef _WIN32
-    mouse_wheel_monitor.SetEnabled(
-        vt_snapshot.available && !vt_snapshot.in_alternate_screen &&
-        !vt_snapshot.mouse_reporting_active);
-#endif
+        BuildTerminalInputProtocolAnsi_(vt_snapshot, local_input_active);
     const bool force_full_clear =
         !have_last_server_screen_state ||
         current_geometry.cols != last_render_geometry.cols ||
         current_geometry.rows != last_render_geometry.rows ||
         last_server_in_alternate_screen != vt_snapshot.in_alternate_screen ||
-        last_god_mode != god_mode;
-    const bool lines_changed = force_full_clear || current_lines != last_rendered_lines;
+        last_control_layer_active != control_active;
+    const bool lines_changed =
+        force_full_clear || current_lines != last_rendered_lines;
     const bool input_protocol_changed =
         !have_last_vt_snapshot ||
         InputProtocolStateChanged_(vt_snapshot, last_vt_snapshot) ||
-        browse_active != last_local_browse_active;
+        local_input_active != last_local_input_active;
 
     if (!lines_changed && vt_snapshot.available && have_last_vt_snapshot) {
       const bool cursor_changed =
@@ -2315,7 +2139,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
       cursor_only += AMStr::fmt("\x1b[{};{}H", cursor_row, cursor_col);
       cursor_only += vt_snapshot.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
       WriteTerminalBytes_(cursor_only);
-      last_local_browse_active = browse_active;
+      last_local_input_active = local_input_active;
       last_render_geometry = current_geometry;
       last_vt_snapshot = vt_snapshot;
       return;
@@ -2392,18 +2216,18 @@ ECM TerminalInterfaceService::LaunchTerminal(
     }
     WriteTerminalBytes_(repaint);
     if (row_offset > 0) {
-      WriteTerminalFixedHeader_(terminal_banner_lines, god_mode_hint_lines,
-                                terminal_banner.background,
-                                terminal_banner.align, god_mode, row_offset,
-                                current_geometry.cols);
+      WriteTerminalFixedHeader_(
+          terminal_banner_lines, terminal_banner, terminal_control_note_lines,
+          terminal_control_note, control_active, row_offset,
+          current_geometry.cols);
       WriteTerminalBytes_(restore_cursor_after_banner);
     }
     last_rendered_lines = current_lines;
-    last_local_browse_active = browse_active;
+    last_local_input_active = local_input_active;
     last_render_geometry = current_geometry;
     have_last_vt_snapshot = vt_snapshot.available;
     last_vt_snapshot = vt_snapshot;
-    last_god_mode = god_mode;
+    last_control_layer_active = control_active;
   };
   std::function<void()> render_current_frame = [&]() {
     AMDomain::terminal::ChannelRenderFrameResult frame_result = {};
@@ -2470,9 +2294,10 @@ ECM TerminalInterfaceService::LaunchTerminal(
       return;
     }
     auto const current_geometry = AMTerminalTools::GetTerminalViewportInfo();
-    const bool god_mode = god_mode_active.load(std::memory_order_acquire);
+    const bool control_active =
+        control_layer_active.load(std::memory_order_acquire);
     const int fixed_header_rows = FixedHeaderLineCount_(
-        terminal_banner_lines, god_mode_hint_lines, god_mode,
+        terminal_banner_lines, terminal_control_note_lines, control_active,
         current_geometry.rows);
     if (current_geometry.cols == last_geometry.cols &&
         current_geometry.rows == last_geometry.rows &&
@@ -2517,78 +2342,25 @@ ECM TerminalInterfaceService::LaunchTerminal(
     std::lock_guard<std::mutex> input_guard(local_input_mutex);
     pending_local_input.append(chunk.data(), chunk.size());
     std::string passthrough = {};
-    constexpr uint64_t kMouseWheelStep = 3U;
     auto page_step = [&]() -> uint64_t {
       const auto vt_snapshot = load_vt_snapshot();
       return static_cast<uint64_t>(std::max(1, vt_snapshot.rows));
     };
-    auto apply_local_mouse_wheel = [&](uint64_t button) {
+    auto scroll_history_up = [&](uint64_t step) {
       uint64_t const current =
           local_viewport_offset.load(std::memory_order_acquire);
-      if ((button & 1U) == 0U) {
-        uint64_t const desired =
-            (current > std::numeric_limits<uint64_t>::max() - kMouseWheelStep)
-                ? std::numeric_limits<uint64_t>::max()
-                : current + kMouseWheelStep;
-        (void)apply_local_viewport_offset(desired);
-      } else {
-        (void)apply_local_viewport_offset(
-            current > kMouseWheelStep ? current - kMouseWheelStep : 0U);
-      }
+      uint64_t const desired =
+          (current > std::numeric_limits<uint64_t>::max() - step)
+              ? std::numeric_limits<uint64_t>::max()
+              : current + step;
+      local_browse_active.store(true, std::memory_order_release);
+      (void)apply_local_viewport_offset(desired);
     };
-    auto try_handle_mouse_sequence = [&](const std::string &seq) -> bool {
-      uint64_t button = 0;
-      if (seq.size() >= 6U && seq.starts_with("\x1b[<")) {
-        size_t const first_sep = seq.find(';', 3U);
-        if (first_sep == std::string::npos || first_sep <= 3U) {
-          return false;
-        }
-        auto const *begin = seq.data() + 3;
-        auto const *end = seq.data() + first_sep;
-        auto const parse_result = std::from_chars(begin, end, button);
-        if (parse_result.ec != std::errc{} || parse_result.ptr != end) {
-          return false;
-        }
-      } else if (seq.size() == 6U && seq.starts_with("\x1b[M")) {
-        unsigned char const encoded = static_cast<unsigned char>(seq[3]);
-        if (encoded < 32U) {
-          return false;
-        }
-        button = static_cast<uint64_t>(encoded - 32U);
-      } else {
-        return false;
-      }
-
-      auto const vt_snapshot = load_vt_snapshot();
-      bool const wheel = (button & 64U) != 0U && (button & 3U) <= 1U;
-      if (local_browse_active.load(std::memory_order_acquire)) {
-        if (wheel) {
-          apply_local_mouse_wheel(button);
-        } else {
-          (void)exit_local_scrollback();
-        }
-        return true;
-      }
-
-      if (vt_snapshot.available && vt_snapshot.mouse_reporting_active) {
-        passthrough.append(seq);
-        return true;
-      }
-
-      if (wheel && vt_snapshot.available && !vt_snapshot.in_alternate_screen) {
-        local_browse_active.store(true, std::memory_order_release);
-        apply_local_mouse_wheel(button);
-        return true;
-      }
-
-      if (vt_snapshot.available && !vt_snapshot.mouse_reporting_active) {
-        if (local_browse_active.load(std::memory_order_acquire)) {
-          (void)exit_local_scrollback();
-        }
-        return true;
-      }
-
-      return true;
+    auto scroll_history_down = [&](uint64_t step) {
+      uint64_t const current =
+          local_viewport_offset.load(std::memory_order_acquire);
+      local_browse_active.store(true, std::memory_order_release);
+      (void)apply_local_viewport_offset(current > step ? current - step : 0U);
     };
     auto request_term_switch = [&](int direction) {
       auto next_key = AdjacentTermKey_(terminal_service_, target.term_key,
@@ -2605,12 +2377,13 @@ ECM TerminalInterfaceService::LaunchTerminal(
     };
 
     while (!pending_local_input.empty()) {
-      if (god_mode_active.load(std::memory_order_acquire)) {
+      if (control_layer_active.load(std::memory_order_acquire)) {
         size_t seq_len = 0U;
         if (pending_local_input.front() == '\x1d') {
           passthrough.push_back('\x1d');
           pending_local_input.erase(0, 1U);
-          god_mode_active.store(false, std::memory_order_release);
+          control_layer_active.store(false, std::memory_order_release);
+          (void)exit_local_scrollback();
           render_current_frame();
           continue;
         }
@@ -2621,8 +2394,20 @@ ECM TerminalInterfaceService::LaunchTerminal(
         }
         if (pending_local_input.front() == 'q') {
           pending_local_input.erase(0, 1U);
-          god_mode_active.store(false, std::memory_order_release);
+          control_layer_active.store(false, std::memory_order_release);
           (void)channel_port->RequestForegroundDetach();
+          continue;
+        }
+        if (StartsWithAny_(pending_local_input,
+                           {"\x1b[A", "\x1bOA"}, &seq_len)) {
+          pending_local_input.erase(0, seq_len);
+          scroll_history_up(1U);
+          continue;
+        }
+        if (StartsWithAny_(pending_local_input,
+                           {"\x1b[B", "\x1bOB"}, &seq_len)) {
+          pending_local_input.erase(0, seq_len);
+          scroll_history_down(1U);
           continue;
         }
         if (StartsWithAny_(pending_local_input,
@@ -2645,7 +2430,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
         if (pending_local_input.front() == '\x1b') {
           if (pending_local_input.size() == 1U) {
             pending_local_input.erase(0, 1U);
-            god_mode_active.store(false, std::memory_order_release);
+            control_layer_active.store(false, std::memory_order_release);
+            (void)exit_local_scrollback();
             render_current_frame();
             continue;
           }
@@ -2655,36 +2441,50 @@ ECM TerminalInterfaceService::LaunchTerminal(
           }
           if (esc_len == 1U) {
             pending_local_input.erase(0, 1U);
-            god_mode_active.store(false, std::memory_order_release);
+            control_layer_active.store(false, std::memory_order_release);
+            (void)exit_local_scrollback();
             render_current_frame();
+            continue;
+          }
+          const std::string seq = pending_local_input.substr(0, esc_len);
+          if (seq == "\x1b[5~") {
+            pending_local_input.erase(0, esc_len);
+            scroll_history_up(page_step());
+            continue;
+          }
+          if (seq == "\x1b[6~") {
+            pending_local_input.erase(0, esc_len);
+            scroll_history_down(page_step());
+            continue;
+          }
+          if (seq == "\x1b[H" || seq == "\x1b[1~" || seq == "\x1b[7~" ||
+              seq.ends_with("H")) {
+            pending_local_input.erase(0, esc_len);
+            local_browse_active.store(true, std::memory_order_release);
+            (void)apply_local_viewport_offset(
+                std::numeric_limits<uint64_t>::max());
+            continue;
+          }
+          if (seq == "\x1b[F" || seq == "\x1b[4~" || seq == "\x1b[8~" ||
+              seq.ends_with("F")) {
+            pending_local_input.erase(0, esc_len);
+            (void)exit_local_scrollback();
+            continue;
+          }
+          if (seq.ends_with("A")) {
+            pending_local_input.erase(0, esc_len);
+            scroll_history_up(1U);
+            continue;
+          }
+          if (seq.ends_with("B")) {
+            pending_local_input.erase(0, esc_len);
+            scroll_history_down(1U);
             continue;
           }
           pending_local_input.erase(0, esc_len);
           continue;
         }
         pending_local_input.erase(0, 1U);
-        continue;
-      }
-
-      if (pending_local_input.starts_with(kLocalWheelUpInput_)) {
-        local_browse_active.store(true, std::memory_order_release);
-        uint64_t const current =
-            local_viewport_offset.load(std::memory_order_acquire);
-        uint64_t const desired =
-            (current > std::numeric_limits<uint64_t>::max() - kMouseWheelStep)
-                ? std::numeric_limits<uint64_t>::max()
-                : current + kMouseWheelStep;
-        (void)apply_local_viewport_offset(desired);
-        pending_local_input.erase(0, kLocalWheelUpInput_.size());
-        continue;
-      }
-      if (pending_local_input.starts_with(kLocalWheelDownInput_)) {
-        local_browse_active.store(true, std::memory_order_release);
-        uint64_t const current =
-            local_viewport_offset.load(std::memory_order_acquire);
-        (void)apply_local_viewport_offset(
-            current > kMouseWheelStep ? current - kMouseWheelStep : 0U);
-        pending_local_input.erase(0, kLocalWheelDownInput_.size());
         continue;
       }
 
@@ -2695,7 +2495,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
           (void)exit_local_scrollback();
         }
         pending_local_input.erase(0, 1U);
-        god_mode_active.store(true, std::memory_order_release);
+        control_layer_active.store(true, std::memory_order_release);
         render_current_frame();
         continue;
       }
@@ -2713,15 +2513,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
       }
 
       if (pending_local_input[1] == '[') {
-        if (pending_local_input.size() >= 6U &&
-            pending_local_input[2] == 'M') {
-          std::string const seq = pending_local_input.substr(0, 6U);
-          if (try_handle_mouse_sequence(seq)) {
-            pending_local_input.erase(0, seq.size());
-            continue;
-          }
-        }
-
         size_t final_pos = 2U;
         while (final_pos < pending_local_input.size()) {
           unsigned char const ch =
@@ -2736,46 +2527,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
         }
 
         std::string const seq = pending_local_input.substr(0, final_pos + 1U);
-        if (try_handle_mouse_sequence(seq)) {
-          pending_local_input.erase(0, seq.size());
-          continue;
-        }
-        if (seq == "\x1b[5~") {
-          local_browse_active.store(true, std::memory_order_release);
-          uint64_t const current =
-              local_viewport_offset.load(std::memory_order_acquire);
-          uint64_t const step = page_step();
-          uint64_t const desired =
-              (current > std::numeric_limits<uint64_t>::max() - step)
-                  ? std::numeric_limits<uint64_t>::max()
-                  : current + step;
-          (void)apply_local_viewport_offset(desired);
-          pending_local_input.erase(0, seq.size());
-          continue;
-        }
-        if (seq == "\x1b[6~") {
-          local_browse_active.store(true, std::memory_order_release);
-          uint64_t const current =
-              local_viewport_offset.load(std::memory_order_acquire);
-          uint64_t const step = page_step();
-          (void)apply_local_viewport_offset(
-              current > step ? current - step : 0U);
-          pending_local_input.erase(0, seq.size());
-          continue;
-        }
-        if (seq == "\x1b[H" || seq == "\x1b[1~") {
-          local_browse_active.store(true, std::memory_order_release);
-          (void)apply_local_viewport_offset(
-              std::numeric_limits<uint64_t>::max());
-          pending_local_input.erase(0, seq.size());
-          continue;
-        }
-        if (seq == "\x1b[F" || seq == "\x1b[4~") {
-          (void)exit_local_scrollback();
-          pending_local_input.erase(0, seq.size());
-          continue;
-        }
-
         passthrough_escape_sequence(passthrough, seq.size());
         continue;
       }
@@ -2785,19 +2536,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
           break;
         }
         std::string const seq = pending_local_input.substr(0, 3U);
-        if (seq == "\x1bOH") {
-          local_browse_active.store(true, std::memory_order_release);
-          (void)apply_local_viewport_offset(
-              std::numeric_limits<uint64_t>::max());
-          pending_local_input.erase(0, seq.size());
-          continue;
-        }
-        if (seq == "\x1bOF") {
-          (void)exit_local_scrollback();
-          pending_local_input.erase(0, seq.size());
-          continue;
-        }
-
         passthrough_escape_sequence(passthrough, seq.size());
         continue;
       }

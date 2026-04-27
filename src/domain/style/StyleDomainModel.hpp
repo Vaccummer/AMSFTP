@@ -132,8 +132,16 @@ struct TerminalBannerStyle {
   std::string align = "left";
 };
 
+struct TerminalControlNoteStyle {
+  std::string template_text = "";
+  std::string background = "";
+  std::string foreground = "";
+  std::string align = "left";
+};
+
 struct TerminalStyle {
   TerminalBannerStyle banner = {};
+  TerminalControlNoteStyle control_note = {};
   std::string banner_template = "";
 };
 
