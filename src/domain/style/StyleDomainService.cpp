@@ -371,10 +371,16 @@ void NormalizeTerminalStyle(TerminalStyle *style) {
   if (!style) {
     return;
   }
-  const TerminalStyle defaults = {};
-  if (style->banner_template.empty()) {
-    style->banner_template = defaults.banner_template;
+  if (style->banner.template_text.empty() && !style->banner_template.empty()) {
+    style->banner.template_text = style->banner_template;
   }
+  style->banner_template = style->banner.template_text;
+
+  std::string align = LowerTrim_(style->banner.align);
+  if (align != "left" && align != "center" && align != "right") {
+    align = "left";
+  }
+  style->banner.align = std::move(align);
 }
 
 void NormalizeStyleConfig(StyleConfig *config) {
@@ -399,4 +405,3 @@ void NormalizeStyleConfigArg(StyleConfigArg *arg) {
 }
 
 } // namespace AMDomain::style::service
-
