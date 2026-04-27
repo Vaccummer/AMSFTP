@@ -105,6 +105,18 @@ struct ConfigLsArgs : BaseArgStruct {
 };
 
 /**
+ * @brief CLI argument container for config lock.
+ */
+struct ConfigLockArgs : BaseArgStruct {
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    return managers.interfaces.config_interface_service->CheckLock();
+  }
+  void reset() override {}
+};
+
+/**
  * @brief CLI argument container for config get.
  */
 struct ConfigGetArgs : BaseArgStruct {
@@ -184,18 +196,6 @@ struct ConfigSetArgs : BaseArgStruct {
     return managers.interfaces.client_interface_service->SetHostValue(request);
   }
   void reset() override { request = {}; }
-};
-
-/**
- * @brief CLI argument container for config save.
- */
-struct ConfigSaveArgs : BaseArgStruct {
-  [[nodiscard]] ECM Run(const CLIServices &managers,
-                        const CliRunContext &ctx) const override {
-    (void)ctx;
-    return managers.interfaces.config_interface_service->SaveAll();
-  }
-  void reset() override {}
 };
 
 /**

@@ -20,7 +20,7 @@ public:
   ~ConfigInterfaceService() override = default;
 
   [[nodiscard]] ECM PrintPaths() const;
-  [[nodiscard]] ECM SaveAll() const;
+  [[nodiscard]] ECM CheckLock() const;
   [[nodiscard]] ECM BackupAll() const;
   [[nodiscard]] ECM Export(const std::string &path) const;
   [[nodiscard]] ECM EditProfile(const std::string &nickname);

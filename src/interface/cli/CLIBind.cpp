@@ -55,7 +55,7 @@ bool CommandEqualsAny_(std::string_view command,
 
 bool IsConfigWriteCommand_(std::string_view command) {
   return CommandEqualsAny_(
-      command, {"config save", "config backup", "host add", "host edit",
+      command, {"config backup", "host add", "host edit",
                 "host rn", "host rm", "host set", "profile edit",
                 "profile clean", "var def", "var del", "sftp", "ftp",
                 "local"});
@@ -147,8 +147,8 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args) {
 
   config_node->AddFunction("ls", "List project/config file paths", args,
                            &CliArgsPool::config, &CliConfigArgs::ls);
-  config_node->AddFunction("save", "Save all config files", args,
-                           &CliArgsPool::config, &CliConfigArgs::save);
+  config_node->AddFunction("lock", "Check config write lock status", args,
+                           &CliArgsPool::config, &CliConfigArgs::lock);
   config_node->AddFunction("backup", "Backup all config files", args,
                            &CliArgsPool::config, &CliConfigArgs::backup);
   config_node->AddFunction(
@@ -766,11 +766,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                     &CliFilesystemArgs::bash);
 
   root->AddFunction("exit", "Exit interactive mode", args, &CliArgsPool::fs,
-                    &CliFilesystemArgs::exit, [&args](CommandNode &node) {
-                      node.AddFlag(
-                          "-f", "--force", args.fs.exit.force,
-                          "Exit immediately without interactive-loop exit callbacks");
-                    });
+                    &CliFilesystemArgs::exit);
 }
 
 /**
@@ -906,7 +902,6 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   ctx.rcm = OK;
   ctx.enter_interactive = false;
   ctx.request_exit = false;
-  ctx.force_exit = false;
   ctx.command_name.clear();
 
   auto store_exit_code = [&ctx](int code) {
@@ -1004,7 +999,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   }
   const ECM run_rcm = selected->Run(managers, ctx);
   const ECM sync_rcm =
-      managers.application.config_service->FlushAndDumpDirtyDocuments(false);
+      managers.application.config_service->FlushAndDumpDirtyDocuments();
   ctx.rcm = run_rcm;
   if ((ctx.rcm) && !(sync_rcm)) {
     ctx.rcm = sync_rcm;

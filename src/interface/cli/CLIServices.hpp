@@ -138,7 +138,6 @@ struct CliRunContext : NonCopyableNonMovable {
   bool enforce_interactive = false;
   mutable bool enter_interactive = false;
   mutable bool request_exit = false;
-  mutable bool force_exit = false;
   amf task_control_token = nullptr;
   std::shared_ptr<std::atomic<int>> exit_code =
       std::make_shared<std::atomic<int>>(0);

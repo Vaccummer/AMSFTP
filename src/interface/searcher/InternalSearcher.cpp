@@ -31,7 +31,8 @@ std::string RenderVarValue_(const std::string &value) {
  * @brief Return true when nickname completion is requested in path context.
  */
 bool IsPathNicknameContext_(const AMCompletionContext &ctx) {
-  return HasTarget(ctx, AMCompletionTarget::Path);
+  return HasTarget(ctx, AMCompletionTarget::Path) ||
+         ctx.token_postfix.find('@') != std::string::npos;
 }
 
 /**
@@ -248,17 +249,17 @@ AMInterface::style::StyleIndex TerminalClientStyleKey_(
     AMInterface::input::IInputSemanticRuntime::TerminalNameState state) {
   switch (state) {
   case AMInterface::input::IInputSemanticRuntime::TerminalNameState::OK:
-    return AMInterface::style::StyleIndex::Nickname;
+    return AMInterface::style::StyleIndex::TermClientNameOK;
   case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Disconnected:
-    return AMInterface::style::StyleIndex::DisconnectedNickname;
+    return AMInterface::style::StyleIndex::TermClientNameDisconnected;
   case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Unestablished:
-    return AMInterface::style::StyleIndex::UnestablishedNickname;
+    return AMInterface::style::StyleIndex::TermClientNameUnestablished;
   case AMInterface::input::IInputSemanticRuntime::TerminalNameState::
       Nonexistent:
   default:
-    return AMInterface::style::StyleIndex::NonexistentNickname;
+    return AMInterface::style::StyleIndex::TermClientNameNonexistent;
   }
 }
 } // namespace
@@ -519,7 +520,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
         ParseTermTargetPrefix_(prefix, runtime->CurrentNickname());
 
     if (!target.has_explicit_client &&
-        semantics != TargetSemantics_::ExistingOnly) {
+        semantics == TargetSemantics_::NewOnly) {
       std::vector<HostLikeNameInfo> clients = CollectTerminalLikeNames_(runtime);
       std::vector<std::string> keys;
       keys.reserve(clients.size());

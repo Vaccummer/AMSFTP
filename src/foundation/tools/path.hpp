@@ -725,7 +725,8 @@ using WER = std::vector<std::pair<std::string, ECM>>;
 using WRI = std::pair<std::vector<PathInfo>, WER>;
 
 inline double timespec_to_double(const timespec &ts) {
-  return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) * 1e-9;
+  return static_cast<double>(ts.tv_sec) +
+         static_cast<double>(ts.tv_nsec) * 1e-9;
 }
 
 inline std::string HomePath() {

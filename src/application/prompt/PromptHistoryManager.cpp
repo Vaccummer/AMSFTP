@@ -69,8 +69,7 @@ ReadLastHistoryRecord_(const std::filesystem::path &history_path) {
 
 PromptHistoryManager::PromptHistoryManager(PromptHistoryArg arg,
                                            std::filesystem::path project_root)
-    : AMDomain::config::IConfigSyncPort(typeid(PromptHistoryArg)),
-      init_arg_([&arg]() {
+    : init_arg_([&arg]() {
         NormalizePromptHistoryArg_(&arg);
         return std::move(arg);
       }()),
@@ -82,24 +81,9 @@ PromptHistoryArg PromptHistoryManager::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-ECM PromptHistoryManager::FlushTo(AMDomain::config::IConfigStorePort *store) {
-  if (store == nullptr) {
-    return {EC::InvalidArg, "", "", "config store is null"};
-  }
-  PromptHistoryArg snapshot = GetInitArg();
-  NormalizePromptHistoryArg_(&snapshot);
-  if (!store->Write(std::type_index(typeid(PromptHistoryArg)),
-                    static_cast<const void *>(&snapshot))) {
-    return {EC::ConfigDumpFailed, "", "",
-            "failed to flush prompt history config"};
-  }
-  return OK;
-}
-
 void PromptHistoryManager::SetInitArg(PromptHistoryArg arg) {
   NormalizePromptHistoryArg_(&arg);
   init_arg_.lock().store(std::move(arg));
-  MarkConfigDirty();
 }
 
 std::filesystem::path

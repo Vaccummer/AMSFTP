@@ -373,6 +373,22 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   ctx.token_prefix = UnescapeBackticks_(ctx.token_prefix_raw);
   ctx.token_postfix = UnescapeBackticks_(ctx.token_postfix_raw);
 
+  // When cursor sits at token start (not inside a token), the next token's
+  // content acts as the effective postfix for @-separator detection.
+  if (!has_token && token_index < all_tokens.size()) {
+    const auto &next_tok = all_tokens[token_index].raw;
+    const size_t next_begin =
+        next_tok.quoted ? next_tok.content_start : next_tok.start;
+    if (next_begin == request.cursor &&
+        next_tok.content_end >= next_tok.content_start &&
+        next_tok.content_end <= request.input.size()) {
+      ctx.token_postfix_raw = request.input.substr(
+          next_tok.content_start,
+          next_tok.content_end - next_tok.content_start);
+      ctx.token_postfix = UnescapeBackticks_(ctx.token_postfix_raw);
+    }
+  }
+
   ctx.module = prefix_analysis.command.module;
   ctx.command_path = prefix_analysis.command.command_path;
   ctx.command_node = prefix_analysis.command.node;
@@ -562,8 +578,20 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       ctx.targets.push_back(target);
     }
   };
+  // SshTermTarget: route to ClientName when cursor is before @,
+  // otherwise route to SshTermTarget (term names from resolved client)
   if (semantic_target.has_value() &&
-      *semantic_target != AMCompletionTarget::Path) {
+      *semantic_target == AMCompletionTarget::SshTermTarget) {
+    const bool prefix_has_at = ctx.token_prefix.find('@') != std::string::npos;
+    const bool postfix_has_at =
+        ctx.token_postfix.find('@') != std::string::npos;
+    if (!prefix_has_at && postfix_has_at) {
+      push_target(AMCompletionTarget::ClientName);
+    } else {
+      push_target(AMCompletionTarget::SshTermTarget);
+    }
+  } else if (semantic_target.has_value() &&
+             *semantic_target != AMCompletionTarget::Path) {
     push_target(*semantic_target);
   }
 
@@ -577,20 +605,19 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       semantic_target.has_value() &&
       (*semantic_target == AMCompletionTarget::TerminalName ||
        *semantic_target == AMCompletionTarget::TermTargetExisting ||
-       *semantic_target == AMCompletionTarget::TermTargetNew ||
-       *semantic_target == AMCompletionTarget::SshTermTarget);
+       *semantic_target == AMCompletionTarget::TermTargetNew);
   const bool semantic_path =
       semantic_target.has_value() && *semantic_target == AMCompletionTarget::Path;
   const bool prefix_has_path_sign =
-      prefix_starts_with_path_sign || has_at || IsPathLikeText(ctx.token_prefix, false);
+      prefix_starts_with_path_sign || has_at ||
+      IsPathLikeText(ctx.token_prefix, false);
   if (semantic_path) {
-    if (ctx.token_prefix.empty()) {
+    const bool prefix_has_at = ctx.token_prefix.find('@') != std::string::npos;
+    const bool postfix_has_at =
+        ctx.token_postfix.find('@') != std::string::npos;
+    if (!prefix_has_at && postfix_has_at) {
       push_target(AMCompletionTarget::ClientName);
-      push_target(AMCompletionTarget::Path);
-    } else if (prefix_has_path_sign) {
-      push_target(AMCompletionTarget::Path);
     } else {
-      push_target(AMCompletionTarget::ClientName);
       push_target(AMCompletionTarget::Path);
     }
   } else if (!semantic_terminal &&
@@ -889,8 +916,15 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
 
   for (const auto &candidate : items.items) {
     const std::string insert_text = BuildCandidateInsertText_(ctx, candidate);
+    std::string display_str = candidate.display;
+    if (candidate.kind == AMCompletionKind::HostAttr &&
+        !args_.attr_valid_style.empty()) {
+      display_str = AMStr::fmt("[{}]{}[/]", args_.attr_valid_style,
+                               display_str.empty() ? candidate.insert_text
+                                                    : candidate.display);
+    }
     const char *display =
-        candidate.display.empty() ? nullptr : candidate.display.c_str();
+        display_str.empty() ? nullptr : display_str.c_str();
     const char *help =
         candidate.help.empty() ? nullptr : candidate.help.c_str();
     ic_add_completion_prim(cenv, insert_text.c_str(), display, help,

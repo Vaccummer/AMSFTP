@@ -37,8 +37,6 @@ std::string DefaultFileNameForKind_(DocumentKind kind) {
     return "settings.toml";
   case DocumentKind::KnownHosts:
     return "known_hosts.toml";
-  case DocumentKind::History:
-    return "history.toml";
   default:
     return "config.toml";
   }
@@ -93,9 +91,21 @@ ECM ConfigInterfaceService::PrintPaths() const {
   return OK;
 }
 
-ECM ConfigInterfaceService::SaveAll() const {
-  prompt_io_manager_.SyncCurrentHistory();
-  return config_service_.FlushAndDumpDirtyDocuments(true);
+ECM ConfigInterfaceService::CheckLock() const {
+  const bool held = config_service_.HasConfigWriteLock();
+  const std::filesystem::path lock_path =
+      config_service_.GetConfigWriteLockPath();
+  const std::string owner = config_service_.GetConfigWriteLockOwnerInfo();
+
+  prompt_io_manager_.FmtPrint("\\[ConfigWriteLock]");
+  prompt_io_manager_.FmtPrint("  held:       {}", held ? "true" : "false");
+  if (!lock_path.empty()) {
+    prompt_io_manager_.FmtPrint("  lock_path:  {}", lock_path.string());
+  }
+  if (!owner.empty()) {
+    prompt_io_manager_.FmtPrint("  owner:      {}", owner);
+  }
+  return OK;
 }
 
 ECM ConfigInterfaceService::BackupAll() const {

@@ -107,6 +107,8 @@ struct AMCompletionArgs {
   int complete_delay_ms = 100;
   std::string input_tag_command;
   std::string input_tag_module;
+  std::string attr_valid_style;
+  std::string attr_invalid_style;
 };
 
 /**

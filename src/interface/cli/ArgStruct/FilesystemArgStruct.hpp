@@ -748,15 +748,13 @@ struct BashArgs : BaseArgStruct {
 };
 
 struct ExitArgs : BaseArgStruct {
-  bool force = false;
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)managers;
     argstruct_common::SetRequestExit(ctx, true);
-    argstruct_common::SetForceExit(ctx, force);
     return OK;
   }
-  void reset() override { force = false; }
+  void reset() override {}
 };
 
 } // namespace AMInterface::cli

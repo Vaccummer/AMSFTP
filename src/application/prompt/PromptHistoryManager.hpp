@@ -1,6 +1,5 @@
 #pragma once
 
-#include "domain/config/ConfigSyncPort.hpp"
 #include "domain/prompt/PromptDomainModel.hpp"
 #include "foundation/core/DataClass.hpp"
 
@@ -18,7 +17,7 @@ struct PromptHistoryQueryResult {
   std::vector<std::string> history = {};
 };
 
-class PromptHistoryManager : public AMDomain::config::IConfigSyncPort {
+class PromptHistoryManager : public NonCopyableNonMovable {
 public:
   explicit PromptHistoryManager(PromptHistoryArg arg = {},
                                 std::filesystem::path project_root = {});
@@ -27,7 +26,6 @@ public:
   ECM Init();
 
   [[nodiscard]] PromptHistoryArg GetInitArg() const;
-  ECM FlushTo(AMDomain::config::IConfigStorePort *store) override;
 
   void SetInitArg(PromptHistoryArg arg);
 
