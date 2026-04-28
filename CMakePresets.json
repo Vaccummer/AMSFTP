@@ -31,14 +31,22 @@
                 "lhs": "${hostSystemName}",
                 "rhs": "Darwin"
             },
+            "environment": {
+                "PKG_CONFIG_ALL_STATIC": "1",
+                "PKG_CONFIG_PATH": "/opt/homebrew/opt/zlib/lib/pkgconfig:/opt/homebrew/opt/curl/lib/pkgconfig:/opt/homebrew/lib/pkgconfig"
+            },
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
                 "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_PREFIX_PATH": "/opt/homebrew;/opt/homebrew/opt/zlib;/opt/homebrew/opt/curl",
+                "CMAKE_FIND_LIBRARY_SUFFIXES": ".a",
                 "AMSFTP_BUILD_TESTS": "ON",
-                "AMSFTP_LINK_MODE": "static"
+                "AMSFTP_LINK_MODE": "static",
+                "ZLIB_ROOT": "/opt/homebrew/opt/zlib",
+                "CURL_ROOT": "/opt/homebrew/opt/curl"
             }
         },
         {
