@@ -187,8 +187,10 @@ private:
     CloseHandle(write_pipe);
 
     if (!created) {
+      const DWORD create_error = GetLastError();
       CloseHandle(read_pipe);
-      out.rcm = {EC::UnknownError, "", "", "CreateProcess failed"};
+      out.rcm = {EC::ProcessCreateFailed, "local.cmd", args.cmd,
+                 AMStr::fmt("CreateProcessW failed: {}", create_error)};
       out.data.output = "";
       out.data.exit_code = -1;
       return out;

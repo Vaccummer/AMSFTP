@@ -59,7 +59,7 @@ else()
   find_package(CURL REQUIRED)
 endif()
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(Lua REQUIRED)
+find_package(unofficial-lua CONFIG REQUIRED)
 if(WIN32)
   find_package(libssh2 CONFIG REQUIRED)
 else()
@@ -90,7 +90,6 @@ endif()
 target_include_directories(amsftp PRIVATE
   "${PROJECT_SOURCE_DIR}/src"
   "${PROJECT_SOURCE_DIR}/src/third_party"
-  ${LUA_INCLUDE_DIR}
 )
 target_link_libraries(amsftp PRIVATE
   OpenSSL::SSL
@@ -98,7 +97,7 @@ target_link_libraries(amsftp PRIVATE
   ZLIB::ZLIB
   CURL::libcurl
   nlohmann_json::nlohmann_json
-  ${LUA_LIBRARIES}
+  lua
   Threads::Threads
   CLI11::CLI11
 )

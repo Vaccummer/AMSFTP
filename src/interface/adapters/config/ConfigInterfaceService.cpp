@@ -1,10 +1,12 @@
 #include "interface/adapters/config/ConfigInterfaceService.hpp"
+#include "domain/config/ConfigSchema.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -167,6 +169,48 @@ ECM ConfigInterfaceService::Export(const std::string &path) const {
         config_service_.Dump(doc.kind, dst_path.string(), false);
     if (!(dump_rcm) && (first_error)) {
       first_error = dump_rcm;
+    }
+  }
+  return first_error;
+}
+
+ECM ConfigInterfaceService::ExportSchema(const std::string &export_dir) const {
+  const std::filesystem::path schema_dir =
+      std::filesystem::path(export_dir) / "schema";
+  std::error_code ec;
+  if (std::filesystem::exists(schema_dir, ec) &&
+      !std::filesystem::is_directory(schema_dir, ec)) {
+    return {EC::InvalidArg, "config export schema", schema_dir.string(),
+            "schema path exists but is not a directory"};
+  }
+  ECM rcm = AMPath::mkdirs(schema_dir);
+  if (!(rcm)) {
+    return rcm;
+  }
+
+  ECM first_error = OK;
+  for (const ConfigDocumentState &doc : config_service_.ListDocuments()) {
+    const char *schema_json =
+        AMDomain::config::schema::GetSchemaJson(doc.kind);
+    // build .schema.json filename from the .toml default (e.g. config.toml → config.schema.json)
+    const std::string toml_name = DefaultFileNameForKind_(doc.kind);
+    const std::filesystem::path toml_path(toml_name);
+    const std::string json_name =
+        toml_path.stem().string() + ".schema.json";
+    const std::filesystem::path dst = schema_dir / json_name;
+
+    std::ofstream ofs(dst, std::ios::binary | std::ios::trunc);
+    if (!ofs.is_open()) {
+      first_error = {EC::FilesystemNoSpace, "config export schema",
+                     dst.string(), "failed to open schema file for writing"};
+      break;
+    }
+    ofs << schema_json;
+    ofs.close();
+    if (ofs.fail() && (first_error)) {
+      first_error = {EC::FilesystemNoSpace, "config export schema",
+                     dst.string(), "write failed"};
+      break;
     }
   }
   return first_error;

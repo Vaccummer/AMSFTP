@@ -149,6 +149,7 @@ enum class ErrorCode {
   ProgrammInitializeFailed = 109,
   TargetAlreadyExists = 110,
   LUAExecutionError = 111,
+  ProcessCreateFailed = 112,
 };
 
 enum class PathType {

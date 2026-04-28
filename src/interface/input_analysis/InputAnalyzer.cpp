@@ -992,6 +992,16 @@ InputAnalysis InputAnalyzer::Analyze(const std::string &input) const {
         SetTokenClassification_(&token, TokenRole::ShellCommand);
         ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
         continue;
+      case AMCommandArgSemantic::CompletionShell: {
+        const std::string lower = AMStr::lowercase(AMStr::Strip(unescaped_text));
+        const bool valid = lower == "powershell5" || lower == "ps5" ||
+                           lower == "powershell7" || lower == "ps7" ||
+                           lower == "zsh" || lower == "bash";
+        SetTokenClassification_(&token, TokenRole::ShellValue,
+                                valid ? TokenState::Valid : TokenState::Invalid);
+        ConsumePositionalArg_(&analysis.command, hint.positional_consumed);
+        continue;
+      }
       case AMCommandArgSemantic::FindPattern:
         SetTokenClassification_(&token, TokenRole::FindPattern,
                                 TokenState::Valid);

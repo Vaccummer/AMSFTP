@@ -43,3 +43,4 @@ tmp.*
 bak.*
 data/backup/
 /history/
+/tmp/

@@ -25,6 +25,10 @@
 #include <stdexcept>
 #include <string>
 
+namespace AMInterface::parser {
+class CommandNode;
+}
+
 namespace AMInterface::cli {
 
 class InteractiveLoopRuntime;
@@ -115,6 +119,8 @@ struct CLIServices : public NonCopyableNonMovable {
     mutable InteractiveEventRegistry interactive_event_registry = {};
     mutable ServiceHolder<AMInterface::cli::InteractiveLoopRuntime>
         interactive_loop_runtime = {};
+    const AMInterface::parser::CommandNode *command_tree = nullptr;
+    std::string app_name;
   };
 
   CLIServices() = default;

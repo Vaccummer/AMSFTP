@@ -1,10 +1,13 @@
 #pragma once
 
+#include "foundation/core/DataClass.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/client/ClientInterfaceService.hpp"
 #include "interface/cli/ArgStruct/BaseArgStruct.hpp"
 #include <cstring>
+#include <filesystem>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -217,8 +220,45 @@ struct ConfigExportArgs : BaseArgStruct {
   std::string path = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
-    (void)ctx;
-    return managers.interfaces.config_interface_service->Export(path);
+    const auto local_client =
+        managers.application.client_service->GetLocalClient();
+    if (!local_client) {
+      return {EC::InvalidHandle, "config export", "",
+              "local client not available"};
+    }
+    const ControlComponent control(ctx.task_control_token);
+    auto cwd_result = managers.application.filesystem_service->GetClientCwd(
+        local_client, control);
+    if (!cwd_result.rcm) {
+      return cwd_result.rcm;
+    }
+
+    namespace fs = std::filesystem;
+    fs::path resolved = path.empty() ? fs::path(cwd_result.data)
+                                     : fs::path(path);
+    if (resolved.is_relative()) {
+      resolved = fs::path(cwd_result.data) / resolved;
+    }
+    resolved = fs::absolute(resolved).lexically_normal();
+    const std::string resolved_str = resolved.string();
+
+    ECM rcm =
+        managers.interfaces.config_interface_service->Export(resolved_str);
+    if (!(rcm)) {
+      return rcm;
+    }
+    rcm = managers.interfaces.config_interface_service->ExportSchema(
+        resolved_str);
+    if (!(rcm)) {
+      return rcm;
+    }
+
+    std::string display_path = resolved_str;
+    for (char &ch : display_path) {
+      if (ch == '\\') ch = '/';
+    }
+    std::cout << "Config exported to file:///" << display_path << "\n";
+    return OK;
   }
   void reset() override { path.clear(); }
 };

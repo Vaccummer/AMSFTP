@@ -360,11 +360,14 @@ inline ECM OpenChannelWindows_(
                      &startup.StartupInfo, &proc);
   DeleteProcThreadAttributeList(attr_list);
   if (created == 0) {
+    const DWORD create_error = GetLastError();
+    const std::string create_target =
+        init_cmd.empty() ? std::string("cmd.exe") : init_cmd;
     ClosePseudoConsoleSafe_(&pseudo_console);
     CloseHandleSafe_(&input_write);
     CloseHandleSafe_(&output_read);
-    return Err(EC::CommonFailure, "terminal.channel.init", "cmd.exe",
-               "CreateProcessW failed");
+    return Err(EC::ProcessCreateFailed, "terminal.channel.init", create_target,
+               AMStr::fmt("CreateProcessW failed: {}", create_error));
   }
 
   CloseHandleSafe_(&proc.hThread);
@@ -731,6 +734,16 @@ private:
     }
     if (keys.empty()) {
       return false;
+    }
+
+    // When input_transformer is active, it owns all control logic
+    // — bypass legacy key_ctrl_state_.
+    if (input_transformer) {
+      {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        foreground_.send_buffer.append(keys.data(), keys.size());
+      }
+      return true;
     }
 
     bool changed = false;

@@ -990,6 +990,9 @@ ECM AssembleCli_(AppRuntime &runtime) {
   runtime.cli_commands = AMInterface::cli::BindCliOptions(
       *runtime.cli_app, runtime.cli_args_pool, runtime.command_tree);
 
+  runtime.managers.runtime.command_tree = &runtime.command_tree;
+  runtime.managers.runtime.app_name = runtime.app_name;
+
   if (!runtime.cli_commands.app || !runtime.cli_commands.args) {
     return {EC::InvalidHandle, "cli assembly", "<cli-bind>",
             "failed to bind CLI commands"};

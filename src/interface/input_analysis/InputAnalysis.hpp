@@ -51,6 +51,7 @@ enum class TokenRole {
   ColonSign,
   EscapeSign,
   BangSign,
+  ShellValue,
 };
 
 enum class TokenState {

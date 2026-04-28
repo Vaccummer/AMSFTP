@@ -51,6 +51,8 @@ enum class StyleIndex : uint8_t {
   PathLike,
   FindPattern,
   TableSkeleton,
-  Error
+  Error,
+  ValidValue,
+  InvalidValue,
 };
 } // namespace AMInterface::style

@@ -72,6 +72,10 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
     return &cfg.common.attr_valid;
   case StyleIndex::NonexistentBuiltinArg:
     return &cfg.common.attr_invalid;
+  case StyleIndex::ValidValue:
+    return &cfg.value_query_highlight.valid_value;
+  case StyleIndex::InvalidValue:
+    return &cfg.value_query_highlight.invalid_value;
   case StyleIndex::Username:
     return &cfg.common.type_username;
   case StyleIndex::AtSign:

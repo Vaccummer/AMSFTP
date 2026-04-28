@@ -575,6 +575,24 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
+  if (HasTarget(ctx, AMCompletionTarget::CompletionShell)) {
+    static const std::vector<std::string> shells = {
+        "powershell5", "powershell7", "zsh", "bash"};
+    for (const auto &match : BuildGeneralMatch(shells, prefix)) {
+      const std::string &shell_name = shells[match.index];
+      AMCompletionCandidate candidate;
+      candidate.insert_text = shell_name;
+      candidate.display = shell_name;
+      candidate.kind = AMCompletionKind::ShellName;
+      candidate.score = match.score_bias;
+      result.items.push_back(std::move(candidate));
+    }
+    if (!result.items.empty()) {
+      SortCandidates(ctx, result.items);
+    }
+    return result;
+  }
+
   if (HasTarget(ctx, AMCompletionTarget::HostAttr)) {
     const std::vector<std::string> &fields =
         AMDomain::host::HostService::EditableHostSetFieldNames();

@@ -50,6 +50,7 @@ enum class AMCompletionTarget {
   TermTargetNew = 15,
   SshTermTarget = 16,
   PausedTaskId = 17,
+  CompletionShell = 18,
 };
 
 /**
@@ -68,6 +69,7 @@ enum class AMCompletionKind {
   TaskId,
   PathLocal,
   PathRemote,
+  ShellName,
 };
 
 enum class AMCompletionMode { Complete = 0, InlineHint = 1 };
@@ -109,6 +111,7 @@ struct AMCompletionArgs {
   std::string input_tag_module;
   std::string attr_valid_style;
   std::string attr_invalid_style;
+  std::string valid_value_style;
 };
 
 /**

@@ -1168,23 +1168,29 @@ private:
       return;
     }
 
-    for (char const ch : keys) {
-      if (!key_ctrl_state_.load(std::memory_order_acquire)) {
-        if (ch == '\x1d') {
-          key_ctrl_state_.store(true, std::memory_order_release);
+    // When the rich input_transformer is active, it owns all control logic
+    // — bypass the legacy key_ctrl_state_ mechanism entirely.
+    if (input_transformer) {
+      foreground_.send_buffer.append(keys.data(), keys.size());
+    } else {
+      for (char const ch : keys) {
+        if (!key_ctrl_state_.load(std::memory_order_acquire)) {
+          if (ch == '\x1d') {
+            key_ctrl_state_.store(true, std::memory_order_release);
+            continue;
+          }
+          foreground_.send_buffer.push_back(ch);
           continue;
         }
+
+        if (ch == 'q' || ch == 'Q') {
+          (void)RequestForegroundDetach();
+          return;
+        }
+
+        key_ctrl_state_.store(false, std::memory_order_release);
         foreground_.send_buffer.push_back(ch);
-        continue;
       }
-
-      if (ch == 'q' || ch == 'Q') {
-        (void)RequestForegroundDetach();
-        return;
-      }
-
-      key_ctrl_state_.store(false, std::memory_order_release);
-      foreground_.send_buffer.push_back(ch);
     }
 
     if (foreground_.send_buffer.empty()) {
@@ -1502,33 +1508,42 @@ private:
       return;
     }
 
-    bool detach = false;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      for (char const ch : keys) {
-        if (!key_ctrl_state_.load(std::memory_order_acquire)) {
-          if (ch == '\x1d') {
-            key_ctrl_state_.store(true, std::memory_order_release);
+    // When input_transformer is active, it owns all control logic
+    // — bypass legacy key_ctrl_state_.
+    if (input_transformer) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        foreground_.send_buffer.append(keys.data(), keys.size());
+      }
+    } else {
+      bool detach = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (char const ch : keys) {
+          if (!key_ctrl_state_.load(std::memory_order_acquire)) {
+            if (ch == '\x1d') {
+              key_ctrl_state_.store(true, std::memory_order_release);
+              continue;
+            }
+            foreground_.send_buffer.push_back(ch);
             continue;
           }
-          foreground_.send_buffer.push_back(ch);
-          continue;
-        }
 
-        if (ch == 'q' || ch == 'Q') {
-          detach = true;
+          if (ch == 'q' || ch == 'Q') {
+            detach = true;
+            key_ctrl_state_.store(false, std::memory_order_release);
+            continue;
+          }
+
           key_ctrl_state_.store(false, std::memory_order_release);
-          continue;
+          foreground_.send_buffer.push_back(ch);
         }
-
-        key_ctrl_state_.store(false, std::memory_order_release);
-        foreground_.send_buffer.push_back(ch);
       }
-    }
 
-    if (detach) {
-      (void)RequestForegroundDetach();
-      return;
+      if (detach) {
+        (void)RequestForegroundDetach();
+        return;
+      }
     }
 
     FlushSend_();

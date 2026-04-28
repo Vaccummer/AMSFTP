@@ -77,6 +77,9 @@ std::optional<StyleIndex> ResolveStyleIndex_(TokenRole role, TokenState state) {
   case TokenRole::ValidatedValue:
     return state == TokenState::Invalid ? StyleIndex::IllegalCommand
                                         : StyleIndex::BuiltinArg;
+  case TokenRole::ShellValue:
+    return state == TokenState::Invalid ? StyleIndex::InvalidValue
+                                        : StyleIndex::ValidValue;
   case TokenRole::VariableReference:
   case TokenRole::VariableName:
     return state == TokenState::Missing ? StyleIndex::NonexistentVarname
