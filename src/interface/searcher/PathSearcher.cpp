@@ -485,7 +485,8 @@ std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
         AMCompletionTarget::VarZone, AMCompletionTarget::TerminalName,
         AMCompletionTarget::TermTargetExisting,
         AMCompletionTarget::TermTargetNew,
-        AMCompletionTarget::SshTermTarget},
+        AMCompletionTarget::SshTermTarget,
+        AMCompletionTarget::CompletionShell},
        internal_engine});
 
   auto path_engine =

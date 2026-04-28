@@ -331,6 +331,7 @@ void AMCompleteEngine::LoadConfig() {
   args_.complete_help_style = "";
   args_.attr_valid_style = "";
   args_.attr_invalid_style = "";
+  args_.valid_value_style = "";
 
   if (style_service_ != nullptr) {
     const auto style_cfg = style_service_->GetInitArg().style;
@@ -343,6 +344,10 @@ void AMCompleteEngine::LoadConfig() {
     args_.attr_invalid_style = NormalizeStyleForIc_(
         style_cfg.common.attr_invalid.empty() ? "[ansi-red]"
                                               : style_cfg.common.attr_invalid);
+    args_.valid_value_style = NormalizeStyleForIc_(
+        style_cfg.value_query_highlight.valid_value.empty()
+            ? "[ansi-green]"
+            : style_cfg.value_query_highlight.valid_value);
   }
 
   args_.complete_delay_ms = static_cast<int>(completer_arg.complete_delay_ms);

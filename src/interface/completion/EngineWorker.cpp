@@ -263,6 +263,8 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
     return AMCompletionTarget::VariableName;
   case AMCommandArgSemantic::VarZone:
     return AMCompletionTarget::VarZone;
+  case AMCommandArgSemantic::CompletionShell:
+    return AMCompletionTarget::CompletionShell;
   case AMCommandArgSemantic::None:
   default:
     return std::nullopt;
@@ -605,7 +607,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       semantic_target.has_value() &&
       (*semantic_target == AMCompletionTarget::TerminalName ||
        *semantic_target == AMCompletionTarget::TermTargetExisting ||
-       *semantic_target == AMCompletionTarget::TermTargetNew);
+       *semantic_target == AMCompletionTarget::TermTargetNew ||
+       *semantic_target == AMCompletionTarget::SshTermTarget);
   const bool semantic_path =
       semantic_target.has_value() && *semantic_target == AMCompletionTarget::Path;
   const bool prefix_has_path_sign =
@@ -919,6 +922,12 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
     if (candidate.kind == AMCompletionKind::HostAttr &&
         !args_.attr_valid_style.empty()) {
       display_str = AMStr::fmt("[{}]{}[/]", args_.attr_valid_style,
+                               display_str.empty() ? candidate.insert_text
+                                                    : candidate.display);
+    }
+    if (candidate.kind == AMCompletionKind::ShellName &&
+        !args_.valid_value_style.empty()) {
+      display_str = AMStr::fmt("[{}]{}[/]", args_.valid_value_style,
                                display_str.empty() ? candidate.insert_text
                                                     : candidate.display);
     }

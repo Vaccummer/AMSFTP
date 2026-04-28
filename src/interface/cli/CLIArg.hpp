@@ -8,6 +8,7 @@
 #include "interface/cli/ArgStruct/PoolArgStruct.hpp"
 #include "interface/cli/ArgStruct/ProfileArgStruct.hpp"
 #include "interface/cli/ArgStruct/TaskArgStruct.hpp"
+#include "interface/cli/ArgStruct/CompletionArgStruct.hpp"
 #include "interface/cli/ArgStruct/VarArgStruct.hpp"
 
 namespace AMInterface::cli {
@@ -104,6 +105,10 @@ struct CliTaskArgs {
   TaskRemoveArgs rm = {};
 };
 
+struct CliCompletionArgs {
+  CompletionArgs completion = {};
+};
+
 struct CliArgsPool {
   CliConfigArgs config = {};
   CliHostArgs host = {};
@@ -114,6 +119,7 @@ struct CliArgsPool {
   CliPoolArgs pool = {};
   CliVarArgs var = {};
   CliTaskArgs task = {};
+  CliCompletionArgs completion = {};
 
   void SetActive(BaseArgStruct *active) { active_ = active; }
   [[nodiscard]] BaseArgStruct *GetActive() const { return active_; }

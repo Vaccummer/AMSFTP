@@ -23,6 +23,7 @@ public:
   [[nodiscard]] ECM CheckLock() const;
   [[nodiscard]] ECM BackupAll() const;
   [[nodiscard]] ECM Export(const std::string &path) const;
+  [[nodiscard]] ECM ExportSchema(const std::string &export_dir) const;
   [[nodiscard]] ECM EditProfile(const std::string &nickname);
   [[nodiscard]] ECM GetProfile(const std::vector<std::string> &nicknames);
   [[nodiscard]] ECM CleanProfile();

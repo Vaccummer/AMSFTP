@@ -157,6 +157,7 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args) {
       [&args](CommandNode &node) {
         node.AddOption("path", args.config.export_config.path, 1, 1,
                        "Local directory path", true);
+        node.AddPositionalRule(0, AMCommandArgSemantic::Path, false);
       });
 
   root->AddFunction(
@@ -874,6 +875,24 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args) {
 }
 
 /**
+ * @brief Bind the completion script generation command.
+ */
+void BindCompletionCommands(CommandNode *root, CliArgsPool &args) {
+  if (!root) return;
+
+  root->AddFunction(
+      "completion", "Generate static shell completion scripts", args,
+      &CliArgsPool::completion, &CliCompletionArgs::completion,
+      [&args](CommandNode &node) {
+        node.AddOption("shell", args.completion.completion.shell_str, 1, 1,
+                       "Shell: powershell5 powershell7 zsh bash", true);
+        node.AddOption("-o", "--output", args.completion.completion.out_dir, 1, 1,
+                       AMCommandArgSemantic::Path, "Output directory", true);
+        node.AddPositionalRule(0, AMCommandArgSemantic::CompletionShell, false);
+      });
+}
+
+/**
  * @brief Bind all CLI options into the argument pool.
  */
 CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args,
@@ -891,6 +910,7 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args,
   BindVarCommands(&tree, args);
   BindFilesystemCommands(&tree, args);
   BindTaskCommands(&tree, args);
+  BindCompletionCommands(&tree, args);
   return commands;
 }
 

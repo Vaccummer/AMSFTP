@@ -36,6 +36,7 @@ enum class AMCommandArgSemantic {
   PausedTaskId,
   VariableName,
   VarZone,
+  CompletionShell,
 };
 
 /**
