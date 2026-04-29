@@ -18,6 +18,10 @@ struct CompletionScriptExportRequest {
   std::string app_name;
   std::string out_dir;
   std::string cwd;
+  std::string style_cli_module;
+  std::string style_cli_command;
+  std::string style_cli_option;
+  std::string style_complete_help;
 };
 
 struct CompletionScriptExportResult {

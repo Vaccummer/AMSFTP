@@ -679,10 +679,11 @@ struct TerminalArgs : BaseArgStruct {
   AMInterface::terminal::TerminalLaunchArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
-    (void)ctx;
     auto arg = request;
     arg.target = AMStr::Strip(arg.target);
-    return managers.interfaces.terminal_interface_service->LaunchTerminal(arg);
+    ECM rcm = managers.interfaces.terminal_interface_service->LaunchTerminal(arg);
+    argstruct_common::SetEnterInteractive(ctx, (rcm));
+    return rcm;
   }
   void reset() override { request = {}; }
 };

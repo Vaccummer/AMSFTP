@@ -1,5 +1,6 @@
 #include "interface/completion/CompletionScriptExport.hpp"
 
+#include "domain/style/StyleDomainService.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace AMInterface::completion {
@@ -125,68 +127,160 @@ std::string EscapeZsh_(const std::string &s) {
   std::string out = {};
   out.reserve(s.size() + 8);
   for (char ch : s) {
-    if (ch == '\'' || ch == '\\')
+    if (ch == '"' || ch == '\\' || ch == '$' || ch == '`')
       out.push_back('\\');
     out.push_back(ch);
   }
   return out;
 }
 
-std::string BBCodeToAnsi_(const std::string &s) {
+std::string NormalizeStyleTag_(const std::string &raw, const std::string &fallback) {
+  auto normalize = [](const std::string &input) -> std::string {
+    std::string trimmed = AMStr::Strip(input);
+    if (trimmed.empty() || trimmed.find("[/") != std::string::npos) {
+      return "";
+    }
+    if (trimmed.front() != '[') {
+      trimmed.insert(trimmed.begin(), '[');
+    }
+    if (trimmed.back() != ']') {
+      trimmed.push_back(']');
+    }
+    return trimmed;
+  };
+
+  std::string normalized = normalize(raw);
+  if (!normalized.empty() && AMDomain::style::service::IsStyleString(normalized)) {
+    return normalized;
+  }
+  normalized = normalize(fallback);
+  if (!normalized.empty() && AMDomain::style::service::IsStyleString(normalized)) {
+    return normalized;
+  }
+  return "";
+}
+
+int HexNibble_(char ch) {
+  const unsigned char uch = static_cast<unsigned char>(ch);
+  if (uch >= '0' && uch <= '9') {
+    return static_cast<int>(uch - '0');
+  }
+  if (uch >= 'a' && uch <= 'f') {
+    return static_cast<int>(uch - 'a' + 10);
+  }
+  if (uch >= 'A' && uch <= 'F') {
+    return static_cast<int>(uch - 'A' + 10);
+  }
+  return -1;
+}
+
+int HexByte_(char hi, char lo) {
+  const int h = HexNibble_(hi);
+  const int l = HexNibble_(lo);
+  if (h < 0 || l < 0) {
+    return -1;
+  }
+  return h * 16 + l;
+}
+
+std::string HexToSgrRgb_(const std::string &hex, bool background) {
+  if (!AMDomain::style::service::IsHexColorString(hex)) {
+    return "";
+  }
+  const int r = HexByte_(hex[1], hex[2]);
+  const int g = HexByte_(hex[3], hex[4]);
+  const int b = HexByte_(hex[5], hex[6]);
+  if (r < 0 || g < 0 || b < 0) {
+    return "";
+  }
+  return std::to_string(background ? 48 : 38) + ";2;" + std::to_string(r) +
+         ";" + std::to_string(g) + ";" + std::to_string(b);
+}
+
+std::string StyleTagToZshListColorCode_(const std::string &style_tag,
+                                        const std::string &fallback_code) {
+  if (style_tag.size() < 2 || style_tag.front() != '[' || style_tag.back() != ']') {
+    return fallback_code;
+  }
+  const std::string body = AMStr::Strip(style_tag.substr(1, style_tag.size() - 2));
+  if (body.empty()) {
+    return fallback_code;
+  }
+
+  std::istringstream in(body);
+  std::vector<std::string> tokens;
+  for (std::string token; in >> token;) {
+    tokens.push_back(std::move(token));
+  }
+  if (tokens.empty()) {
+    return fallback_code;
+  }
+
+  std::vector<std::string> sgr = {};
+  size_t i = 0;
+  if (i < tokens.size() && AMDomain::style::service::IsHexColorString(tokens[i])) {
+    const std::string fg = HexToSgrRgb_(tokens[i], false);
+    if (!fg.empty()) {
+      sgr.push_back(fg);
+    }
+    ++i;
+  }
+  if (i + 1 < tokens.size() && AMStr::lowercase(tokens[i]) == "on" &&
+      AMDomain::style::service::IsHexColorString(tokens[i + 1])) {
+    const std::string bg = HexToSgrRgb_(tokens[i + 1], true);
+    if (!bg.empty()) {
+      sgr.push_back(bg);
+    }
+    i += 2;
+  }
+  for (; i < tokens.size(); ++i) {
+    if (tokens[i].size() != 1) {
+      continue;
+    }
+    const char flag = static_cast<char>(
+        std::tolower(static_cast<unsigned char>(tokens[i].front())));
+    if (flag == 'b') {
+      sgr.push_back("1");
+    } else if (flag == 'i') {
+      sgr.push_back("3");
+    } else if (flag == 'u') {
+      sgr.push_back("4");
+    } else if (flag == 's') {
+      sgr.push_back("9");
+    }
+  }
+  if (sgr.empty()) {
+    return fallback_code;
+  }
+
   std::string out = {};
-  out.reserve(s.size() + 32);
-  for (size_t i = 0; i < s.size(); ++i) {
-    if (s[i] != '[' || i + 1 >= s.size()) {
-      out.push_back(s[i]);
-      continue;
+  for (size_t idx = 0; idx < sgr.size(); ++idx) {
+    if (idx != 0) {
+      out.push_back(';');
     }
-    const size_t close = s.find(']', i + 1);
-    if (close == std::string::npos) {
-      out.push_back(s[i]);
-      continue;
+    out += sgr[idx];
+  }
+  return out;
+}
+
+std::string EncodeZshTripletField_(const std::string &field) {
+  std::string out = {};
+  out.reserve(field.size() + 8);
+  for (char ch : field) {
+    switch (ch) {
+    case '%':
+      out += "%25";
+      break;
+    case ':':
+      out += "%3A";
+      break;
+    case '\n':
+      out += "%0A";
+      break;
+    default:
+      out.push_back(ch);
+      break;
     }
-    const std::string tag = s.substr(i + 1, close - i - 1);
-    if (tag == "b") {
-      out += "\033[1m";
-      i = close;
-      continue;
-    }
-    if (tag == "/b") {
-      out += "\033[22m";
-      i = close;
-      continue;
-    }
-    if (tag == "dim") {
-      out += "\033[2m";
-      i = close;
-      continue;
-    }
-    if (tag == "/dim") {
-      out += "\033[22m";
-      i = close;
-      continue;
-    }
-    if (tag == "cyan") {
-      out += "\033[36m";
-      i = close;
-      continue;
-    }
-    if (tag == "yellow") {
-      out += "\033[33m";
-      i = close;
-      continue;
-    }
-    if (tag == "green") {
-      out += "\033[32m";
-      i = close;
-      continue;
-    }
-    if (tag == "/cyan" || tag == "/yellow" || tag == "/green") {
-      out += "\033[39m";
-      i = close;
-      continue;
-    }
-    out.push_back(s[i]);
   }
   return out;
 }
@@ -331,21 +425,13 @@ std::string GeneratePowerShell_(const CommandNode &tree,
   s << "    $items += [pscustomobject]@{ name = $opt.name; icon = '⚙️'; info = "
        "$opt.info; rt = 'ParameterName' }\n";
   s << "  }\n";
-  s << "  $maxNameLen = 0\n";
-  s << "  foreach ($it in $items) {\n";
-  s << "    $nameLen = if ($null -eq $it.name) { 0 } else { $it.name.Length }\n";
-  s << "    if ($nameLen -gt $maxNameLen) { $maxNameLen = $nameLen }\n";
-  s << "  }\n";
   s << "  $completions = @()\n";
   s << "  foreach ($it in $items) {\n";
   s << "    $name = if ($null -eq $it.name) { '' } else { $it.name }\n";
   s << "    $info = if ([string]::IsNullOrWhiteSpace($it.info)) { '' } else { "
        "$it.info }\n";
-  s << "    $nameBlock = $name.PadRight($maxNameLen)\n";
-  s << "    $display = if ($info.Length -gt 0) { \"$nameBlock $($it.icon) "
-       "$info\" } else { \"$nameBlock $($it.icon)\" }\n";
-  s << "      $completions += [System.Management.Automation.CompletionResult]"
-       "::new($name, $display, $it.rt, $info)\n";
+  s << "    $completions += [System.Management.Automation.CompletionResult]"
+       "::new($name, $name, $it.rt, $info)\n";
   s << "  }\n";
   s << "  $completions\n";
   s << "}\n";
@@ -412,30 +498,106 @@ std::string GenerateBash_(const CommandNode &tree,
   return s.str();
 }
 
-std::string GenerateZsh_(const CommandNode &tree, const std::string &app_name) {
+std::string GenerateZsh_(const CommandNode &tree, const std::string &app_name,
+                         const CompletionScriptExportRequest &request) {
   FlatTree flat = {};
   CollectFlat_(&tree, "", flat);
+  const std::string module_style =
+      NormalizeStyleTag_(request.style_cli_module, "[#00b8a9]");
+  const std::string command_style =
+      NormalizeStyleTag_(request.style_cli_command, "[#FFC66C]");
+  const std::string option_style =
+      NormalizeStyleTag_(request.style_cli_option, "[#b8b0b0]");
+  const std::string comment_style =
+      NormalizeStyleTag_(request.style_complete_help, "[#928a97]");
+  const std::string module_color =
+      StyleTagToZshListColorCode_(module_style, "38;2;0;184;169");
+  const std::string command_color =
+      StyleTagToZshListColorCode_(command_style, "38;2;255;198;108");
+  const std::string option_color =
+      StyleTagToZshListColorCode_(option_style, "38;2;184;176;176");
+  const std::string help_color =
+      StyleTagToZshListColorCode_(comment_style, "38;2;146;138;151");
 
   std::ostringstream s;
   s << "#compdef " << app_name << "\n\n";
+  s << "# Generated from BBCode style config via zstyle list-colors.\n";
+  s << "_" << app_name << "_completion_styles() {\n";
+  s << "  zmodload zsh/complist 2>/dev/null\n";
+  s << "  local -a ams_colors=(\n";
+  s << "    \"(ams-module)==(#b)([^[:space:]]##)([[:space:]]##)(*)=0="
+    << module_color << "=0=" << help_color << "\"\n";
+  s << "    \"(ams-module)=*=" << module_color << "\"\n";
+  s << "    \"(ams-command)==(#b)([^[:space:]]##)([[:space:]]##)(*)=0="
+    << command_color << "=0=" << help_color << "\"\n";
+  s << "    \"(ams-command)=*=" << command_color << "\"\n";
+  s << "    \"(ams-option)==(#b)([^[:space:]]##)([[:space:]]##)(*)=0="
+    << option_color << "=0=" << help_color << "\"\n";
+  s << "    \"(ams-option)=*=" << option_color << "\"\n";
+  s << "  )\n";
+  s << "  zstyle ':completion:*:*:" << app_name << ":*' group-name ''\n";
+  s << "  zstyle ':completion:*:*:" << app_name
+    << ":*' list-colors \"${ams_colors[@]}\"\n";
+  s << "  zstyle ':completion:*:*:" << app_name
+    << ":*:default' list-colors \"${ams_colors[@]}\"\n";
+  s << "}\n";
+  s << "_" << app_name << "_completion_styles\n\n";
 
-  auto emitZshDescribed = [&](const FlatNode &fn) {
-    for (const auto &si : fn.subs) {
-      const char *tag = si.is_module ? "[b]Module[/b]" : "[dim]Command[/dim]";
-      s << "    \"" << EscapeZsh_(si.name) << ":"
-        << EscapeZsh_(si.name + " " + BBCodeToAnsi_(tag)) << "\"\n";
+  auto emitTriplets = [&](const std::vector<SubInfo> &subs,
+                          const std::vector<OptInfo> &opts) {
+    auto emit_item = [&](const std::string &target, const std::string &display,
+                         const std::string &comment) {
+      s << "        \"" << EscapeZsh_(EncodeZshTripletField_(target)) << ":"
+        << EscapeZsh_(EncodeZshTripletField_(display)) << ":"
+        << EscapeZsh_(EncodeZshTripletField_(comment)) << "\"\n";
+    };
+    for (const auto &si : subs) {
+      emit_item(si.name, si.name, si.help);
     }
-    for (const auto &oi : fn.opts) {
-      const char *tag =
-          oi.has_value ? "[yellow]Option[/yellow]" : "[cyan]Flag[/cyan]";
-      s << "    \"" << EscapeZsh_(oi.display) << ":"
-        << EscapeZsh_(oi.display + " " + BBCodeToAnsi_(tag)) << "\"\n";
+    for (const auto &oi : opts) {
+      emit_item(oi.display, oi.display, oi.help);
     }
+  };
+
+  auto emitZshCaseItems = [&](const FlatNode &fn) {
+    std::vector<SubInfo> modules = {};
+    std::vector<SubInfo> commands = {};
+    modules.reserve(fn.subs.size());
+    commands.reserve(fn.subs.size());
+    for (const auto &sub : fn.subs) {
+      if (sub.is_module) {
+        modules.push_back(sub);
+      } else {
+        commands.push_back(sub);
+      }
+    }
+    auto sort_sub = [](const SubInfo &a, const SubInfo &b) {
+      return a.name < b.name;
+    };
+    std::sort(modules.begin(), modules.end(), sort_sub);
+    std::sort(commands.begin(), commands.end(), sort_sub);
+
+    std::vector<OptInfo> options = fn.opts;
+    std::sort(options.begin(), options.end(),
+              [](const OptInfo &a, const OptInfo &b) {
+                return a.display < b.display;
+              });
+
+    s << "      module_items=(\n";
+    emitTriplets(modules, {});
+    s << "      )\n";
+    s << "      command_items=(\n";
+    emitTriplets(commands, {});
+    s << "      )\n";
+    s << "      option_items=(\n";
+    emitTriplets({}, options);
+    s << "      )\n";
   };
 
   s << "_" << app_name << "() {\n";
   s << "  local context state line\n";
   s << "  typeset -A opt_args\n\n";
+  s << "  _" << app_name << "_completion_styles\n\n";
 
   s << "  local cmd_path=\"\"\n";
   s << "  local i w\n";
@@ -453,37 +615,64 @@ std::string GenerateZsh_(const CommandNode &tree, const std::string &app_name) {
   s << "    esac\n";
   s << "  done\n\n";
 
-  s << "  local -a completions=()\n";
+  s << "  local -a module_items=()\n";
+  s << "  local -a command_items=()\n";
+  s << "  local -a option_items=()\n";
   s << "  case \"$cmd_path\" in\n";
   for (const auto &[path, fn] : flat) {
     s << "    \"" << EscapeZsh_(path) << "\")\n";
-    s << "      completions=(\n";
-    emitZshDescribed(fn);
-    s << "      )\n";
+    emitZshCaseItems(fn);
     s << "      ;;\n";
   }
   s << "  esac\n\n";
 
-  s << "  if (( ${#completions} )); then\n";
-  s << "    _describe -t commands '' completions\n";
-  s << "  fi\n";
+  s << "  _ams_add_group() {\n";
+  s << "    local tag=\"$1\"\n";
+  s << "    local group=\"$2\"\n";
+  s << "    local source_name=\"$3\"\n";
+  s << "    local -a source=(\"${(@P)source_name}\")\n";
+  s << "    (( ${#source} )) || return 0\n";
+  s << "    local -a targets=()\n";
+  s << "    local -a displays=()\n";
+  s << "    local item target rest display\n";
+  s << "    for item in \"${source[@]}\"; do\n";
+  s << "      target=\"${item%%:*}\"\n";
+  s << "      rest=\"${item#*:}\"\n";
+  s << "      display=\"${rest%%:*}\"\n";
+  s << "      target=\"${target//%0A/$'\\n'}\"\n";
+  s << "      target=\"${target//%3A/:}\"\n";
+  s << "      target=\"${target//%25/%}\"\n";
+  s << "      display=\"${display//%0A/$'\\n'}\"\n";
+  s << "      display=\"${display//%3A/:}\"\n";
+  s << "      display=\"${display//%25/%}\"\n";
+  s << "      targets+=(\"$target\")\n";
+  s << "      displays+=(\"$display\")\n";
+  s << "    done\n";
+  s << "    local expl\n";
+  s << "    _description \"$tag\" expl \"$group\"\n";
+  s << "    compadd \"${expl[@]}\" -Q -J \"$group\" -d displays -a targets\n";
+  s << "  }\n\n";
+  s << "  _ams_add_group ams-module ams-module module_items\n";
+  s << "  _ams_add_group ams-command ams-command command_items\n";
+  s << "  _ams_add_group ams-option ams-option option_items\n";
   s << "}\n\n";
   s << "_" << app_name << " \"$@\"\n";
 
   return s.str();
 }
 
-ECMData<std::string> BuildScriptContent_(const CommandNode &tree,
-                                         CompletionScriptShell shell,
-                                         const std::string &app_name) {
-  switch (shell) {
+ECMData<std::string>
+BuildScriptContent_(const CompletionScriptExportRequest &request,
+                    const std::string &app_name) {
+  const CommandNode &tree = *request.command_tree;
+  switch (request.shell) {
   case CompletionScriptShell::Powershell5:
   case CompletionScriptShell::Powershell7:
     return {GeneratePowerShell_(tree, app_name), OK};
   case CompletionScriptShell::Bash:
     return {GenerateBash_(tree, app_name), OK};
   case CompletionScriptShell::Zsh:
-    return {GenerateZsh_(tree, app_name), OK};
+    return {GenerateZsh_(tree, app_name, request), OK};
   }
   return {{EC::InvalidArg, "completion.export", "", "unsupported shell"}, ""};
 }
@@ -551,8 +740,7 @@ ExportCompletionScript(const CompletionScriptExportRequest &request) {
             {}};
   }
 
-  auto content_result =
-      BuildScriptContent_(*request.command_tree, request.shell, app_name);
+  auto content_result = BuildScriptContent_(request, app_name);
   if (!content_result.rcm) {
     return content_result.rcm;
   }
