@@ -3,7 +3,7 @@
 #include "application/client/ClientAppService.hpp"
 #include "application/completion/CompleterAppService.hpp"
 #include "application/config/ConfigAppService.hpp"
-#include "application/filesystem/FilesystemAppService.hpp"
+#include "application/filesystem/FileSystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
 #include "application/log/LoggerAppService.hpp"
 #include "application/prompt/PromptHistoryManager.hpp"

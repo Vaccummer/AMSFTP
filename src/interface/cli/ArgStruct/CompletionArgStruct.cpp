@@ -39,6 +39,13 @@ ECM CompletionArgs::Run(const CLIServices &managers,
   request.app_name = managers.runtime.app_name;
   request.out_dir = out_dir;
   request.cwd = cwd_result.data;
+  if (managers.interfaces.style_service.IsReady()) {
+    const auto style_cfg = managers.interfaces.style_service->GetInitArg().style;
+    request.style_cli_module = style_cfg.common.cli_module;
+    request.style_cli_command = style_cfg.common.cli_command;
+    request.style_cli_option = style_cfg.common.cli_option;
+    request.style_complete_help = style_cfg.complete_menu.help_style;
+  }
 
   auto export_result = AMInterface::completion::ExportCompletionScript(request);
   if (!export_result.rcm) {
