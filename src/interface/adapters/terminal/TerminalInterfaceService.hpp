@@ -22,7 +22,7 @@ public:
   TerminalInterfaceService(
       AMApplication::client::ClientAppService &client_service,
       AMApplication::terminal::TermAppService &terminal_service,
-      AMApplication::filesystem::FilesystemAppService &filesystem_service,
+      AMApplication::filesystem::FileSystemAppService &filesystem_service,
       AMInterface::style::AMStyleService &style_service,
       AMInterface::prompt::PromptIOManager &prompt_io_manager);
   ~TerminalInterfaceService() override;
@@ -59,7 +59,7 @@ private:
 
   AMApplication::client::ClientAppService &client_service_;
   AMApplication::terminal::TermAppService &terminal_service_;
-  AMApplication::filesystem::FilesystemAppService &filesystem_service_;
+  AMApplication::filesystem::FileSystemAppService &filesystem_service_;
   AMInterface::style::AMStyleService &style_service_;
   AMInterface::prompt::PromptIOManager &prompt_io_manager_;
   AMDomain::client::amf default_interrupt_flag_ = nullptr;

@@ -338,7 +338,7 @@ void PrintGroupedClientPaths(
 FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
     AMApplication::client::ClientAppService &client_service,
     AMApplication::host::HostAppService &host_service,
-    AMApplication::filesystem::FilesystemAppService &filesystem_service,
+    AMApplication::filesystem::FileSystemAppService &filesystem_service,
     AMInterface::style::AMStyleService &style_service,
     AMInterface::prompt::PromptIOManager &prompt_io_manager)
     : client_service_(client_service), host_service_(host_service),
@@ -704,7 +704,7 @@ ECM FilesystemInterfaceSerivce::Realpath(
   }
 
   auto abs_result =
-      AMApplication::filesystem::FilesystemAppService::ResolveAbsolutePath(
+      AMApplication::filesystem::FileSystemAppService::ResolveAbsolutePath(
           client_result.data, split_result.data.path, control);
   if (!(abs_result.rcm)) {
     prompt_io_manager_.ErrorFormat(abs_result.rcm);

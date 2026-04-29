@@ -71,7 +71,7 @@ struct ApplicationAssemblyState final {
       nullptr;
   std::unique_ptr<AMApplication::terminal::TermAppService> terminal_service =
       nullptr;
-  std::unique_ptr<AMApplication::filesystem::FilesystemAppService>
+  std::unique_ptr<AMApplication::filesystem::FileSystemAppService>
       filesystem_service = nullptr;
   std::unique_ptr<AMApplication::var::VarAppService> var_service = nullptr;
   std::unique_ptr<AMApplication::completion::CompleterConfigManager>
@@ -285,7 +285,7 @@ ECM BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   }
 
   state->filesystem_service =
-      std::make_unique<AMApplication::filesystem::FilesystemAppService>(
+      std::make_unique<AMApplication::filesystem::FileSystemAppService>(
           snapshots.filesystem_arg, state->client_service.get(),
           state->log_manager.get());
 
@@ -384,7 +384,7 @@ ECM RegisterConfigSyncPorts_(ApplicationAssemblyState *state) {
   if (!rcm) {
     return rcm;
   }
-  rcm = register_port(state->filesystem_service.get(), "FilesystemAppService");
+  rcm = register_port(state->filesystem_service.get(), "FileSystemAppService");
   if (!rcm) {
     return rcm;
   }

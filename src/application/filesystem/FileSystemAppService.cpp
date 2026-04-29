@@ -1,6 +1,6 @@
 #include "application/filesystem/FileSystemAppService.hpp"
-#include "application/filesystem/FilesystemAppBaseService.hpp"
-#include "application/filesystem/detail/FilesystemMatchTools.hpp"
+#include "application/filesystem/FileSystemAppBaseService.hpp"
+#include "application/filesystem/detail/FileSystemMatchTools.hpp"
 #include "application/log/ProgramTrace.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "foundation/tools/path.hpp"
@@ -143,15 +143,15 @@ std::vector<PathInfo> CompactMatchedPaths_(const std::vector<PathInfo> &raw) {
   return compacted;
 }
 
-FilesystemAppService::FilesystemAppService(
+FileSystemAppService::FileSystemAppService(
     FilesystemArg arg, ClientAppService *client_service,
     AMApplication::log::LoggerAppService *logger)
-    : FilesystemAppBaseService(std::move(arg), client_service),
+    : FileSystemAppBaseService(std::move(arg), client_service),
       logger_(logger) {}
 
-void FilesystemAppService::ClearCache() { ClearBaseIOCache(); }
+void FileSystemAppService::ClearCache() { ClearBaseIOCache(); }
 
-void FilesystemAppService::TraceFs_(const ECM &rcm, const PathTarget &target,
+void FileSystemAppService::TraceFs_(const ECM &rcm, const PathTarget &target,
                                     const std::string &action,
                                     const std::string &message) const {
   const std::string display =
@@ -162,7 +162,7 @@ void FilesystemAppService::TraceFs_(const ECM &rcm, const PathTarget &target,
   TraceFs_(rcm, display, action, message);
 }
 
-void FilesystemAppService::TraceFs_(const ECM &rcm, const std::string &target,
+void FileSystemAppService::TraceFs_(const ECM &rcm, const std::string &target,
                                     const std::string &action,
                                     const std::string &message) const {
   std::string detail = message;
@@ -179,7 +179,7 @@ void FilesystemAppService::TraceFs_(const ECM &rcm, const std::string &target,
 }
 
 ECMData<ClientHandle>
-FilesystemAppService::GetClient(const std::string &nickname,
+FileSystemAppService::GetClient(const std::string &nickname,
                                 const ControlComponent &control) {
   if (!client_service_) {
     return {nullptr,
@@ -193,7 +193,7 @@ FilesystemAppService::GetClient(const std::string &nickname,
 }
 
 ECMData<ClientHandle>
-FilesystemAppService::GetTransferClient_(const std::string &nickname) {
+FileSystemAppService::GetTransferClient_(const std::string &nickname) {
   if (!client_service_) {
     return {nullptr,
             Err(EC::InvalidHandle, "filesystem", "", "client service is null")};
@@ -206,7 +206,7 @@ FilesystemAppService::GetTransferClient_(const std::string &nickname) {
 }
 
 ECMData<ResolvedPath>
-FilesystemAppService::ResolvePath_(const PathTarget &target,
+FileSystemAppService::ResolvePath_(const PathTarget &target,
                                    const ControlComponent &control,
                                    ClientHandle preferred_client) {
   if (!client_service_) {
@@ -258,7 +258,7 @@ FilesystemAppService::ResolvePath_(const PathTarget &target,
 }
 
 ECMData<std::string>
-FilesystemAppService::GetClientHome(ClientHandle client,
+FileSystemAppService::GetClientHome(ClientHandle client,
                                     const ControlComponent &control) {
   if (!client) {
     return {"",
@@ -288,7 +288,7 @@ FilesystemAppService::GetClientHome(ClientHandle client,
 }
 
 ECMData<std::string>
-FilesystemAppService::GetClientCwd(const ClientHandle &client,
+FileSystemAppService::GetClientCwd(const ClientHandle &client,
                                    const ControlComponent &control) {
   if (!client) {
     return {"",
@@ -308,7 +308,7 @@ FilesystemAppService::GetClientCwd(const ClientHandle &client,
 }
 
 ECMData<std::string>
-FilesystemAppService::ResolveAbsolutePath(ClientHandle client,
+FileSystemAppService::ResolveAbsolutePath(ClientHandle client,
                                           const std::string &raw_path,
                                           const ControlComponent &control) {
   if (!client) {
@@ -337,7 +337,7 @@ FilesystemAppService::ResolveAbsolutePath(ClientHandle client,
 }
 
 ECMData<PathTarget>
-FilesystemAppService::GetCwd(const ControlComponent &control) {
+FileSystemAppService::GetCwd(const ControlComponent &control) {
   PathTarget out = {};
   if (!client_service_) {
     return {std::move(out),
@@ -364,7 +364,7 @@ FilesystemAppService::GetCwd(const ControlComponent &control) {
   return {std::move(out), OK};
 }
 
-ECM FilesystemAppService::EnsureClientWorkdir(ClientHandle client,
+ECM FileSystemAppService::EnsureClientWorkdir(ClientHandle client,
                                               const ControlComponent &control) {
   if (!client) {
     return Err(EC::InvalidHandle, "filesystem", "", "Client handle is null");
@@ -447,7 +447,7 @@ ECM FilesystemAppService::EnsureClientWorkdir(ClientHandle client,
   return ClientAppService::SetClientMetadata(client, metadata);
 }
 
-ECMData<PathTarget> FilesystemAppService::PeekCdHistory() const {
+ECMData<PathTarget> FileSystemAppService::PeekCdHistory() const {
   auto history = cd_history_.lock();
   auto list = history.load();
   if (list.empty()) {
@@ -457,7 +457,7 @@ ECMData<PathTarget> FilesystemAppService::PeekCdHistory() const {
   return {list.front(), OK};
 }
 
-ECM FilesystemAppService::ChangeDir(PathTarget path,
+ECM FileSystemAppService::ChangeDir(PathTarget path,
                                     const ControlComponent &control,
                                     bool from_history) {
   auto resolved_result = ResolvePath_(path, control);
@@ -523,7 +523,7 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
   return OK;
 }
 
-ECMData<PathEntry> FilesystemAppService::StatEntry(
+ECMData<PathEntry> FileSystemAppService::StatEntry(
     const PathTarget &target, const ControlComponent &control, bool trace_link,
     ClientHandle preferred_client) {
   auto resolved = ResolvePath_(target, control, preferred_client);
@@ -547,7 +547,7 @@ ECMData<PathEntry> FilesystemAppService::StatEntry(
   return {std::move(out), OK};
 }
 
-ECMData<PathInfo> FilesystemAppService::Stat(const PathTarget &path,
+ECMData<PathInfo> FileSystemAppService::Stat(const PathTarget &path,
                                              const ControlComponent &control,
                                              bool trace_link,
                                              ClientHandle preferred_client) {
@@ -559,7 +559,7 @@ ECMData<PathInfo> FilesystemAppService::Stat(const PathTarget &path,
 }
 
 ECMData<std::vector<PathInfo>>
-FilesystemAppService::Listdir(const PathTarget &path,
+FileSystemAppService::Listdir(const PathTarget &path,
                               const ControlComponent &control,
                               ClientHandle preferred_client) {
   auto resolved_result = ResolvePath_(path, control, preferred_client);
@@ -576,7 +576,7 @@ FilesystemAppService::Listdir(const PathTarget &path,
 }
 
 ECMData<std::vector<std::string>>
-FilesystemAppService::ListNames(const PathTarget &path,
+FileSystemAppService::ListNames(const PathTarget &path,
                                 const ControlComponent &control,
                                 ClientHandle preferred_client) {
   auto resolved_result = ResolvePath_(path, control, preferred_client);
@@ -592,7 +592,7 @@ FilesystemAppService::ListNames(const PathTarget &path,
                        resolved.abs_path, control);
 }
 
-ECM FilesystemAppService::Mkdirs(const PathTarget &path,
+ECM FileSystemAppService::Mkdirs(const PathTarget &path,
                                  const ControlComponent &control,
                                  ClientHandle preferred_client) {
   auto resolved_result = ResolvePath_(path, control, preferred_client);
@@ -610,7 +610,7 @@ ECM FilesystemAppService::Mkdirs(const PathTarget &path,
   return rcm;
 }
 
-ECMData<double> FilesystemAppService::TestRTT(const std::string &nickname,
+ECMData<double> FileSystemAppService::TestRTT(const std::string &nickname,
                                               const ControlComponent &control,
                                               int times) {
   auto get_result = GetClient(nickname, control);
@@ -629,7 +629,7 @@ ECMData<double> FilesystemAppService::TestRTT(const std::string &nickname,
 }
 
 ECMData<PathTarget>
-FilesystemAppService::ResolveTrashDir(const PathTarget &source,
+FileSystemAppService::ResolveTrashDir(const PathTarget &source,
                                       const ControlComponent &control,
                                       ClientHandle preferred_client) {
   auto source_resolved = ResolvePath_(source, control, preferred_client);
@@ -665,7 +665,7 @@ FilesystemAppService::ResolveTrashDir(const PathTarget &source,
   return {std::move(out), OK};
 }
 
-ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
+ECM FileSystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
                                  const ControlComponent &control, bool mkdir,
                                  bool overwrite) {
   auto src_resolved = ResolvePath_(src, control);
@@ -778,7 +778,7 @@ ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
 }
 
 ECMData<RmfilePlan>
-FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
+FileSystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
                                     const ControlComponent &control) {
   RmfilePlan plan = {};
   ECM status = OK;
@@ -907,7 +907,7 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
 }
 
 ECMData<std::vector<std::pair<PathTarget, ECM>>>
-FilesystemAppService::ExecuteRmfile(
+FileSystemAppService::ExecuteRmfile(
     const RmfilePlan &plan, const ControlComponent &control,
     std::function<void(const PathTarget &, ECM)> on_error) {
   std::vector<std::pair<PathTarget, ECM>> errors = {};
@@ -981,7 +981,7 @@ FilesystemAppService::ExecuteRmfile(
   return {std::move(errors), status};
 }
 
-ECMData<std::vector<std::pair<PathTarget, ECM>>> FilesystemAppService::Rmdir(
+ECMData<std::vector<std::pair<PathTarget, ECM>>> FileSystemAppService::Rmdir(
     std::vector<PathTarget> targets, const ControlComponent &control,
     std::function<void(const PathTarget &, ECM)> on_error) {
   std::vector<std::pair<PathTarget, ECM>> errors = {};
@@ -1063,7 +1063,7 @@ ECMData<std::vector<std::pair<PathTarget, ECM>>> FilesystemAppService::Rmdir(
 }
 
 ECMData<PermanentRemovePlan>
-FilesystemAppService::PreparePermanentRemove(std::vector<PathTarget> targets,
+FileSystemAppService::PreparePermanentRemove(std::vector<PathTarget> targets,
                                              const ControlComponent &control) {
   PermanentRemovePlan plan = {};
   ECM status = OK;
@@ -1252,7 +1252,7 @@ FilesystemAppService::PreparePermanentRemove(std::vector<PathTarget> targets,
 }
 
 ECMData<std::vector<std::pair<PathTarget, ECM>>>
-FilesystemAppService::ExecutePermanentRemove(
+FileSystemAppService::ExecutePermanentRemove(
     const PermanentRemovePlan &plan, const ControlComponent &control,
     std::function<void(const PathTarget &)> on_progress,
     std::function<void(const PathTarget &, ECM)> on_error) {
@@ -1332,7 +1332,7 @@ FilesystemAppService::ExecutePermanentRemove(
 }
 
 ECMData<std::vector<std::pair<PathTarget, ECM>>>
-FilesystemAppService::Saferm(std::vector<PathTarget> targets,
+FileSystemAppService::Saferm(std::vector<PathTarget> targets,
                              const ControlComponent &control) {
   std::vector<std::pair<PathTarget, ECM>> errors = {};
   ECM status = OK;

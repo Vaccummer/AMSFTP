@@ -17,10 +17,10 @@ using PathEntry = AMDomain::filesystem::PathEntry;
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientAppService = AMApplication::client::ClientAppService;
 
-class FilesystemAppBaseService : public AMDomain::config::IConfigSyncPort {
+class FileSystemAppBaseService : public AMDomain::config::IConfigSyncPort {
 public:
-  FilesystemAppBaseService(FilesystemArg arg, ClientAppService *client_service);
-  ~FilesystemAppBaseService() override = default;
+  FileSystemAppBaseService(FilesystemArg arg, ClientAppService *client_service);
+  ~FileSystemAppBaseService() override = default;
 
   ECM Init();
 

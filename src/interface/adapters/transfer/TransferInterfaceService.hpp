@@ -19,7 +19,7 @@ namespace AMInterface::transfer {
 class TransferInterfaceService final : public NonCopyableNonMovable {
 public:
   TransferInterfaceService(
-      AMApplication::filesystem::FilesystemAppService &filesystem_service,
+      AMApplication::filesystem::FileSystemAppService &filesystem_service,
       AMApplication::transfer::TransferAppService &transfer_service,
       AMInterface::prompt::PromptIOManager &prompt_io_manager,
       std::function<ControlComponent(AMDomain::client::amf)>
@@ -83,7 +83,7 @@ private:
   FindTask_(AMDomain::transfer::TaskID task_id) const;
 
 private:
-  AMApplication::filesystem::FilesystemAppService &filesystem_service_;
+  AMApplication::filesystem::FileSystemAppService &filesystem_service_;
   AMInterface::prompt::PromptIOManager &prompt_io_manager_;
   AMApplication::transfer::TransferAppService &transfer_app_service_;
   AMInterface::style::AMStyleService *style_service_ = nullptr;

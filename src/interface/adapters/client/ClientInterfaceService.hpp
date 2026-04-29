@@ -20,7 +20,7 @@ namespace AMInterface::client {
 using ClientAppService = AMApplication::client::ClientAppService;
 using ConfigAppService = AMApplication::config::ConfigAppService;
 using TermAppService = AMApplication::terminal::TermAppService;
-using FilesystemAppService = AMApplication::filesystem::FilesystemAppService;
+using FileSystemAppService = AMApplication::filesystem::FileSystemAppService;
 using AMApplication::host::HostAppService;
 using AMApplication::host::KnownHostsAppService;
 using PromptProfileManager = AMApplication::prompt::PromptProfileManager;
@@ -37,7 +37,7 @@ public:
   ClientInterfaceService(ClientAppService &client_service,
                          ConfigAppService &config_service,
                          TermAppService &terminal_service,
-                         FilesystemAppService &filesystem_service,
+                         FileSystemAppService &filesystem_service,
                          HostAppService &host_config_manager,
                          KnownHostsAppService &known_hosts_manager,
                          PromptProfileManager &prompt_profile_manager,
@@ -104,7 +104,7 @@ private:
   ClientAppService &client_service_;
   ConfigAppService &config_service_;
   TermAppService &terminal_service_;
-  FilesystemAppService &filesystem_service_;
+  FileSystemAppService &filesystem_service_;
   HostAppService &host_config_manager_;
   KnownHostsAppService &known_hosts_manager_;
   PromptProfileManager &prompt_profile_manager_;

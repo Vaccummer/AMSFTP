@@ -24,7 +24,7 @@ public:
   FilesystemInterfaceSerivce(
       AMApplication::client::ClientAppService &client_service,
       AMApplication::host::HostAppService &host_service,
-      AMApplication::filesystem::FilesystemAppService &filesystem_service,
+      AMApplication::filesystem::FileSystemAppService &filesystem_service,
       AMInterface::style::AMStyleService &style_service,
       AMInterface::prompt::PromptIOManager &prompt_io_manager);
   ~FilesystemInterfaceSerivce() override = default;
@@ -100,7 +100,7 @@ private:
 
   AMApplication::client::ClientAppService &client_service_;
   [[maybe_unused]] AMApplication::host::HostAppService &host_service_;
-  AMApplication::filesystem::FilesystemAppService &filesystem_service_;
+  AMApplication::filesystem::FileSystemAppService &filesystem_service_;
   AMInterface::style::AMStyleService &style_service_;
   AMInterface::prompt::PromptIOManager &prompt_io_manager_;
   AMDomain::client::amf default_interrupt_flag_ = nullptr;

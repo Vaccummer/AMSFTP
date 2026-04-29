@@ -1,4 +1,4 @@
-#include "application/filesystem/FilesystemAppBaseService.hpp"
+#include "application/filesystem/FileSystemAppBaseService.hpp"
 #include <stdexcept>
 
 namespace AMApplication::filesystem {
@@ -10,7 +10,7 @@ void HashCombine_(size_t &seed, size_t value) {
 }
 } // namespace
 
-FilesystemAppBaseService::FilesystemAppBaseService(
+FileSystemAppBaseService::FileSystemAppBaseService(
     FilesystemArg arg, ClientAppService *client_service)
     : AMDomain::config::IConfigSyncPort(typeid(FilesystemArg)),
       init_arg_(std::move(arg)), client_service_(client_service),
@@ -20,7 +20,7 @@ FilesystemAppBaseService::FilesystemAppBaseService(
   }
 }
 
-size_t FilesystemAppBaseService::BaseIOCache::KeyHash::operator()(
+size_t FileSystemAppBaseService::BaseIOCache::KeyHash::operator()(
     const PathTarget &key) const noexcept {
   size_t seed = 0;
   HashCombine_(seed, std::hash<std::string>{}(key.nickname));
@@ -28,13 +28,13 @@ size_t FilesystemAppBaseService::BaseIOCache::KeyHash::operator()(
   return seed;
 }
 
-bool FilesystemAppBaseService::BaseIOCache::KeyEq::operator()(
+bool FileSystemAppBaseService::BaseIOCache::KeyEq::operator()(
     const PathTarget &lhs, const PathTarget &rhs) const noexcept {
   return lhs.nickname == rhs.nickname && lhs.path == rhs.path;
 }
 
 PathTarget
-FilesystemAppBaseService::BuildBaseCacheKey(const std::string &nickname,
+FileSystemAppBaseService::BuildBaseCacheKey(const std::string &nickname,
                                             const std::string &abs_path) const {
   PathTarget key = {};
   key.nickname = nickname;
@@ -42,7 +42,7 @@ FilesystemAppBaseService::BuildBaseCacheKey(const std::string &nickname,
   return key;
 }
 
-std::vector<std::string> FilesystemAppBaseService::BuildBaseListNames(
+std::vector<std::string> FileSystemAppBaseService::BuildBaseListNames(
     const std::vector<PathInfo> &entries) {
   std::vector<std::string> names = {};
   names.reserve(entries.size());
@@ -52,7 +52,7 @@ std::vector<std::string> FilesystemAppBaseService::BuildBaseListNames(
   return names;
 }
 
-ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
+ECMData<PathInfo> FileSystemAppBaseService::BaseStat(
     ClientHandle client, const std::string &nickname,
     const std::string &abs_path, const ControlComponent &control,
     bool trace_link) {
@@ -92,7 +92,7 @@ ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
   return out;
 }
 
-ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
+ECMData<std::vector<PathInfo>> FileSystemAppBaseService::BaseListdir(
     ClientHandle client, const std::string &nickname,
     const std::string &abs_path, const ControlComponent &control) {
   if (!client) {
@@ -146,7 +146,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
   return out;
 }
 
-ECMData<std::vector<std::string>> FilesystemAppBaseService::BaseListNames(
+ECMData<std::vector<std::string>> FileSystemAppBaseService::BaseListNames(
     ClientHandle client, const std::string &nickname,
     const std::string &abs_path, const ControlComponent &control) {
   if (!client) {
@@ -194,14 +194,14 @@ ECMData<std::vector<std::string>> FilesystemAppBaseService::BaseListNames(
   return out;
 }
 
-void FilesystemAppBaseService::ClearBaseIOCache() {
+void FileSystemAppBaseService::ClearBaseIOCache() {
   auto cache_guard = base_io_cache_.lock();
   cache_guard->stat_cache.clear();
   cache_guard->listdir_cache.clear();
   cache_guard->listnames_cache.clear();
 }
 
-void FilesystemAppBaseService::ClearBaseIOCacheByNickname(
+void FileSystemAppBaseService::ClearBaseIOCacheByNickname(
     const std::string &nickname) {
   if (nickname.empty()) {
     return;
@@ -224,7 +224,7 @@ void FilesystemAppBaseService::ClearBaseIOCacheByNickname(
   }
 }
 
-void FilesystemAppBaseService::ClearBaseIOCacheByPath(
+void FileSystemAppBaseService::ClearBaseIOCacheByPath(
     const std::string &nickname, const std::string &abs_path) {
   if (nickname.empty() || abs_path.empty()) {
     return;
@@ -236,7 +236,7 @@ void FilesystemAppBaseService::ClearBaseIOCacheByPath(
   cache_guard->listnames_cache.erase(key);
 }
 
-ECM FilesystemAppBaseService::Init() {
+ECM FileSystemAppBaseService::Init() {
   if (!client_service_) {
     return Err(EC::InvalidHandle, "filesystem.init", "",
                "client service is null");
@@ -249,11 +249,11 @@ ECM FilesystemAppBaseService::Init() {
   return OK;
 }
 
-FilesystemArg FilesystemAppBaseService::GetInitArg() const {
+FilesystemArg FileSystemAppBaseService::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-ECM FilesystemAppBaseService::FlushTo(
+ECM FileSystemAppBaseService::FlushTo(
     AMDomain::config::IConfigStorePort *store) {
   if (store == nullptr) {
     return Err(EC::InvalidArg, "filesystem.flush", "", "config store is null");
@@ -267,7 +267,7 @@ ECM FilesystemAppBaseService::FlushTo(
   return OK;
 }
 
-std::string FilesystemAppBaseService::CurrentNickname() const {
+std::string FileSystemAppBaseService::CurrentNickname() const {
   if (!client_service_) {
     return "";
   }

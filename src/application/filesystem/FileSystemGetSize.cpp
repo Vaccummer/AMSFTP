@@ -51,7 +51,7 @@ PathTarget BuildCallbackPath_(const std::string &nickname,
 
 } // namespace
 
-ECMData<int64_t> FilesystemAppService::GetSize(
+ECMData<int64_t> FileSystemAppService::GetSize(
     const PathTarget &path, const ControlComponent &control,
     std::function<bool(const PathTarget &, int64_t)> on_progress,
     std::function<void(const PathTarget &, ECM)> on_error) {

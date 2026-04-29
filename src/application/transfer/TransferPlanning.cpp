@@ -164,7 +164,7 @@ TransferAppService::ResolveTransferDst(PathTarget dst,
     return {std::move(out), add_dst_rcm};
   }
 
-  auto abs_result = AMApplication::filesystem::FilesystemAppService::
+  auto abs_result = AMApplication::filesystem::FileSystemAppService::
       ResolveAbsolutePath(transfer_client.data, dst.path, control);
   if (!(abs_result.rcm)) {
     return {std::move(out), abs_result.rcm};
@@ -266,7 +266,7 @@ ECMData<SourceResolveResult> TransferAppService::ResolveTransferSrc(
 
     src.path = src.path.empty() ? "." : src.path;
     const bool is_wildcard = HasWildcard(src.path);
-    auto abs_result = AMApplication::filesystem::FilesystemAppService::
+    auto abs_result = AMApplication::filesystem::FileSystemAppService::
         ResolveAbsolutePath(src_transfer.data, src.path, control);
     if (!(abs_result.rcm)) {
       mark_error(src.nickname, src, abs_result.rcm);
@@ -675,7 +675,7 @@ ECMData<HttpDownloadPlan> TransferAppService::BuildHttpDownloadPlan(
                                                       "Destination client is null")
                                                 : client_result.rcm};
   }
-  auto abs_result = AMApplication::filesystem::FilesystemAppService::
+  auto abs_result = AMApplication::filesystem::FileSystemAppService::
       ResolveAbsolutePath(client_result.data, base_target.path, control);
   if (!(abs_result.rcm)) {
     return {std::move(out), abs_result.rcm};
