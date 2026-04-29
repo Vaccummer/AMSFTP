@@ -219,7 +219,7 @@ void SortAndDedupResults_(std::vector<PathInfo> *results) {
 }
 } // namespace
 
-ECMData<std::vector<PathInfo>> FilesystemAppService::find(
+ECMData<std::vector<PathInfo>> FileSystemAppService::find(
     const PathTarget &path, SearchType type, const ControlComponent &control,
     std::function<void(const PathTarget &)> on_enter_dir,
     std::function<void(const PathTarget &, ECM)> on_error,

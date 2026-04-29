@@ -1,6 +1,6 @@
 #pragma once
-#include "application/filesystem/FilesystemAppBaseService.hpp"
-#include "application/filesystem/FilesystemAppDTO.hpp"
+#include "application/filesystem/FileSystemAppBaseService.hpp"
+#include "application/filesystem/FileSystemAppDTO.hpp"
 #include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
 #include "foundation/core/Enum.hpp"
 #include <functional>
@@ -20,11 +20,11 @@ using RunResult = AMDomain::filesystem::RunResult;
 using ClientHandle = AMDomain::client::ClientHandle;
 using AMDomain::filesystem::SearchType;
 
-class FilesystemAppService final : public FilesystemAppBaseService {
+class FileSystemAppService final : public FileSystemAppBaseService {
 public:
-  FilesystemAppService(FilesystemArg arg, ClientAppService *client_service,
+  FileSystemAppService(FilesystemArg arg, ClientAppService *client_service,
                        AMApplication::log::LoggerAppService *logger = nullptr);
-  ~FilesystemAppService() override = default;
+  ~FileSystemAppService() override = default;
 
   [[nodiscard]] static ECMData<std::string>
   GetClientHome(ClientHandle client, const ControlComponent &control);

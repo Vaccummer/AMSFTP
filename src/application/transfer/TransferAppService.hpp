@@ -28,7 +28,7 @@ public:
   TransferAppService(
       AMDomain::transfer::ITransferPoolPort &transfer_pool,
       AMApplication::client::ClientAppService &client_service,
-      AMApplication::filesystem::FilesystemAppService &filesystem_service,
+      AMApplication::filesystem::FileSystemAppService &filesystem_service,
       AMApplication::log::LoggerAppService *logger = nullptr);
   ~TransferAppService() override = default;
 
@@ -96,7 +96,7 @@ private:
 private:
   AMDomain::transfer::ITransferPoolPort &transfer_pool_;
   AMApplication::client::ClientAppService &client_service_;
-  AMApplication::filesystem::FilesystemAppService &filesystem_service_;
+  AMApplication::filesystem::FileSystemAppService &filesystem_service_;
   AMApplication::log::LoggerAppService *logger_ = nullptr;
   mutable AMAtomic<std::unordered_map<TaskID, TaskHandle>> paused_tasks_ = {};
   mutable AMAtomic<std::unordered_map<TaskID, TaskHandle>> finished_tasks_ = {};

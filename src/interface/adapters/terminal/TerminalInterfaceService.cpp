@@ -1763,7 +1763,7 @@ TerminalInterfaceService::~TerminalInterfaceService() {
 TerminalInterfaceService::TerminalInterfaceService(
     AMApplication::client::ClientAppService &client_service,
     AMApplication::terminal::TermAppService &terminal_service,
-    AMApplication::filesystem::FilesystemAppService &filesystem_service,
+    AMApplication::filesystem::FileSystemAppService &filesystem_service,
     AMInterface::style::AMStyleService &style_service,
     AMInterface::prompt::PromptIOManager &prompt_io_manager)
     : client_service_(client_service), terminal_service_(terminal_service),

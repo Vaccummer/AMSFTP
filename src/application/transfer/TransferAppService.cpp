@@ -132,7 +132,7 @@ ECM CheckTransferClientsBeforeSubmit_(
 TransferAppService::TransferAppService(
     AMDomain::transfer::ITransferPoolPort &transfer_pool,
     AMApplication::client::ClientAppService &client_service,
-    AMApplication::filesystem::FilesystemAppService &filesystem_service,
+    AMApplication::filesystem::FileSystemAppService &filesystem_service,
     AMApplication::log::LoggerAppService *logger)
     : transfer_pool_(transfer_pool), client_service_(client_service),
       filesystem_service_(filesystem_service), logger_(logger) {}

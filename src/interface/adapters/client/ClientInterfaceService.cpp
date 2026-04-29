@@ -1338,7 +1338,7 @@ ECM PromptModifyHostConfig_(PromptIOManager &prompt,
 ClientInterfaceService::ClientInterfaceService(
     ClientAppService &client_service, ConfigAppService &config_service,
     TermAppService &terminal_service,
-    FilesystemAppService &filesystem_service,
+    FileSystemAppService &filesystem_service,
     HostAppService &host_config_manager,
     KnownHostsAppService &known_hosts_manager,
     PromptProfileManager &prompt_profile_manager,

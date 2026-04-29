@@ -84,7 +84,7 @@ struct CLIServices : public NonCopyableNonMovable {
         client_service = {};
     mutable ServiceHolder<AMApplication::terminal::TermAppService>
         terminal_service = {};
-    mutable ServiceHolder<AMApplication::filesystem::FilesystemAppService>
+    mutable ServiceHolder<AMApplication::filesystem::FileSystemAppService>
         filesystem_service = {};
     mutable ServiceHolder<AMApplication::transfer::TransferAppService>
         transfer_service = {};
