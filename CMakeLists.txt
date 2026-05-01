@@ -70,7 +70,7 @@ endif()
 set(AMSFTP_BUILD_LINKAGE "${AMSFTP_LINK_MODE}")
 
 set(AMSFTP_PROGRAM_NAME "AMSFTP")
-set(AMSFTP_PROGRAM_VERSION "1.0")
+set(AMSFTP_PROGRAM_VERSION "1.0.0")
 
 set(AMSFTP_APP_DESCRIPTION_TEXT
     "${AMSFTP_PROGRAM_NAME}\\nthis program is a CLI program for multi-host SFTP/FTP/HTTP file management and SSH sessions.")

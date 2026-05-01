@@ -14,6 +14,7 @@
 #include "interface/parser/CommandTree.hpp"
 #include "interface/prompt/CLIPromtRender.hpp"
 #include <algorithm>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -496,8 +497,18 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   AMApplication::prompt::PromptRenderDTO prompt_dto = {};
   ECM last_prompt_result = OK;
   int64_t last_prompt_elapsed_ms = 0;
+  const auto should_exit_on_sigterm = [&managers, &ctx]() -> bool {
+    return ctx.task_control_token &&
+           ctx.task_control_token->IsInterrupted() &&
+           managers.domain.signal_monitor.IsReady() &&
+           managers.domain.signal_monitor->LastSignal() == SIGTERM;
+  };
 
   while (true) {
+    if (should_exit_on_sigterm()) {
+      store_exit_code(static_cast<int>(EC::Terminate));
+      break;
+    }
     if (ctx.task_control_token->IsInterrupted()) {
       ctx.task_control_token->ClearInterrupt();
       continue;
@@ -523,6 +534,11 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 
     std::optional<std::string> line_opt = std::nullopt;
     line_opt = managers.interfaces.prompt_io_manager->PromptCore(prompt_text);
+
+    if (should_exit_on_sigterm()) {
+      store_exit_code(static_cast<int>(EC::Terminate));
+      break;
+    }
 
     managers.runtime.interactive_event_registry.Run(
         InteractiveEventCategory::CorePromptReturn);
