@@ -1,7 +1,7 @@
 #include "infrastructure/signal_monitor/SignalMonitor.hpp"
 #include <algorithm>
-#include <csignal>
 #include <chrono>
+#include <csignal>
 #include <foundation/tools/enum_related.hpp>
 #include <memory>
 #include <utility>
@@ -27,6 +27,9 @@ BOOL WINAPI ConsoleCtrlHandler_(DWORD ctrl_type) {
     GlobalSignalInt.store(SIGINT, std::memory_order_release);
     return TRUE;
   case CTRL_BREAK_EVENT:
+  case CTRL_CLOSE_EVENT:
+  case CTRL_LOGOFF_EVENT:
+  case CTRL_SHUTDOWN_EVENT:
     GlobalSignalInt.store(SIGTERM, std::memory_order_release);
     return TRUE;
   default:
@@ -57,8 +60,7 @@ void SignalMonitorImpl::Start() {
   if (running_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
-  worker_ =
-      std::thread([this]() { Run_(); });
+  worker_ = std::thread([this]() { Run_(); });
 }
 
 ECM SignalMonitorImpl::Init() {

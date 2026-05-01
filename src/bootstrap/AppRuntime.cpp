@@ -868,7 +868,8 @@ ECM InitSignalMonitor_(AppRuntime &runtime) {
     if (task_control_token) {
       task_control_token->RequestInterrupt(signal_num == SIGTERM ? 0 : 1000);
     }
-    if (signal_num == SIGINT && ic_is_editline_active()) {
+    if ((signal_num == SIGINT || signal_num == SIGTERM) &&
+        ic_is_editline_active()) {
       (void)ic_async_stop();
     }
   };
