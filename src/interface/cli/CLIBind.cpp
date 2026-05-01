@@ -597,6 +597,15 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
       });
 
   root->AddFunction(
+      "rn", "Rename one path", args, &CliArgsPool::fs, &CliFilesystemArgs::rn,
+      [&args](CommandNode &node) {
+        node.AddOption("src", args.fs.rn.src, 1, 1, "Source path", true);
+        node.AddOption("dst", args.fs.rn.dst, 1, 1, "Destination path", true);
+        node.AddPositionalRule(0, Sem::Path, false);
+        node.AddPositionalRule(1, Sem::Path, false);
+      });
+
+  root->AddFunction(
       "clone", "Clone one source to one destination (cp -c)", args,
       &CliArgsPool::fs, &CliFilesystemArgs::clone,
       [&args](CommandNode &node) {

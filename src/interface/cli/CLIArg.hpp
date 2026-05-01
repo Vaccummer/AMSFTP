@@ -52,6 +52,7 @@ struct CliFilesystemArgs {
   ClearArgs clear = {};
   CpArgs cp = {};
   MoveArgs mv = {};
+  RenameArgs rn = {};
   CloneArgs clone = {};
   WgetArgs wget = {};
   SftpArgs sftp = {};

@@ -409,6 +409,25 @@ struct MoveArgs : BaseArgStruct {
   }
 };
 
+struct RenameArgs : BaseArgStruct {
+  std::string src = {};
+  std::string dst = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    AMInterface::filesystem::FilesystemRenameArg arg = {};
+    arg.target = src;
+    arg.dst = dst;
+    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.target);
+    managers.interfaces.var_interface_service->VSubstitutePathLike(arg.dst);
+    return managers.interfaces.filesystem_interface_service->Rename(arg);
+  }
+  void reset() override {
+    src.clear();
+    dst.clear();
+  }
+};
+
 struct CloneArgs : BaseArgStruct {
   std::string src = {};
   std::string dst = {};

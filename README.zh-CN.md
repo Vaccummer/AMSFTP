@@ -10,7 +10,7 @@ AMSFTP 是一个基于 C++20 的命令行工作区，用于在本地、SFTP、FT
 
 - 本地、SFTP、FTP 与 HTTP 下载相关客户端工作流
 - 保存 host profile，并快速切换 client
-- 文件命令：`stat`、`ls`、`size`、`find`、`mkdir`、`rm`、`tree`、`realpath`、`cp`、`mv`、`clone`、`wget`
+- 文件命令：`stat`、`ls`、`size`、`find`、`mkdir`、`rm`、`tree`、`realpath`、`cp`、`mv`、`rn`、`clone`、`wget`
 - 异步传输任务：`task ls`、`task inspect`、`task pause`、`task resume`、`task terminate`
 - 通过 `bash` 进入交互模式
 - 通过 `ssh` 和 `term` 管理 SSH/本地终端会话
