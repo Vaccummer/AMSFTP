@@ -57,3 +57,4 @@ cp -r D:\Document\Desktop\1\tes2.7z mac@Data\new\new
 cp -r D:\Document\Desktop\1\tes2.7z mac@Data\
 pool ls -c
 exit
+ssh mac@ne
