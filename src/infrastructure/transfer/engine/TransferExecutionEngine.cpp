@@ -163,6 +163,11 @@ ECM TransferExecutionEngine::TransferSignleFile(
             "IDs"};
   }
 
+  if (task->size > 0 && task->transferred == task->size) {
+    task_info->SetCurrentTaskResult(OK);
+    return OK;
+  }
+
   if (auto *http_io = dynamic_cast<AMHTTPIOCore *>(&src_client->IOPort());
       http_io != nullptr && task->transferred > 0) {
     const size_t resume_offset = task->transferred;
