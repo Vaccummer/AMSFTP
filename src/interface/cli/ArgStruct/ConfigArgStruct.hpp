@@ -120,6 +120,18 @@ struct ConfigLockArgs : BaseArgStruct {
 };
 
 /**
+ * @brief CLI argument container for config templates.
+ */
+struct ConfigTemplatesArgs : BaseArgStruct {
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    return managers.interfaces.config_interface_service->PrintTemplateInfo();
+  }
+  void reset() override {}
+};
+
+/**
  * @brief CLI argument container for config get.
  */
 struct ConfigGetArgs : BaseArgStruct {
@@ -319,7 +331,6 @@ struct ConfigDecryptArgs : BaseArgStruct {
 };
 
 } // namespace AMInterface::cli
-
 
 
 

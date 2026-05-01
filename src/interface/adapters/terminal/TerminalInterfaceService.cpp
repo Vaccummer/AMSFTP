@@ -518,21 +518,18 @@ TerminalBannerConfig_ ResolveTerminalBanner_(
   TerminalBannerConfig_ out = {};
   const auto style_config = style_service.GetInitArg().style;
   const auto &banner = style_config.terminal.banner;
-  const std::string banner_template = banner.template_text.empty()
-                                          ? style_config.terminal.banner_template
-                                          : banner.template_text;
   out.background = banner.background;
   out.align = ParseTerminalBannerAlign_(banner.align);
-  if (AMStr::Strip(banner_template).empty()) {
+  if (AMStr::Strip(banner.template_text).empty()) {
     return out;
   }
 
   const auto render = AMInterface::prompt::LUARender(
-      {banner_template},
+      {banner.template_text},
       BuildTerminalBannerLuaVars_(target, request, os_type,
                                   style_config.cli_prompt.icons));
   if (!(render.rcm)) {
-    out.text = banner_template;
+    out.text = banner.template_text;
     return out;
   }
   out.text = render.data;

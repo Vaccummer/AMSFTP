@@ -149,6 +149,9 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args) {
                            &CliArgsPool::config, &CliConfigArgs::ls);
   config_node->AddFunction("lock", "Check config write lock status", args,
                            &CliArgsPool::config, &CliConfigArgs::lock);
+  config_node->AddFunction("templates", "Print template variable reference",
+                           args, &CliArgsPool::config,
+                           &CliConfigArgs::templates);
   config_node->AddFunction("backup", "Backup all config files", args,
                            &CliArgsPool::config, &CliConfigArgs::backup);
   config_node->AddFunction(

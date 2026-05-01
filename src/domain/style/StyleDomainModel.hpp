@@ -146,7 +146,6 @@ struct TerminalControlNoteStyle {
 struct TerminalStyle {
   TerminalBannerStyle banner = {};
   TerminalControlNoteStyle control_note = {};
-  std::string banner_template = "";
 };
 
 struct StyleConfig {

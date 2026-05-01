@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -54,6 +55,58 @@ ResolveExportFileName_(AMApplication::config::ConfigAppService &config_service,
   }
   return DefaultFileNameForKind_(kind);
 }
+
+struct TemplateVarInfo_ {
+  const char *name = "";
+  const char *type = "";
+  const char *description = "";
+};
+
+std::string DataPathForKind_(
+    const AMApplication::config::ConfigAppService &config_service,
+    DocumentKind kind) {
+  std::filesystem::path data_path = {};
+  if (config_service.GetDataPath(kind, &data_path)) {
+    return AbsoluteDisplayPath_(data_path);
+  }
+  return AbsoluteDisplayPath_(config_service.ProjectRoot() /
+                              DefaultFileNameForKind_(kind));
+}
+
+void PrintTemplateInfoBlock_(
+    AMInterface::prompt::PromptIOManager &prompt,
+    const std::string &name,
+    const std::string &purpose,
+    const std::string &file_path,
+    const std::string &key,
+    const std::string &engine,
+    std::initializer_list<TemplateVarInfo_> variables,
+    std::initializer_list<const char *> notes = {}) {
+  prompt.FmtPrint("Template: {}", name);
+  prompt.FmtPrint("Purpose : {}", purpose);
+  prompt.FmtPrint("File    : {}", file_path);
+  prompt.FmtPrint("Key     : {}", key);
+  prompt.FmtPrint("Engine  : {}", engine);
+  if (notes.size() > 0U) {
+    prompt.Print("Notes   :");
+    for (const char *note : notes) {
+      prompt.FmtPrint("  - {}", note);
+    }
+  }
+  prompt.Print("Variables:");
+  size_t name_width = 0U;
+  size_t type_width = 0U;
+  for (const auto &var : variables) {
+    name_width = std::max(name_width, std::string(var.name).size());
+    type_width = std::max(type_width, std::string(var.type).size());
+  }
+  for (const auto &var : variables) {
+    prompt.FmtPrint("  {}   {}   {}",
+                    AMStr::PadRightAscii(var.name, name_width),
+                    AMStr::PadRightAscii(var.type, type_width),
+                    var.description);
+  }
+}
 } // namespace
 
 ConfigInterfaceService::ConfigInterfaceService(
@@ -90,6 +143,104 @@ ECM ConfigInterfaceService::PrintPaths() const {
     prompt_io_manager_.FmtPrint(
         "{}   {}", AMStr::PadRightAscii(row.first, label_width), row.second);
   }
+  return OK;
+}
+
+ECM ConfigInterfaceService::PrintTemplateInfo() const {
+  const std::string config_path =
+      DataPathForKind_(config_service_, DocumentKind::Config);
+  const std::string settings_path =
+      DataPathForKind_(config_service_, DocumentKind::Settings);
+
+  PrintTemplateInfoBlock_(
+      prompt_io_manager_, "command",
+      "Render the final shell command used by cmd.",
+      config_path, "HOSTS.<nickname>.cmd_template",
+      "Lua. The script must return a string.",
+      {
+          {"cmd", "string", "Original command text typed by the user."},
+          {"nickname", "string", "Current host nickname."},
+          {"protocol", "string", "Current protocol, such as local, sftp, or ftp."},
+          {"hostname", "string", "Current host name."},
+          {"username", "string", "Current user name."},
+          {"port", "int", "Current host port."},
+          {"password", "string", "Current password value."},
+          {"keyfile", "string", "Current key file path."},
+          {"compression", "bool", "Whether compression is enabled."},
+          {"trash_dir", "string", "Host trash directory."},
+          {"login_dir", "string", "Host login directory."},
+          {"cwd", "string", "Current client working directory."},
+          {"cmd_template", "string", "Raw command template."},
+          {"is_cwd_exists", "bool", "Whether cwd is non-empty."},
+      });
+  prompt_io_manager_.Print("");
+
+  PrintTemplateInfoBlock_(
+      prompt_io_manager_, "terminal.banner",
+      "Render the banner shown when entering a terminal session.",
+      settings_path, "Style.Terminal.banner.template",
+      "Lua. The script must return a string.",
+      {
+          {"os_type", "string", "Target client OS type."},
+          {"clientname", "string", "Client nickname that owns the terminal."},
+          {"termname", "string", "Terminal session nickname."},
+          {"hostname", "string", "Target host name."},
+          {"username", "string", "Target user name."},
+          {"nickname", "string", "Terminal session nickname."},
+          {"port", "int", "Target host port."},
+          {"sysicon", "string", "Icon resolved from Style.CLIPrompt.icons."},
+      });
+  prompt_io_manager_.Print("");
+
+  PrintTemplateInfoBlock_(
+      prompt_io_manager_, "terminal.control_note",
+      "Render the note shown while terminal control mode is active.",
+      settings_path, "Style.Terminal.control_note.template",
+      "Lua. The script must return a string.",
+      {
+          {"os_type", "string", "Target client OS type."},
+          {"clientname", "string", "Client nickname that owns the terminal."},
+          {"termname", "string", "Terminal session nickname."},
+          {"hostname", "string", "Target host name."},
+          {"username", "string", "Target user name."},
+          {"nickname", "string", "Terminal session nickname."},
+          {"port", "int", "Target host port."},
+          {"sysicon", "string", "Icon resolved from Style.CLIPrompt.icons."},
+      });
+  prompt_io_manager_.Print("");
+
+  PrintTemplateInfoBlock_(
+      prompt_io_manager_, "prompt.core",
+      "Render the interactive CLI prompt.",
+      settings_path, "Style.CLIPrompt.template.core_prompt",
+      "Lua. The script must return a string.",
+      {
+          {"nickname", "string", "Current client nickname."},
+          {"username", "string", "Current user name."},
+          {"hostname", "string", "Current host name."},
+          {"cwd", "string", "Current client working directory."},
+          {"os_type", "string", "Current client OS type."},
+          {"sysicon", "string", "Icon resolved from Style.CLIPrompt.icons."},
+          {"task_pending", "int", "Number of pending transfer tasks."},
+          {"task_running", "int", "Number of running transfer tasks."},
+          {"task_paused", "int", "Number of paused transfer tasks."},
+          {"success_task", "int", "Number of successful transfer tasks."},
+          {"failed_task", "int", "Number of failed transfer tasks."},
+          {"channel_num", "int", "Number of channels on the current terminal."},
+          {"term_num", "int", "Number of known terminal sessions."},
+          {"channel_ok", "int", "Number of healthy channels."},
+          {"channel_disconnected", "int", "Number of disconnected channels."},
+          {"term_ok", "int", "Number of healthy terminal sessions."},
+          {"term_disconnected", "int", "Number of disconnected terminal sessions."},
+          {"channel_name", "string", "Current channel name, or empty if none."},
+          {"time_now", "string", "Current time text."},
+          {"elapsed", "string", "Elapsed time text for the previous command."},
+          {"is_success", "bool", "Whether the previous command succeeded."},
+          {"ec_name", "string", "Previous command error code name."},
+          {"ec_code", "int", "Previous command error code value."},
+      },
+      {"A tab character aligns the following text to the right edge of the "
+       "terminal line."});
   return OK;
 }
 

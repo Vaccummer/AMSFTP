@@ -16,6 +16,7 @@ namespace AMInterface::cli {
 struct CliConfigArgs {
   ConfigLsArgs ls = {};
   ConfigLockArgs lock = {};
+  ConfigTemplatesArgs templates = {};
   ConfigBackupArgs backup = {};
   ConfigExportArgs export_config = {};
   ConfigProfileSetArgs profile_set = {};
