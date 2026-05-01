@@ -10,7 +10,7 @@ The project is approaching its first public release. The active implementation l
 
 - Local, SFTP, FTP, and HTTP download client workflows
 - Saved host profiles and quick client switching
-- File commands including `stat`, `ls`, `size`, `find`, `mkdir`, `rm`, `tree`, `realpath`, `cp`, `mv`, `clone`, and `wget`
+- File commands including `stat`, `ls`, `size`, `find`, `mkdir`, `rm`, `tree`, `realpath`, `cp`, `mv`, `rn`, `clone`, and `wget`
 - Asynchronous transfer tasks with `task ls`, `task inspect`, `task pause`, `task resume`, and `task terminate`
 - Interactive mode through `bash`
 - SSH/local terminal sessions through `ssh` and `term`

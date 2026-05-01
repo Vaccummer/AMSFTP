@@ -952,6 +952,13 @@ ECM FilesystemInterfaceSerivce::Rename(
   if (!HasExplicitNickname_(arg.dst)) {
     dst.nickname = src.nickname;
   }
+  if (src.nickname != dst.nickname) {
+    const ECM rcm =
+        Err(EC::InvalidArg, "Rename", interface_print::BuildPathLabel(dst),
+            "Rename across different hosts is not supported");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
 
   auto run_rename = [&](bool overwrite) {
     return filesystem_service_.Rename(src, dst, control, arg.mkdir, overwrite);
