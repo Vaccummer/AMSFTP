@@ -7,8 +7,33 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 std::atomic<int> GlobalSignalInt{0};
+
+#ifdef _WIN32
+BOOL WINAPI ConsoleCtrlHandler_(DWORD ctrl_type) {
+  switch (ctrl_type) {
+  case CTRL_C_EVENT:
+    GlobalSignalInt.store(SIGINT, std::memory_order_release);
+    return TRUE;
+  case CTRL_BREAK_EVENT:
+    GlobalSignalInt.store(SIGTERM, std::memory_order_release);
+    return TRUE;
+  default:
+    return FALSE;
+  }
+}
+#endif
 } // namespace
 
 namespace AMInfra::signal {
@@ -17,8 +42,7 @@ SignalMonitorImpl::~SignalMonitorImpl() { Stop(); }
 
 void SignalMonitorImpl::InstallHandlers() {
 #ifdef _WIN32
-  std::signal(SIGINT, SignalMonitorImpl::SignalHandler);
-  std::signal(SIGTERM, SignalMonitorImpl::SignalHandler);
+  (void)SetConsoleCtrlHandler(ConsoleCtrlHandler_, TRUE);
 #else
   struct sigaction sa{};
   sa.sa_handler = SignalMonitorImpl::SignalHandler;
@@ -49,6 +73,9 @@ void SignalMonitorImpl::Stop() {
   if (worker_.joinable()) {
     worker_.join();
   }
+#ifdef _WIN32
+  (void)SetConsoleCtrlHandler(ConsoleCtrlHandler_, FALSE);
+#endif
 }
 
 int SignalMonitorImpl::LastSignal() const {
@@ -117,7 +144,7 @@ bool SignalMonitorImpl::SetHookPriority(const std::string &name, int priority) {
 
 void SignalMonitorImpl::SignalHandler(int signal_num) {
   if (signal_num == SIGINT || signal_num == SIGTERM) {
-    GlobalSignalInt.store(signal_num);
+    GlobalSignalInt.store(signal_num, std::memory_order_release);
   }
 }
 
@@ -126,7 +153,7 @@ SignalMonitorImpl::SignalMonitorImpl() = default;
 void SignalMonitorImpl::Run_() {
   while (running_.load(std::memory_order_acquire) &&
          !stop_requested_.load(std::memory_order_acquire)) {
-    const int signum = GlobalSignalInt.exchange(0);
+    const int signum = GlobalSignalInt.exchange(0, std::memory_order_acq_rel);
     if (signum != 0) {
       last_handled_signal_.store(signum, std::memory_order_relaxed);
       std::vector<AMDomain::signal::SignalHook> hooks;
