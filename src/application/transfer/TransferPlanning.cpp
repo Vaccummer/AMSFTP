@@ -375,6 +375,29 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
     return filesystem_service_.Listdir(target, control, client);
   };
 
+  if (opt.resume) {
+    size_t source_count = 0;
+    const PathInfo *single_source = nullptr;
+    for (const auto &[_, source_data] : src.data) {
+      source_count += source_data.paths.size();
+      if (source_data.paths.size() == 1) {
+        single_source = &source_data.paths.front();
+      }
+    }
+    if (source_count != 1 || single_source == nullptr) {
+      return {std::move(out),
+              Err(EC::InvalidArg, "", "",
+                  AMStr::fmt("Resume requires exactly one source file, got {}",
+                             source_count))};
+    }
+    if (!single_source->is_regular()) {
+      return {std::move(out),
+              Err(EC::NotAFile, "", "",
+                  AMStr::fmt("Resume requires file source: {}",
+                             single_source->path))};
+    }
+  }
+
   struct PendingState {
     std::string src_host = {};
     ClientHandle src_client = nullptr;
@@ -571,10 +594,13 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
     auto dst_stat = query_dst_stat(mapped_dst);
     const bool dst_exists = (dst_stat.rcm);
     if (dst_exists && dst_stat.data.type == PathType::DIR) {
-      append_warning(
-          state.node.path, mapped_dst,
+      const ECM rcm =
           Err(EC::NotAFile, "", "",
-              AMStr::fmt("Destination is directory: {}", mapped_dst)));
+              AMStr::fmt("Destination is directory: {}", mapped_dst));
+      if (opt.resume) {
+        return {std::move(out), rcm};
+      }
+      append_warning(state.node.path, mapped_dst, rcm);
       continue;
     }
     if (!dst_exists && !IsPathNotExistError(dst_stat.rcm.code)) {
@@ -585,10 +611,13 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
       continue;
     }
     if (dst_exists && !dst_stat.data.is_regular()) {
-      append_warning(
-          state.node.path, mapped_dst,
+      const ECM rcm =
           Err(EC::NotAFile, "", "",
-              AMStr::fmt("Destination type mismatch: {}", mapped_dst)));
+              AMStr::fmt("Destination type mismatch: {}", mapped_dst));
+      if (opt.resume) {
+        return {std::move(out), rcm};
+      }
+      append_warning(state.node.path, mapped_dst, rcm);
       continue;
     }
 
@@ -598,7 +627,7 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
     file_task.overwrite = dst_exists && dst_stat.data.is_regular();
 
     if (opt.resume) {
-      if (state.node.type != PathType::FILE) {
+      if (!state.node.is_regular()) {
         append_warning(state.node.path, mapped_dst,
                        Err(EC::NotAFile, "", "",
                            AMStr::fmt("Resume only supports file source: {}",
@@ -606,10 +635,9 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
         continue;
       }
       if (!dst_exists) {
-        append_warning(state.node.path, mapped_dst,
-                       Err(EC::PathNotExist, "", "",
-                           AMStr::fmt("Resume requires destination file: {}",
-                                      mapped_dst)));
+        out.resume_from_start.emplace_back(state.node.path, mapped_dst, OK);
+        file_task.transferred = 0;
+        out.file_tasks.push_back(std::move(file_task));
         continue;
       }
       if (dst_stat.data.type != PathType::FILE) {
@@ -620,15 +648,11 @@ ECMData<BuildTransferTaskResult> TransferAppService::BuildTransferTasks(
         continue;
       }
       if (dst_stat.data.size > state.node.size) {
-        append_warning(
-            state.node.path, mapped_dst,
-            Err(EC::InvalidArg, "", "",
-                AMStr::fmt("Resume invalid: dst {} > src {} for {}",
-                           dst_stat.data.size, state.node.size, mapped_dst)));
-        continue;
-      }
-      if (dst_stat.data.size == state.node.size) {
-        continue;
+        return {std::move(out),
+                Err(EC::InvalidArg, "", "",
+                    AMStr::fmt("Resume invalid: dst {} > src {} for {}",
+                               dst_stat.data.size, state.node.size,
+                               mapped_dst))};
       }
       file_task.transferred = dst_stat.data.size;
     }

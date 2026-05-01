@@ -1219,6 +1219,33 @@ ECM TransferInterfaceService::ConfirmWildcard_(
   return OK;
 }
 
+ECM ConfirmResumeFromStart_(
+    AMInterface::prompt::PromptIOManager &prompt_io_manager,
+    TransferConfirmPolicy policy, const std::vector<std::string> &targets,
+    const std::string &context) {
+  if (targets.empty() || policy == TransferConfirmPolicy::AutoApprove) {
+    return OK;
+  }
+  if (policy == TransferConfirmPolicy::DenyIfConfirmNeeded) {
+    return Err(EC::ConfigCanceled, context, "",
+               "Resume destination is missing and starting from beginning "
+               "requires confirmation");
+  }
+  prompt_io_manager.Print(
+      "Resume destination does not exist; transfer will start from beginning:");
+  for (const auto &target : targets) {
+    prompt_io_manager.FmtPrint("  {}", target);
+  }
+  bool canceled = false;
+  const bool accepted = prompt_io_manager.PromptYesNo(
+      "Start transfer from beginning? (y/N): ", &canceled);
+  if (!accepted || canceled) {
+    return Err(EC::ConfigCanceled, context, "",
+               "Transfer canceled by user");
+  }
+  return OK;
+}
+
 ECM TransferInterfaceService::BuildTaskInfo_(
     const TransferRunArg &arg, const ControlComponent &control,
     std::shared_ptr<TaskInfo> *out_task_info, std::vector<ECM> *warnings,
@@ -1259,6 +1286,11 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     if (control.IsTimeout()) {
       return Err(EC::OperationTimeout, "", "",
                  "Timeout before task generation");
+    }
+    if (set.resume &&
+        (arg.transfer_sets.size() != 1 || set.srcs.size() != 1)) {
+      return Err(EC::InvalidArg, "", "",
+                 "Resume requires exactly one source file");
     }
 
     auto resolved_dst =
@@ -1302,7 +1334,22 @@ ECM TransferInterfaceService::BuildTaskInfo_(
       return build_result.rcm;
     }
 
-    if (!set.overwrite) {
+    if (set.resume && !build_result.data.resume_from_start.empty()) {
+      std::vector<std::string> resume_targets = {};
+      resume_targets.reserve(build_result.data.resume_from_start.size());
+      for (const auto &target : build_result.data.resume_from_start) {
+        resume_targets.push_back(
+            AMStr::fmt("{} -> {}", NormalizePath_(target.src),
+                       NormalizePath_(target.dst)));
+      }
+      ECM confirm_resume_rcm = ConfirmResumeFromStart_(
+          prompt_io_manager_, arg.confirm_policy, resume_targets, "resume");
+      if (!(confirm_resume_rcm)) {
+        return confirm_resume_rcm;
+      }
+    }
+
+    if (!set.overwrite && !set.resume) {
       ReportTransferSubStage_(
           stage_reporter,
           AMStr::fmt("set {}/{}: check overwrite", set_index, total_sets));
@@ -1752,7 +1799,7 @@ ECM TransferInterfaceService::HttpGet(
   }
 
   const bool dst_exists = plan.dst_info.has_value();
-  if (dst_exists && !arg.overwrite) {
+  if (dst_exists && !arg.overwrite && !arg.resume) {
     if (arg.confirm_policy == TransferConfirmPolicy::DenyIfConfirmNeeded) {
       return fail(Err(EC::ConfigCanceled, "wget", plan.final_target.path,
                       "Overwrite requires confirmation but denied"));
@@ -1833,20 +1880,37 @@ ECM TransferInterfaceService::HttpGet(
   }
 
   size_t resume_offset = 0;
-  if (arg.resume && dst_exists) {
-    resume_offset = plan.dst_info->size;
-    if (src_stat.data.info.size > 0 &&
-        resume_offset >= src_stat.data.info.size) {
-      resume_offset = 0;
-    } else {
-      auto resume_probe = http_io->ProbeResumeSupport(effective_src_url,
-                                                      resume_offset, control);
-      if (resume_probe.rcm.code == EC::Terminate ||
-          resume_probe.rcm.code == EC::OperationTimeout) {
-        return fail(resume_probe.rcm);
+  if (arg.resume) {
+    if (dst_exists) {
+      if (!plan.dst_info->is_regular()) {
+        return fail(Err(EC::NotAFile, "wget", plan.final_target.path,
+                        "Resume requires destination file"));
       }
-      if (!(resume_probe.rcm) || !resume_probe.data) {
-        resume_offset = 0;
+      if (plan.dst_info->size > src_stat.data.info.size) {
+        return fail(Err(EC::InvalidArg, "wget", plan.final_target.path,
+                        AMStr::fmt("Resume invalid: dst {} > src {}",
+                                   plan.dst_info->size,
+                                   src_stat.data.info.size)));
+      }
+      resume_offset = plan.dst_info->size;
+      if (resume_offset < src_stat.data.info.size) {
+        auto resume_probe = http_io->ProbeResumeSupport(effective_src_url,
+                                                        resume_offset, control);
+        if (resume_probe.rcm.code == EC::Terminate ||
+            resume_probe.rcm.code == EC::OperationTimeout) {
+          return fail(resume_probe.rcm);
+        }
+        if (!(resume_probe.rcm) || !resume_probe.data) {
+          resume_offset = 0;
+        }
+      }
+    } else {
+      const std::vector<std::string> resume_targets = {
+          AMStr::fmt("{} -> {}", effective_src_url, plan.final_target.path)};
+      ECM confirm_resume_rcm = ConfirmResumeFromStart_(
+          prompt_io_manager_, arg.confirm_policy, resume_targets, "wget");
+      if (!(confirm_resume_rcm)) {
+        return fail(confirm_resume_rcm);
       }
     }
   }

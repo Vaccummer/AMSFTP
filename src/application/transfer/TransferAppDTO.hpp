@@ -50,6 +50,7 @@ struct BuildTransferTaskResult {
   TASKS dir_tasks = {};
   TASKS file_tasks = {};
   std::vector<WarningItem> warnings = {};
+  std::vector<WarningItem> resume_from_start = {};
 };
 
 struct HttpDownloadPlan {
