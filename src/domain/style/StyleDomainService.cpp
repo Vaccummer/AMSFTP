@@ -379,10 +379,6 @@ void NormalizeTerminalStyle(TerminalStyle *style) {
   if (!style) {
     return;
   }
-  if (style->banner.template_text.empty() && !style->banner_template.empty()) {
-    style->banner.template_text = style->banner_template;
-  }
-  style->banner_template = style->banner.template_text;
 
   std::string align = LowerTrim_(style->banner.align);
   if (align != "left" && align != "center" && align != "right") {

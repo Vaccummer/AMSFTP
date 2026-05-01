@@ -1498,9 +1498,8 @@ void DecodeTerminalStyle_(const Json &json, TerminalStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
-  const bool has_banner_template =
-      AMJson::QueryKey(json, {"banner", "template"},
-                       &out->banner.template_text);
+  (void)AMJson::QueryKey(json, {"banner", "template"},
+                         &out->banner.template_text);
   (void)AMJson::QueryKey(json, {"banner", "background"},
                          &out->banner.background);
   (void)AMJson::QueryKey(json, {"banner", "align"}, &out->banner.align);
@@ -1512,13 +1511,6 @@ void DecodeTerminalStyle_(const Json &json, TerminalStyle *out) {
                          &out->control_note.foreground);
   (void)AMJson::QueryKey(json, {"control_note", "align"},
                          &out->control_note.align);
-  const bool has_legacy_banner_template =
-      AMJson::QueryKey(json, {"banner_template"}, &out->banner_template);
-  if (!has_banner_template && has_legacy_banner_template &&
-      !out->banner_template.empty()) {
-    out->banner.template_text = out->banner_template;
-  }
-  out->banner_template = out->banner.template_text;
 }
 
 Json EncodeTerminalStyle_(const TerminalStyle &in) {

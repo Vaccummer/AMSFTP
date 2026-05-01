@@ -97,13 +97,13 @@ $env:AMSFTP_ROOT = "D:\Data\amsftp"
 Start interactive mode:
 
 ```powershell
-.\build\win-clang-static-release\amsftp.exe bash
+amsftp.exe bash
 ```
 
 Or inspect the command surface first:
 
 ```powershell
-.\build\win-clang-static-release\amsftp.exe --help
+amsftp.exe --help
 ```
 
 On first run, AMSFTP initializes runtime configuration under `AMSFTP_ROOT`, including:
