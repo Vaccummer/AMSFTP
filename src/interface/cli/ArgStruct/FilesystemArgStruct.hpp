@@ -305,6 +305,7 @@ struct CpArgs : BaseArgStruct {
   bool include_special = false;
   bool resume = false;
   bool quiet = false;
+  bool verbose = false;
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     auto build = filesystem_arg_detail::BuildTransferArgsFromCli(
@@ -317,6 +318,7 @@ struct CpArgs : BaseArgStruct {
     AMInterface::transfer::TransferRunArg arg = {};
     arg.transfer_sets = std::move(build.transfer_sets);
     arg.quiet = quiet;
+    arg.verbose = verbose;
     arg.run_async = ctx.async || build.suffix_async;
     arg.timeout_ms = timeout_ms;
     arg.confirm_policy =
@@ -335,6 +337,7 @@ struct CpArgs : BaseArgStruct {
     include_special = false;
     resume = false;
     quiet = false;
+    verbose = false;
   }
 };
 
@@ -435,6 +438,7 @@ struct CloneArgs : BaseArgStruct {
   bool overwrite = false;
   bool resume = false;
   bool quiet = false;
+  bool verbose = false;
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     std::vector<std::string> raw_srcs = {src};
@@ -454,6 +458,7 @@ struct CloneArgs : BaseArgStruct {
     AMInterface::transfer::TransferRunArg arg = {};
     arg.transfer_sets = std::move(build.transfer_sets);
     arg.quiet = quiet;
+    arg.verbose = verbose;
     arg.run_async = ctx.async || build.suffix_async;
     arg.timeout_ms = -1;
     arg.confirm_policy =
@@ -469,6 +474,7 @@ struct CloneArgs : BaseArgStruct {
     overwrite = false;
     resume = false;
     quiet = false;
+    verbose = false;
   }
 };
 

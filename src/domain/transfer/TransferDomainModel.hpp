@@ -336,7 +336,13 @@ struct TaskCoreData {
   AMAtomic<TASKS> dir_tasks = AMAtomic<TASKS>(TASKS());
   AMAtomic<TASKS> file_tasks = AMAtomic<TASKS>(TASKS());
   ControlComponent control = {};
-  AMAtomic<TransferTask *> cur_task = AMAtomic<TransferTask *>(nullptr);
+  struct CurrentTaskData {
+    size_t index = 0;
+    bool is_dir = false;
+    TransferTask task = {};
+  };
+  AMAtomic<std::optional<CurrentTaskData>> cur_task =
+      AMAtomic<std::optional<CurrentTaskData>>(std::nullopt);
   TransferClientContainer clients;
   std::vector<std::string> nicknames;
 };
@@ -373,12 +379,18 @@ struct TaskInfo {
   TaskStruct::TaskSet Set;
   TaskStruct::TaskCallback Callback;
   struct CurrentTaskSnapshot {
+    size_t index = 0;
+    bool is_dir = false;
     std::string src = {};
     std::string dst = {};
     std::string src_host = {};
     std::string dst_host = {};
+    PathType type = PathType::FILE;
     size_t size = 0;
     size_t transferred = 0;
+    bool overwrite = false;
+    bool finished = false;
+    std::optional<ECM> result = std::nullopt;
   };
 
   /**
@@ -602,29 +614,141 @@ struct TaskInfo {
 
   ECM GetResult() { return State.rcm.lock().load(); }
 
-  void SetCurrentTask(TransferTask *task) { Core.cur_task.lock().store(task); }
-
-  void ClearCurrentTask() { Core.cur_task.lock().store(nullptr); }
-
-  [[nodiscard]] TransferTask *GetCurrentTask() const {
-    auto guard = const_cast<AMAtomic<TransferTask *> &>(Core.cur_task).lock();
+  [[nodiscard]] std::vector<TransferTask> GetDirTasksSnapshot() const {
+    auto guard = const_cast<AMAtomic<TASKS> &>(Core.dir_tasks).lock();
     return guard.load();
+  }
+
+  [[nodiscard]] std::vector<TransferTask> GetFileTasksSnapshot() const {
+    auto guard = const_cast<AMAtomic<TASKS> &>(Core.file_tasks).lock();
+    return guard.load();
+  }
+
+  [[nodiscard]] std::optional<TransferTask> GetTaskCopy(bool is_dir,
+                                                        size_t index) const {
+    if (is_dir) {
+      auto guard = const_cast<AMAtomic<TASKS> &>(Core.dir_tasks).lock();
+      if (index >= guard->size()) {
+        return std::nullopt;
+      }
+      return (*guard)[index];
+    }
+    auto guard = const_cast<AMAtomic<TASKS> &>(Core.file_tasks).lock();
+    if (index >= guard->size()) {
+      return std::nullopt;
+    }
+    return (*guard)[index];
+  }
+
+  bool WriteTaskCopy(bool is_dir, size_t index, const TransferTask &task) {
+    if (is_dir) {
+      auto guard = Core.dir_tasks.lock();
+      if (index >= guard->size()) {
+        return false;
+      }
+      (*guard)[index] = task;
+      return true;
+    }
+    auto guard = Core.file_tasks.lock();
+    if (index >= guard->size()) {
+      return false;
+    }
+    (*guard)[index] = task;
+    return true;
+  }
+
+  void SetCurrentTask(size_t index, bool is_dir, const TransferTask &task) {
+    TaskStruct::TaskCoreData::CurrentTaskData current = {};
+    current.index = index;
+    current.is_dir = is_dir;
+    current.task = task;
+    Core.cur_task.lock().store(
+        std::optional<TaskStruct::TaskCoreData::CurrentTaskData>(
+            std::move(current)));
+    Size.cur_task.store(index + 1, std::memory_order_relaxed);
+    Size.cur_task_transferred.store(task.transferred,
+                                    std::memory_order_relaxed);
+  }
+
+  void ClearCurrentTask() {
+    Core.cur_task.lock().store(
+        std::optional<TaskStruct::TaskCoreData::CurrentTaskData>(
+            std::nullopt));
+  }
+
+  [[nodiscard]] std::optional<TransferTask> GetCurrentTaskCopy() const {
+    auto guard =
+        const_cast<AMAtomic<std::optional<
+            TaskStruct::TaskCoreData::CurrentTaskData>> &>(Core.cur_task)
+            .lock();
+    if (!guard->has_value()) {
+      return std::nullopt;
+    }
+    return guard->value().task;
+  }
+
+  [[nodiscard]] size_t GetCurrentTaskTransferred() const {
+    auto guard =
+        const_cast<AMAtomic<std::optional<
+            TaskStruct::TaskCoreData::CurrentTaskData>> &>(Core.cur_task)
+            .lock();
+    if (!guard->has_value()) {
+      return 0;
+    }
+    return guard->value().task.transferred;
+  }
+
+  void UpdateCurrentTaskTransferred(size_t transferred) {
+    auto guard = Core.cur_task.lock();
+    if (!guard->has_value()) {
+      return;
+    }
+    guard->value().task.transferred = transferred;
+  }
+
+  void SetCurrentTaskResult(const ECM &rcm) {
+    auto guard = Core.cur_task.lock();
+    if (!guard->has_value()) {
+      return;
+    }
+    guard->value().task.rcm = rcm;
+  }
+
+  [[nodiscard]] std::optional<ECM> GetCurrentTaskResult() const {
+    auto guard =
+        const_cast<AMAtomic<std::optional<
+            TaskStruct::TaskCoreData::CurrentTaskData>> &>(Core.cur_task)
+            .lock();
+    if (!guard->has_value()) {
+      return std::nullopt;
+    }
+    return guard->value().task.rcm;
   }
 
   [[nodiscard]] std::optional<CurrentTaskSnapshot>
   GetCurrentTaskSnapshot() const {
-    auto guard = const_cast<AMAtomic<TransferTask *> &>(Core.cur_task).lock();
-    TransferTask *task = guard.load();
-    if (!task) {
+    auto guard =
+        const_cast<AMAtomic<std::optional<
+            TaskStruct::TaskCoreData::CurrentTaskData>> &>(Core.cur_task)
+            .lock();
+    if (!guard->has_value()) {
       return std::nullopt;
     }
+    const auto &current = guard->value();
+    const TransferTask &task = current.task;
     CurrentTaskSnapshot out = {};
-    out.src = task->src;
-    out.dst = task->dst;
-    out.src_host = task->src_host;
-    out.dst_host = task->dst_host;
-    out.size = task->size;
-    out.transferred = task->transferred;
+    out.index = current.index;
+    out.is_dir = current.is_dir;
+    out.src = task.src;
+    out.dst = task.dst;
+    out.src_host = task.src_host;
+    out.dst_host = task.dst_host;
+    out.type = task.path_type;
+    out.size = task.size;
+    out.transferred = task.transferred;
+    out.overwrite = task.overwrite;
+    out.finished = task.IsFinished;
+    out.result = task.rcm;
     return out;
   }
 

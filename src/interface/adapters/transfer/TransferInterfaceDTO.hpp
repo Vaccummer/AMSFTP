@@ -18,6 +18,7 @@ enum class TransferConfirmPolicy {
 struct TransferRunArg {
   std::vector<AMDomain::transfer::UserTransferSet> transfer_sets = {};
   bool quiet = false;
+  bool verbose = false;
   bool run_async = false;
   int timeout_ms = 0;
   TransferConfirmPolicy confirm_policy = TransferConfirmPolicy::RequireConfirm;

@@ -97,18 +97,36 @@ void TransferRuntimeProgress::UpdateSize(size_t delta) const {
                              delta, std::memory_order_relaxed) +
                          delta;
   (void)task_info->AddTransferredSize(delta);
-  auto cur_guard = task_info->Core.cur_task.lock();
-  auto *cur_task = cur_guard.load();
-  if (cur_task != nullptr) {
-    cur_task->transferred = current;
-  }
+  task_info->UpdateCurrentTaskTransferred(current);
 }
 
-TransferTask *TransferRuntimeProgress::GetCurrentTask() const {
+void TransferRuntimeProgress::SetCurrentTaskResult(const ECM &rcm) const {
   if (!task_info) {
-    return nullptr;
+    return;
   }
-  return task_info->GetCurrentTask();
+  task_info->SetCurrentTaskResult(rcm);
+}
+
+std::optional<ECM> TransferRuntimeProgress::GetCurrentTaskResult() const {
+  if (!task_info) {
+    return std::nullopt;
+  }
+  return task_info->GetCurrentTaskResult();
+}
+
+size_t TransferRuntimeProgress::GetCurrentTaskTransferred() const {
+  if (!task_info) {
+    return 0;
+  }
+  return task_info->GetCurrentTaskTransferred();
+}
+
+std::optional<TransferTask> TransferRuntimeProgress::GetCurrentTaskCopy()
+    const {
+  if (!task_info) {
+    return std::nullopt;
+  }
+  return task_info->GetCurrentTaskCopy();
 }
 
 } // namespace AMInfra::transfer
@@ -967,14 +985,15 @@ public:
     if (!client || !task_info) {
       return;
     }
-    auto *task = task_info->GetCurrentTask();
-    if (!task) {
+    auto task_opt = task_info->GetCurrentTaskCopy();
+    if (!task_opt.has_value()) {
       return;
     }
+    const TransferTask &task = *task_opt;
 
     if (auto *client_http = dynamic_cast<AMHTTPIOCore *>(&client->IOPort());
         client_http != nullptr) {
-      ReadHttpToBuffer_(client, *task, pd);
+      ReadHttpToBuffer_(client, task, pd);
       return;
     }
 
@@ -983,25 +1002,25 @@ public:
       auto *client_sftp = dynamic_cast<AMSFTPIOCore *>(&client->IOPort());
       if (client_sftp == nullptr) {
         SignalTaskIoAbort_(pd);
-        task->rcm = {EC::InvalidArg, "", "",
-                     "SFTP IO port implementation mismatch"};
+        task_info->SetCurrentTaskResult(
+            {EC::InvalidArg, "", "", "SFTP IO port implementation mismatch"});
         return;
       }
-      ReadSftpToBuffer_(client_sftp, *task, pd);
+      ReadSftpToBuffer_(client_sftp, task, pd);
       return;
     }
     case ClientProtocol::LOCAL:
-      ReadLocalToBuffer_(*task, pd);
+      ReadLocalToBuffer_(task, pd);
       return;
     case ClientProtocol::FTP: {
       auto *client_ftp = dynamic_cast<AMFTPIOCore *>(&client->IOPort());
       if (client_ftp == nullptr) {
         SignalTaskIoAbort_(pd);
-        task->rcm = {EC::InvalidArg, "", "",
-                     "FTP IO port implementation mismatch"};
+        task_info->SetCurrentTaskResult(
+            {EC::InvalidArg, "", "", "FTP IO port implementation mismatch"});
         return;
       }
-      ReadFtpToBuffer_(client_ftp, *task, pd);
+      ReadFtpToBuffer_(client_ftp, task, pd);
       return;
     }
     default:
@@ -1015,35 +1034,36 @@ public:
     if (!client || !task_info) {
       return;
     }
-    auto *task = task_info->GetCurrentTask();
-    if (!task) {
+    auto task_opt = task_info->GetCurrentTaskCopy();
+    if (!task_opt.has_value()) {
       return;
     }
+    const TransferTask &task = *task_opt;
 
     switch (client->ConfigPort().GetProtocol()) {
     case ClientProtocol::SFTP: {
       auto *client_sftp = dynamic_cast<AMSFTPIOCore *>(&client->IOPort());
       if (client_sftp == nullptr) {
         SignalTaskIoAbort_(pd);
-        task->rcm = {EC::InvalidArg, "", "",
-                     "SFTP IO port implementation mismatch"};
+        task_info->SetCurrentTaskResult(
+            {EC::InvalidArg, "", "", "SFTP IO port implementation mismatch"});
         return;
       }
-      WriteBufferToSftp_(client_sftp, *task, pd);
+      WriteBufferToSftp_(client_sftp, task, pd);
       return;
     }
     case ClientProtocol::LOCAL:
-      WriteBufferToLocal_(*task, pd);
+      WriteBufferToLocal_(task, pd);
       return;
     case ClientProtocol::FTP: {
       auto *client_ftp = dynamic_cast<AMFTPIOCore *>(&client->IOPort());
       if (client_ftp == nullptr) {
         SignalTaskIoAbort_(pd);
-        task->rcm = {EC::InvalidArg, "", "",
-                     "FTP IO port implementation mismatch"};
+        task_info->SetCurrentTaskResult(
+            {EC::InvalidArg, "", "", "FTP IO port implementation mismatch"});
         return;
       }
-      WriteBufferToFtp_(client_ftp, *task, pd);
+      WriteBufferToFtp_(client_ftp, task, pd);
       return;
     }
     default:
@@ -1095,21 +1115,21 @@ private:
     HTTPDownloadSet(LoadHttpTransferRuntime_(client), task.src, &pd);
   }
 
-  void ReadSftpToBuffer_(AMSFTPIOCore *client_sftp, TransferTask &task,
+  void ReadSftpToBuffer_(AMSFTPIOCore *client_sftp, const TransferTask &task,
                          RuntimeProgress &pd) const {
     UnionFileHandle file_handle = {};
     ECM rcm = file_handle.Init(task.src, task.size, client_sftp, false, true,
                                true, &pd);
     if (rcm.code != EC::Success) {
       SignalTaskIoAbort_(pd);
-      task.rcm = rcm;
+      pd.SetCurrentTaskResult(rcm);
       return;
     }
     if (task.transferred > 0) {
       ECM seek_rcm = file_handle.Seek(task.transferred);
       if (seek_rcm.code != EC::Success) {
         SignalTaskIoAbort_(pd);
-        task.rcm = seek_rcm;
+        pd.SetCurrentTaskResult(seek_rcm);
         return;
       }
     }
@@ -1122,26 +1142,26 @@ private:
       (void)bytes_read;
       if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
         SignalTaskIoAbort_(pd);
-        task.rcm = ecm;
+        pd.SetCurrentTaskResult(ecm);
         return;
       }
     }
   }
 
-  void ReadLocalToBuffer_(TransferTask &task, RuntimeProgress &pd) const {
+  void ReadLocalToBuffer_(const TransferTask &task, RuntimeProgress &pd) const {
     UnionFileHandle file_handle = {};
     ECM rcm =
         file_handle.Init(task.src, task.size, nullptr, false, true, true, &pd);
     if (rcm.code != EC::Success) {
       SignalTaskIoAbort_(pd);
-      task.rcm = rcm;
+      pd.SetCurrentTaskResult(rcm);
       return;
     }
     if (task.transferred > 0) {
       ECM seek_rcm = file_handle.Seek(task.transferred);
       if (seek_rcm.code != EC::Success) {
         SignalTaskIoAbort_(pd);
-        task.rcm = seek_rcm;
+        pd.SetCurrentTaskResult(seek_rcm);
         return;
       }
     }
@@ -1154,7 +1174,7 @@ private:
       (void)bytes_read;
       if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
         SignalTaskIoAbort_(pd);
-        task.rcm = ecm;
+        pd.SetCurrentTaskResult(ecm);
         return;
       }
     }
@@ -1165,7 +1185,7 @@ private:
     FTPDownloadSet(client_ftp, task.src, FTPToBufferWk, &pd);
   }
 
-  void WriteBufferToSftp_(AMSFTPIOCore *client_sftp, TransferTask &task,
+  void WriteBufferToSftp_(AMSFTPIOCore *client_sftp, const TransferTask &task,
                           RuntimeProgress &pd) const {
     UnionFileHandle file_handle = {};
     const bool resume = task.transferred > 0;
@@ -1173,14 +1193,14 @@ private:
                                !resume, &pd);
     if (rcm.code != EC::Success) {
       SignalTaskIoAbort_(pd);
-      task.rcm = rcm;
+      pd.SetCurrentTaskResult(rcm);
       return;
     }
     if (resume) {
       ECM seek_rcm = file_handle.Seek(task.transferred);
       if (seek_rcm.code != EC::Success) {
         SignalTaskIoAbort_(pd);
-        task.rcm = seek_rcm;
+        pd.SetCurrentTaskResult(seek_rcm);
         return;
       }
     }
@@ -1192,28 +1212,28 @@ private:
       auto [bytes_write, ecm] = file_handle.Write();
       if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
         SignalTaskIoAbort_(pd);
-        task.rcm = ecm;
+        pd.SetCurrentTaskResult(ecm);
         return;
       }
       (void)bytes_write;
     }
   }
 
-  void WriteBufferToLocal_(TransferTask &task, RuntimeProgress &pd) const {
+  void WriteBufferToLocal_(const TransferTask &task, RuntimeProgress &pd) const {
     UnionFileHandle file_handle = {};
     const bool resume = task.transferred > 0;
     ECM rcm = file_handle.Init(task.dst, task.size, nullptr, true, true,
                                !resume, &pd);
     if (rcm.code != EC::Success) {
       SignalTaskIoAbort_(pd);
-      task.rcm = rcm;
+      pd.SetCurrentTaskResult(rcm);
       return;
     }
     if (resume) {
       ECM seek_rcm = file_handle.Seek(task.transferred);
       if (seek_rcm.code != EC::Success) {
         SignalTaskIoAbort_(pd);
-        task.rcm = seek_rcm;
+        pd.SetCurrentTaskResult(seek_rcm);
         return;
       }
     }
@@ -1225,7 +1245,7 @@ private:
       auto [bytes_write, ecm] = file_handle.Write();
       if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
         SignalTaskIoAbort_(pd);
-        task.rcm = ecm;
+        pd.SetCurrentTaskResult(ecm);
         return;
       }
       (void)bytes_write;
@@ -1243,8 +1263,8 @@ private:
     if (!pd || !ptr) {
       return 0;
     }
-    auto *cur_task = pd->GetCurrentTask();
-    if (!cur_task) {
+    auto cur_task = pd->GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       return 0;
     }
 
@@ -1272,8 +1292,8 @@ private:
         memcpy(write_ptr, ptr + copied, to_write);
       } catch (const std::exception &e) {
         SignalTaskIoAbort_(*pd);
-        cur_task->rcm =
-            Err(EC::BufferWriteError, "http.read", cur_task->src, e.what());
+        pd->SetCurrentTaskResult(
+            Err(EC::BufferWriteError, "http.read", cur_task->src, e.what()));
         return 0;
       }
       pd->ring_buffer->commit_write(to_write);
@@ -1307,16 +1327,17 @@ private:
     if (!pd) {
       return;
     }
-    TransferTask *cur_task = pd->GetCurrentTask();
-    if (!cur_task) {
+    auto cur_task = pd->GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       SignalTaskIoAbort_(*pd);
       return;
     }
 
     CURL *curl = curl_easy_init();
     if (!curl) {
-      cur_task->rcm =
-          Err(EC::InvalidHandle, "http.download", src, "curl_easy_init failed");
+      pd->SetCurrentTaskResult(
+          Err(EC::InvalidHandle, "http.download", src,
+              "curl_easy_init failed"));
       SignalTaskIoAbort_(*pd);
       return;
     }
@@ -1362,49 +1383,54 @@ private:
     curl_easy_cleanup(curl);
 
     if (pd->task_info && pd->task_info->Core.control.IsTimeout()) {
-      cur_task->rcm =
-          Err(EC::OperationTimeout, "http.download", src, "Task timeout");
+      pd->SetCurrentTaskResult(
+          Err(EC::OperationTimeout, "http.download", src, "Task timeout"));
       SignalTaskIoAbort_(*pd);
       return;
     }
     if (pd->task_info && IsTaskHardInterrupted_(pd->task_info) &&
         !pd->task_info->IsPauseRequested()) {
-      cur_task->rcm =
-          Err(EC::Terminate, "http.download", src, "Task terminated by user");
+      pd->SetCurrentTaskResult(
+          Err(EC::Terminate, "http.download", src,
+              "Task terminated by user"));
       SignalTaskIoAbort_(*pd);
       return;
     }
     if (curl_rcm != CURLE_OK) {
-      cur_task->rcm = Err(
+      pd->SetCurrentTaskResult(Err(
           EC::NetworkError, "http.download", src, curl_easy_strerror(curl_rcm),
-          RawError{RawErrorSource::Curl, static_cast<int>(curl_rcm)});
+          RawError{RawErrorSource::Curl, static_cast<int>(curl_rcm)}));
       SignalTaskIoAbort_(*pd);
       return;
     }
     if (response >= 400) {
+      ECM response_rcm = OK;
       if (response == 404) {
-        cur_task->rcm = Err(EC::PathNotExist, "http.download", src,
-                            "Remote file not found");
+        response_rcm = Err(EC::PathNotExist, "http.download", src,
+                           "Remote file not found");
       } else if (response == 401 || response == 403) {
-        cur_task->rcm = Err(EC::PermissionDenied, "http.download", src,
-                            "Permission denied");
+        response_rcm =
+            Err(EC::PermissionDenied, "http.download", src, "Permission denied");
       } else if (response == 416) {
-        cur_task->rcm = Err(EC::InvalidOffset, "http.download", src,
-                            "Invalid resume offset");
+        response_rcm =
+            Err(EC::InvalidOffset, "http.download", src,
+                "Invalid resume offset");
       } else {
-        cur_task->rcm = Err(EC::CommonFailure, "http.download", src,
-                            AMStr::fmt("HTTP status {}", response));
+        response_rcm = Err(EC::CommonFailure, "http.download", src,
+                           AMStr::fmt("HTTP status {}", response));
       }
+      pd->SetCurrentTaskResult(response_rcm);
       SignalTaskIoAbort_(*pd);
       return;
     }
     if (resume_offset > 0 && response != 206) {
-      cur_task->rcm = Err(EC::InvalidOffset, "http.download", src,
-                          "Server does not support resume range request");
+      pd->SetCurrentTaskResult(
+          Err(EC::InvalidOffset, "http.download", src,
+              "Server does not support resume range request"));
       SignalTaskIoAbort_(*pd);
       return;
     }
-    cur_task->rcm = OK;
+    pd->SetCurrentTaskResult(OK);
   }
 
   // Static callbacks for FTP using RuntimeProgress
@@ -1412,8 +1438,8 @@ private:
                               void *userdata) {
     auto *pd = static_cast<RuntimeProgress *>(userdata);
     // Check if transfer complete
-    TransferTask *cur_task = pd->GetCurrentTask();
-    if (!cur_task) {
+    auto cur_task = pd->GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       return CURL_READFUNC_ABORT;
     }
     while (true) {
@@ -1421,7 +1447,7 @@ private:
         return CURL_READFUNC_ABORT;
       }
 
-      if (cur_task && cur_task->transferred >= cur_task->size) {
+      if (pd->GetCurrentTaskTransferred() >= cur_task->size) {
         return 0;
       }
       if (pd->ring_buffer->available() == 0) {
@@ -1442,17 +1468,13 @@ private:
           return to_read;
         } catch (const std::exception &e) {
           SignalTaskIoAbort_(*pd);
-          if (cur_task) {
-            cur_task->rcm = ECM{EC::BufferReadError, "", "", e.what()};
-          }
+          pd->SetCurrentTaskResult(ECM{EC::BufferReadError, "", "", e.what()});
           return CURL_READFUNC_ABORT;
         }
       } else if (to_read < 0) {
         SignalTaskIoAbort_(*pd);
-        if (cur_task) {
-          cur_task->rcm = ECM{EC::BufferReadError, "", "",
-                              "Get negative value for data size"};
-        }
+        pd->SetCurrentTaskResult(ECM{EC::BufferReadError, "", "",
+                                     "Get negative value for data size"});
         return CURL_READFUNC_ABORT;
       }
     }
@@ -1462,8 +1484,8 @@ private:
                               void *userdata) {
     auto *pd = static_cast<RuntimeProgress *>(userdata);
 
-    auto *cur_task = pd->GetCurrentTask();
-    if (!cur_task) {
+    auto cur_task = pd->GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       return 0;
     }
     size_t total = size * nmemb;
@@ -1492,9 +1514,8 @@ private:
           written += to_write;
         } catch (const std::exception &e) {
           SignalTaskIoAbort_(*pd);
-          if (cur_task) {
-            cur_task->rcm = ECM{EC::BufferWriteError, "", "", e.what()};
-          }
+          pd->SetCurrentTaskResult(
+              ECM{EC::BufferWriteError, "", "", e.what()});
           return 0;
         }
       }
@@ -1511,13 +1532,14 @@ public:
   static size_t LocalFileToFTPWk(char *ptr, size_t size, size_t nmemb,
                                  void *userdata) {
     auto *ctx = static_cast<FTPDirectLocalContext *>(userdata);
-    if (ctx == nullptr || ctx->progress == nullptr || ctx->local_handle == nullptr) {
+    if (ctx == nullptr || ctx->progress == nullptr ||
+        ctx->local_handle == nullptr) {
       return CURL_READFUNC_ABORT;
     }
 
     auto &pd = *ctx->progress;
-    auto *cur_task = pd.GetCurrentTask();
-    if (cur_task == nullptr) {
+    auto cur_task = pd.GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       return CURL_READFUNC_ABORT;
     }
 
@@ -1528,7 +1550,7 @@ public:
     const size_t capacity = size * nmemb;
     auto [bytes_read, read_rcm] = ctx->local_handle->ReadChunk(ptr, capacity);
     if (read_rcm.code != EC::Success && read_rcm.code != EC::EndOfFile) {
-      cur_task->rcm = read_rcm;
+      pd.SetCurrentTaskResult(read_rcm);
       SignalTaskIoAbort_(pd);
       return CURL_READFUNC_ABORT;
     }
@@ -1544,13 +1566,14 @@ public:
   static size_t FTPToLocalFileWk(char *ptr, size_t size, size_t nmemb,
                                  void *userdata) {
     auto *ctx = static_cast<FTPDirectLocalContext *>(userdata);
-    if (ctx == nullptr || ctx->progress == nullptr || ctx->local_handle == nullptr) {
+    if (ctx == nullptr || ctx->progress == nullptr ||
+        ctx->local_handle == nullptr) {
       return 0;
     }
 
     auto &pd = *ctx->progress;
-    auto *cur_task = pd.GetCurrentTask();
-    if (cur_task == nullptr) {
+    auto cur_task = pd.GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       return 0;
     }
 
@@ -1561,14 +1584,14 @@ public:
     const size_t total = size * nmemb;
     auto [bytes_written, write_rcm] = ctx->local_handle->WriteChunk(ptr, total);
     if (write_rcm.code != EC::Success && write_rcm.code != EC::EndOfFile) {
-      cur_task->rcm = write_rcm;
+      pd.SetCurrentTaskResult(write_rcm);
       SignalTaskIoAbort_(pd);
       return 0;
     }
     if (bytes_written <= 0) {
-      cur_task->rcm =
+      pd.SetCurrentTaskResult(
           Err(EC::CommonFailure, "ftp.download", cur_task->dst,
-              "Local destination write returned zero bytes");
+              "Local destination write returned zero bytes"));
       SignalTaskIoAbort_(pd);
       return 0;
     }
@@ -1586,15 +1609,15 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
 
-    TransferTask *cur_task = pd->GetCurrentTask();
-    if (!cur_task) {
+    auto cur_task = pd->GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       SignalTaskIoAbort_(*pd);
       return;
     }
     const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(dst, false);
     if (ecm.code != EC::Success) {
-      cur_task->rcm = ecm;
+      pd->SetCurrentTaskResult(ecm);
       SignalTaskIoAbort_(*pd);
       return;
     }
@@ -1616,10 +1639,10 @@ public:
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
       SignalTaskIoAbort_(*pd);
     } else if (res != CURLE_OK) {
-      cur_task->rcm =
+      pd->SetCurrentTaskResult(
           ECM{EC::FTPUploadFailed,
               AMStr::fmt("Upload failed: {}", curl_easy_strerror(res)),
-              RawError{RawErrorSource::Curl, static_cast<int>(res)}};
+              RawError{RawErrorSource::Curl, static_cast<int>(res)}});
       SignalTaskIoAbort_(*pd);
     }
   }
@@ -1634,15 +1657,15 @@ public:
     FTPDirectLocalContext ctx = {pd, local_handle};
     std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
 
-    TransferTask *cur_task = pd->GetCurrentTask();
-    if (!cur_task) {
+    auto cur_task = pd->GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       SignalTaskIoAbort_(*pd);
       return Err(EC::InvalidHandle, "ftp.upload", dst, "Current task is null");
     }
     const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(dst, false);
     if (ecm.code != EC::Success) {
-      cur_task->rcm = ecm;
+      pd->SetCurrentTaskResult(ecm);
       SignalTaskIoAbort_(*pd);
       return ecm;
     }
@@ -1662,8 +1685,9 @@ public:
 
     const CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
-      if (cur_task->rcm.has_value() && cur_task->rcm->code != EC::Success) {
-        return *cur_task->rcm;
+      const auto current_rcm = pd->GetCurrentTaskResult();
+      if (current_rcm.has_value() && current_rcm->code != EC::Success) {
+        return *current_rcm;
       }
       SignalTaskIoAbort_(*pd);
       return Err(EC::Terminate, "ftp.upload", dst, "FTP upload aborted");
@@ -1672,7 +1696,7 @@ public:
       const ECM rcm = {EC::FTPUploadFailed,
                        AMStr::fmt("Upload failed: {}", curl_easy_strerror(res)),
                        RawError{RawErrorSource::Curl, static_cast<int>(res)}};
-      cur_task->rcm = rcm;
+      pd->SetCurrentTaskResult(rcm);
       SignalTaskIoAbort_(*pd);
       return rcm;
     }
@@ -1687,16 +1711,16 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
 
-    TransferTask *cur_task = pd->GetCurrentTask();
+    auto cur_task = pd->GetCurrentTaskCopy();
 
-    if (!cur_task) {
+    if (!cur_task.has_value()) {
       SignalTaskIoAbort_(*pd);
       return;
     }
     const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(src, false);
     if (ecm.code != EC::Success) {
-      cur_task->rcm = ecm;
+      pd->SetCurrentTaskResult(ecm);
       SignalTaskIoAbort_(*pd);
       return;
     }
@@ -1709,10 +1733,10 @@ public:
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
       SignalTaskIoAbort_(*pd);
     } else if (res != CURLE_OK) {
-      cur_task->rcm =
+      pd->SetCurrentTaskResult(
           ECM{EC::FTPDownloadFailed,
               AMStr::fmt("Download failed: {}", curl_easy_strerror(res)),
-              RawError{RawErrorSource::Curl, static_cast<int>(res)}};
+              RawError{RawErrorSource::Curl, static_cast<int>(res)}});
       SignalTaskIoAbort_(*pd);
     }
   }
@@ -1728,15 +1752,15 @@ public:
     FTPDirectLocalContext ctx = {pd, local_handle};
     std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
 
-    TransferTask *cur_task = pd->GetCurrentTask();
-    if (!cur_task) {
+    auto cur_task = pd->GetCurrentTaskCopy();
+    if (!cur_task.has_value()) {
       SignalTaskIoAbort_(*pd);
       return Err(EC::InvalidHandle, "ftp.download", src, "Current task is null");
     }
     const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(src, false);
     if (ecm.code != EC::Success) {
-      cur_task->rcm = ecm;
+      pd->SetCurrentTaskResult(ecm);
       SignalTaskIoAbort_(*pd);
       return ecm;
     }
@@ -1749,8 +1773,9 @@ public:
 
     const CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
-      if (cur_task->rcm.has_value() && cur_task->rcm->code != EC::Success) {
-        return *cur_task->rcm;
+      const auto current_rcm = pd->GetCurrentTaskResult();
+      if (current_rcm.has_value() && current_rcm->code != EC::Success) {
+        return *current_rcm;
       }
       SignalTaskIoAbort_(*pd);
       return Err(EC::Terminate, "ftp.download", src, "FTP download aborted");
@@ -1760,7 +1785,7 @@ public:
                        AMStr::fmt("Download failed: {}",
                                   curl_easy_strerror(res)),
                        RawError{RawErrorSource::Curl, static_cast<int>(res)}};
-      cur_task->rcm = rcm;
+      pd->SetCurrentTaskResult(rcm);
       SignalTaskIoAbort_(*pd);
       return rcm;
     }
@@ -1818,9 +1843,9 @@ ECM ExecuteSourceToBuffer(const ClientHandle &client,
   }
   TransferEndpointRouter helper = {};
   helper.XToBuffer(client, task_info, progress);
-  auto *task = progress.GetCurrentTask();
-  if (task && task->rcm.has_value() && task->rcm->code != EC::Success) {
-    return *task->rcm;
+  const auto task_rcm = progress.GetCurrentTaskResult();
+  if (task_rcm.has_value() && task_rcm->code != EC::Success) {
+    return *task_rcm;
   }
   return OK;
 }
@@ -1832,9 +1857,9 @@ ECM ExecuteBufferToSink(const ClientHandle &client, const TaskHandle &task_info,
   }
   TransferEndpointRouter helper = {};
   helper.BufferToX(client, task_info, progress);
-  auto *task = progress.GetCurrentTask();
-  if (task && task->rcm.has_value() && task->rcm->code != EC::Success) {
-    return *task->rcm;
+  const auto task_rcm = progress.GetCurrentTaskResult();
+  if (task_rcm.has_value() && task_rcm->code != EC::Success) {
+    return *task_rcm;
   }
   return OK;
 }
@@ -1848,8 +1873,8 @@ ECM ExecuteSequentialDirectTransfer(const ClientHandle &src_client,
     return Err(EC::InvalidArg, "", "", "Invalid direct transfer input");
   }
 
-  auto *task = progress.GetCurrentTask();
-  if (!task) {
+  auto task = progress.GetCurrentTaskCopy();
+  if (!task.has_value()) {
     return Err(EC::InvalidArg, "", "", "Current transfer task is null");
   }
 

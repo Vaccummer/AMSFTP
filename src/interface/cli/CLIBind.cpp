@@ -246,8 +246,8 @@ void BindHostCommands(CommandNode *root, CliArgsPool &args) {
                            node.AddOption("attrname",
                                           args.host.set.request.attrname, 1, 1,
                                           "Host property name", true);
-                           node.AddOption("value", args.host.set.request.value,
-                                          1, 1, "Host property value", true);
+                           node.AddOption("value", args.host.set.value_tokens,
+                                          0, 1, "Host property value");
                            node.AddPositionalRule(0, Sem::HostNickname, false);
                            node.AddPositionalRule(1, Sem::HostAttr, false);
                            node.AddPositionalRule(2, Sem::HostAttrValue, false);
@@ -579,6 +579,8 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                      "Resume from existing destination file");
         node.AddFlag("-q", "--quiet", args.fs.cp.quiet,
                      "Suppress transfer output");
+        node.AddFlag("-v", "--verbose", args.fs.cp.verbose,
+                     "Show transfer planning progress");
         node.AddPositionalRule(0, Sem::Path, true);
       });
 
@@ -620,6 +622,8 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                      "Resume from existing destination file");
         node.AddFlag("-q", "--quiet", args.fs.clone.quiet,
                      "Suppress transfer output");
+        node.AddFlag("-v", "--verbose", args.fs.clone.verbose,
+                     "Show transfer planning progress");
         node.AddPositionalRule(0, Sem::Path, false);
         node.AddPositionalRule(1, Sem::Path, false);
         node.AddPositionalRule(2, Sem::None, false);

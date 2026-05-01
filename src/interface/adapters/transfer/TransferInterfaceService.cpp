@@ -82,9 +82,9 @@ TaskID BuildTaskId_() {
 }
 
 void PrintTransferStage_(AMInterface::prompt::PromptIOManager &prompt,
-                         bool quiet, int index, int total,
+                         bool show_report, int index, int total,
                          const std::string &name) {
-  if (quiet) {
+  if (!show_report) {
     return;
   }
   prompt.FmtPrint("[Transfer Stage {}/{}] {}", index, total, name);
@@ -363,7 +363,6 @@ struct TaskInspectSnapshot_ {
 
   std::vector<TaskInspectSetSnapshot_> sets = {};
   std::vector<TaskInspectEntrySnapshot_> entries = {};
-  bool entries_snapshot_busy = false;
 };
 
 const char *TaskStatusTextLocal_(AMDomain::transfer::TaskStatus status) {
@@ -734,24 +733,11 @@ BuildTaskInspectSnapshot_(const std::shared_ptr<TaskInfo> &task_info,
     };
 
     size_t index_seed = 1;
-    if (snapshot.status == AMDomain::transfer::TaskStatus::Conducting) {
-      auto dir_tasks = task_info->Core.dir_tasks.try_lock();
-      auto file_tasks = task_info->Core.file_tasks.try_lock();
-      if (!dir_tasks.has_value() || !file_tasks.has_value()) {
-        snapshot.entries_snapshot_busy = true;
-      } else {
-        snapshot.entries.reserve(dir_tasks->get().size() +
-                                 file_tasks->get().size());
-        collect_entries(dir_tasks->get(), &index_seed);
-        collect_entries(file_tasks->get(), &index_seed);
-      }
-    } else {
-      auto dir_tasks = task_info->Core.dir_tasks.lock();
-      auto file_tasks = task_info->Core.file_tasks.lock();
-      snapshot.entries.reserve(dir_tasks->size() + file_tasks->size());
-      collect_entries(*dir_tasks, &index_seed);
-      collect_entries(*file_tasks, &index_seed);
-    }
+    const auto dir_tasks = task_info->GetDirTasksSnapshot();
+    const auto file_tasks = task_info->GetFileTasksSnapshot();
+    snapshot.entries.reserve(dir_tasks.size() + file_tasks.size());
+    collect_entries(dir_tasks, &index_seed);
+    collect_entries(file_tasks, &index_seed);
   }
 
   return snapshot;
@@ -862,11 +848,6 @@ void PrintTaskInspectEntries_(
     const TaskInspectSnapshot_ &snapshot) {
   prompt_io_manager.Print("");
   prompt_io_manager.Print("Entries:");
-  if (snapshot.entries_snapshot_busy) {
-    prompt_io_manager.Print(
-        "  Entry snapshot busy; showing runtime summary only.");
-    return;
-  }
   if (snapshot.entries.empty()) {
     prompt_io_manager.Print("  (none)");
     return;
@@ -1655,8 +1636,9 @@ ECM TransferInterfaceService::Transfer(
   if (const auto &token = control.ControlToken(); token) {
     token->ClearInterrupt();
   }
+  const bool show_report = arg.verbose && !arg.quiet;
   constexpr int kTransferStageCount = 5;
-  PrintTransferStage_(prompt_io_manager_, arg.quiet, 1, kTransferStageCount,
+  PrintTransferStage_(prompt_io_manager_, show_report, 1, kTransferStageCount,
                       "Search wildcard sources");
   std::vector<WildcardConfirmRequest> confirm_requests = {};
   for (const auto &set : arg.transfer_sets) {
@@ -1676,20 +1658,20 @@ ECM TransferInterfaceService::Transfer(
     }
   }
 
-  PrintTransferStage_(prompt_io_manager_, arg.quiet, 2, kTransferStageCount,
+  PrintTransferStage_(prompt_io_manager_, show_report, 2, kTransferStageCount,
                       "Confirm wildcard matches");
   ECM confirm_rcm = ConfirmWildcard_(confirm_requests, arg.confirm_policy);
   if (!(confirm_rcm)) {
     return fail(confirm_rcm);
   }
 
-  PrintTransferStage_(prompt_io_manager_, arg.quiet, 3, kTransferStageCount,
+  PrintTransferStage_(prompt_io_manager_, show_report, 3, kTransferStageCount,
                       "Collect clients and resolve paths");
   std::vector<ECM> warnings = {};
   std::shared_ptr<TaskInfo> task_info = nullptr;
   ECM build_rcm = BuildTaskInfo_(arg, control, &task_info, &warnings,
-                                 [this, &arg](const std::string &name) {
-                                   if (arg.quiet) {
+                                 [this, show_report](const std::string &name) {
+                                   if (!show_report) {
                                      return;
                                    }
                                    prompt_io_manager_.FmtPrint("  - {}", name);
@@ -1705,7 +1687,7 @@ ECM TransferInterfaceService::Transfer(
         {EC::InvalidHandle, "", "", "BuildTaskInfo returned null task"});
   }
 
-  PrintTransferStage_(prompt_io_manager_, arg.quiet, 4, kTransferStageCount,
+  PrintTransferStage_(prompt_io_manager_, show_report, 4, kTransferStageCount,
                       "Submit transfer task");
   const ECM submit_rcm = transfer_app_service_.Submit(task_info);
   if (!(submit_rcm)) {
@@ -1716,7 +1698,7 @@ ECM TransferInterfaceService::Transfer(
     prompt_io_manager_.FmtPrint("Submitted task {}", task_info->id);
     return OK;
   }
-  PrintTransferStage_(prompt_io_manager_, arg.quiet, 5, kTransferStageCount,
+  PrintTransferStage_(prompt_io_manager_, show_report, 5, kTransferStageCount,
                       "Run and wait task");
   return WaitTask_(task_info, control);
 }
