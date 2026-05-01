@@ -121,8 +121,8 @@ size_t TransferRuntimeProgress::GetCurrentTaskTransferred() const {
   return task_info->GetCurrentTaskTransferred();
 }
 
-std::optional<TransferTask> TransferRuntimeProgress::GetCurrentTaskCopy()
-    const {
+std::optional<TransferTask>
+TransferRuntimeProgress::GetCurrentTaskCopy() const {
   if (!task_info) {
     return std::nullopt;
   }
@@ -154,7 +154,7 @@ constexpr const char *kHttpProxyKey = "http.proxy";
 constexpr const char *kHttpMaxRedirectTimesKey = "http.max_redirect_times";
 constexpr const char *kHttpBearerTokenKey = "http.bear_token";
 constexpr std::array<size_t, 9> kSftpWriteQuantumBuckets = {
-    16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024,
+    16 * 1024,  32 * 1024,   64 * 1024,       128 * 1024,     256 * 1024,
     512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024};
 constexpr size_t kSftpQuantumDownshiftEagainThreshold = 8;
 constexpr size_t kSftpQuantumDownshiftShortThreshold = 3;
@@ -444,9 +444,8 @@ size_t ClampBufferSizeByPolicy_(size_t requested,
                                 const TransferBufferPolicy &) {
   const size_t min_buffer =
       AMDomain::transfer::TransferManagerArg::kMinBufferBytes;
-  const size_t max_buffer =
-      std::max(min_buffer,
-               AMDomain::transfer::TransferManagerArg::kMaxBufferBytes);
+  const size_t max_buffer = std::max(
+      min_buffer, AMDomain::transfer::TransferManagerArg::kMaxBufferBytes);
   return std::min<size_t>(std::max<size_t>(requested, min_buffer), max_buffer);
 }
 
@@ -584,6 +583,7 @@ public:
                 RawError{RawErrorSource::WindowsAPI, win_ec}};
       }
 #else
+      (void)sequential;
       int flags = is_write ? O_RDWR : O_RDONLY;
       if (is_write && truncate) {
         flags |= (O_CREAT | O_TRUNC);
@@ -757,9 +757,8 @@ public:
                                  static_cast<ssize_t>(to_read));
       });
       if (!nb_res) {
-        return {-1,
-                ContextualizeTransferRCM_(nb_res.rcm, "transfer.file.read",
-                                          path)};
+        return {-1, ContextualizeTransferRCM_(nb_res.rcm, "transfer.file.read",
+                                              path)};
       }
       const ssize_t bytes_read = nb_res.value;
       if (bytes_read > 0) {
@@ -913,16 +912,14 @@ public:
       const size_t write_size = ResolveSftpWriteQuantum_(pd, to_write);
       std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
       auto nb_res = client->NBPerform(control, [&]() {
-        const ssize_t rc =
-            libssh2_sftp_write(sftp_handle, buffer,
-                               static_cast<ssize_t>(write_size));
+        const ssize_t rc = libssh2_sftp_write(sftp_handle, buffer,
+                                              static_cast<ssize_t>(write_size));
         AdjustSftpWriteQuantum_(pd, write_size, rc);
         return rc;
       });
       if (!nb_res) {
-        return {-1,
-                ContextualizeTransferRCM_(nb_res.rcm, "transfer.file.write",
-                                          path)};
+        return {-1, ContextualizeTransferRCM_(nb_res.rcm, "transfer.file.write",
+                                              path)};
       }
       const ssize_t bytes_written = nb_res.value;
       if (bytes_written > 0) {
@@ -1074,34 +1071,34 @@ public:
 private:
   static bool WaitWritableUntilReady_(RuntimeProgress &pd,
                                       const UnionFileHandle &file_handle) {
-    const auto token = pd.task_info ? pd.task_info->Core.control.ControlToken()
-                                    : nullptr;
-    const AMDomain::client::InterruptWakeupSafeGuard wake_guard(
-        token, [&pd]() {
-          if (pd.ring_buffer) {
-            pd.ring_buffer->NotifyAll();
-          }
-        });
+    const auto token =
+        pd.task_info ? pd.task_info->Core.control.ControlToken() : nullptr;
+    const AMDomain::client::InterruptWakeupSafeGuard wake_guard(token, [&pd]() {
+      if (pd.ring_buffer) {
+        pd.ring_buffer->NotifyAll();
+      }
+    });
     while (pd.ring_buffer->full() && !IsTaskInterrupted_(pd) &&
            file_handle.offset < file_handle.file_size) {
       const int wait_ms = ResolveRingBufferWaitMs_(pd);
-      (void)pd.ring_buffer->WaitWritable([&]() {
-        return IsTaskInterrupted_(pd) ||
-               file_handle.offset >= file_handle.file_size;
-      }, wait_ms);
+      (void)pd.ring_buffer->WaitWritable(
+          [&]() {
+            return IsTaskInterrupted_(pd) ||
+                   file_handle.offset >= file_handle.file_size;
+          },
+          wait_ms);
     }
     return !IsTaskInterrupted_(pd);
   }
 
   static bool WaitReadableUntilReady_(RuntimeProgress &pd) {
-    const auto token = pd.task_info ? pd.task_info->Core.control.ControlToken()
-                                    : nullptr;
-    const AMDomain::client::InterruptWakeupSafeGuard wake_guard(
-        token, [&pd]() {
-          if (pd.ring_buffer) {
-            pd.ring_buffer->NotifyAll();
-          }
-        });
+    const auto token =
+        pd.task_info ? pd.task_info->Core.control.ControlToken() : nullptr;
+    const AMDomain::client::InterruptWakeupSafeGuard wake_guard(token, [&pd]() {
+      if (pd.ring_buffer) {
+        pd.ring_buffer->NotifyAll();
+      }
+    });
     while (pd.ring_buffer->empty() && !IsTaskInterrupted_(pd)) {
       const int wait_ms = ResolveRingBufferWaitMs_(pd);
       (void)pd.ring_buffer->WaitReadable(
@@ -1219,7 +1216,8 @@ private:
     }
   }
 
-  void WriteBufferToLocal_(const TransferTask &task, RuntimeProgress &pd) const {
+  void WriteBufferToLocal_(const TransferTask &task,
+                           RuntimeProgress &pd) const {
     UnionFileHandle file_handle = {};
     const bool resume = task.transferred > 0;
     ECM rcm = file_handle.Init(task.dst, task.size, nullptr, true, true,
@@ -1335,9 +1333,8 @@ private:
 
     CURL *curl = curl_easy_init();
     if (!curl) {
-      pd->SetCurrentTaskResult(
-          Err(EC::InvalidHandle, "http.download", src,
-              "curl_easy_init failed"));
+      pd->SetCurrentTaskResult(Err(EC::InvalidHandle, "http.download", src,
+                                   "curl_easy_init failed"));
       SignalTaskIoAbort_(*pd);
       return;
     }
@@ -1391,8 +1388,7 @@ private:
     if (pd->task_info && IsTaskHardInterrupted_(pd->task_info) &&
         !pd->task_info->IsPauseRequested()) {
       pd->SetCurrentTaskResult(
-          Err(EC::Terminate, "http.download", src,
-              "Task terminated by user"));
+          Err(EC::Terminate, "http.download", src, "Task terminated by user"));
       SignalTaskIoAbort_(*pd);
       return;
     }
@@ -1409,12 +1405,11 @@ private:
         response_rcm = Err(EC::PathNotExist, "http.download", src,
                            "Remote file not found");
       } else if (response == 401 || response == 403) {
-        response_rcm =
-            Err(EC::PermissionDenied, "http.download", src, "Permission denied");
+        response_rcm = Err(EC::PermissionDenied, "http.download", src,
+                           "Permission denied");
       } else if (response == 416) {
-        response_rcm =
-            Err(EC::InvalidOffset, "http.download", src,
-                "Invalid resume offset");
+        response_rcm = Err(EC::InvalidOffset, "http.download", src,
+                           "Invalid resume offset");
       } else {
         response_rcm = Err(EC::CommonFailure, "http.download", src,
                            AMStr::fmt("HTTP status {}", response));
@@ -1514,8 +1509,7 @@ private:
           written += to_write;
         } catch (const std::exception &e) {
           SignalTaskIoAbort_(*pd);
-          pd->SetCurrentTaskResult(
-              ECM{EC::BufferWriteError, "", "", e.what()});
+          pd->SetCurrentTaskResult(ECM{EC::BufferWriteError, "", "", e.what()});
           return 0;
         }
       }
@@ -1755,7 +1749,8 @@ public:
     auto cur_task = pd->GetCurrentTaskCopy();
     if (!cur_task.has_value()) {
       SignalTaskIoAbort_(*pd);
-      return Err(EC::InvalidHandle, "ftp.download", src, "Current task is null");
+      return Err(EC::InvalidHandle, "ftp.download", src,
+                 "Current task is null");
     }
     const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(src, false);
@@ -1781,10 +1776,10 @@ public:
       return Err(EC::Terminate, "ftp.download", src, "FTP download aborted");
     }
     if (res != CURLE_OK) {
-      const ECM rcm = {EC::FTPDownloadFailed,
-                       AMStr::fmt("Download failed: {}",
-                                  curl_easy_strerror(res)),
-                       RawError{RawErrorSource::Curl, static_cast<int>(res)}};
+      const ECM rcm = {
+          EC::FTPDownloadFailed,
+          AMStr::fmt("Download failed: {}", curl_easy_strerror(res)),
+          RawError{RawErrorSource::Curl, static_cast<int>(res)}};
       pd->SetCurrentTaskResult(rcm);
       SignalTaskIoAbort_(*pd);
       return rcm;
@@ -1880,42 +1875,36 @@ ECM ExecuteSequentialDirectTransfer(const ClientHandle &src_client,
 
   const auto src_protocol = src_client->ConfigPort().GetProtocol();
   const auto dst_protocol = dst_client->ConfigPort().GetProtocol();
-  const bool local_to_remote =
-      src_protocol == ClientProtocol::LOCAL &&
-      (dst_protocol == ClientProtocol::SFTP ||
-       dst_protocol == ClientProtocol::FTP);
-  const bool remote_to_local =
-      (src_protocol == ClientProtocol::SFTP ||
-       src_protocol == ClientProtocol::FTP) &&
-      dst_protocol == ClientProtocol::LOCAL;
+  const bool local_to_remote = src_protocol == ClientProtocol::LOCAL &&
+                               (dst_protocol == ClientProtocol::SFTP ||
+                                dst_protocol == ClientProtocol::FTP);
+  const bool remote_to_local = (src_protocol == ClientProtocol::SFTP ||
+                                src_protocol == ClientProtocol::FTP) &&
+                               dst_protocol == ClientProtocol::LOCAL;
   if (!local_to_remote && !remote_to_local) {
     return Err(EC::OperationUnsupported, "transfer.direct", task->src,
                "Direct transfer currently supports LOCAL <-> FTP/SFTP only");
   }
 
-  auto *src_sftp =
-      src_protocol == ClientProtocol::SFTP
-          ? dynamic_cast<AMSFTPIOCore *>(&src_client->IOPort())
-          : nullptr;
-  auto *dst_sftp =
-      dst_protocol == ClientProtocol::SFTP
-          ? dynamic_cast<AMSFTPIOCore *>(&dst_client->IOPort())
-          : nullptr;
-  auto *src_ftp =
-      src_protocol == ClientProtocol::FTP
-          ? dynamic_cast<AMFTPIOCore *>(&src_client->IOPort())
-          : nullptr;
-  auto *dst_ftp =
-      dst_protocol == ClientProtocol::FTP
-          ? dynamic_cast<AMFTPIOCore *>(&dst_client->IOPort())
-          : nullptr;
+  auto *src_sftp = src_protocol == ClientProtocol::SFTP
+                       ? dynamic_cast<AMSFTPIOCore *>(&src_client->IOPort())
+                       : nullptr;
+  auto *dst_sftp = dst_protocol == ClientProtocol::SFTP
+                       ? dynamic_cast<AMSFTPIOCore *>(&dst_client->IOPort())
+                       : nullptr;
+  auto *src_ftp = src_protocol == ClientProtocol::FTP
+                      ? dynamic_cast<AMFTPIOCore *>(&src_client->IOPort())
+                      : nullptr;
+  auto *dst_ftp = dst_protocol == ClientProtocol::FTP
+                      ? dynamic_cast<AMFTPIOCore *>(&dst_client->IOPort())
+                      : nullptr;
   if (src_protocol == ClientProtocol::SFTP && src_sftp == nullptr) {
     return Err(EC::InvalidHandle, "transfer.direct", task->src,
                "SFTP source IO port implementation mismatch");
   }
   if (dst_protocol == ClientProtocol::SFTP && dst_sftp == nullptr) {
-      return Err(EC::InvalidHandle, "transfer.direct", task->dst,
-                 "SFTP destination IO port implementation mismatch");
+    return Err(EC::InvalidHandle, "transfer.direct", task->dst,
+               "SFTP destination IO port implementation mismatch");
   }
   if (src_protocol == ClientProtocol::FTP && src_ftp == nullptr) {
     return Err(EC::InvalidHandle, "transfer.direct", task->src,
@@ -1927,7 +1916,8 @@ ECM ExecuteSequentialDirectTransfer(const ClientHandle &src_client,
   }
 
   const bool resume = task->transferred > 0;
-  if (src_protocol == ClientProtocol::FTP || dst_protocol == ClientProtocol::FTP) {
+  if (src_protocol == ClientProtocol::FTP ||
+      dst_protocol == ClientProtocol::FTP) {
     UnionFileHandle local_handle = {};
     ECM rcm = OK;
     if (src_protocol == ClientProtocol::LOCAL) {
