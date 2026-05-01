@@ -2,6 +2,8 @@
 
 [English](./README.md) | [Simplified Chinese](./README.zh-CN.md)
 
+![AMSFTP cover](./resource/cover1.png)
+
 AMSFTP is a C++20 command-line workspace for file operations and terminal access across local, SFTP, FTP, and HTTP targets. It is designed as a compact alternative to switching between `ssh`, `sftp`, shell scripts, and ad-hoc transfer tools.
 
 The project is approaching its first public release. The active implementation lives under `src/`; old migration notes, deprecated prototypes, and local build artifacts are intentionally excluded from the release tree.
@@ -17,60 +19,66 @@ The project is approaching its first public release. The active implementation l
 - Isocline-based completion, highlighting, and command history
 - Styled terminal output and configurable prompt profiles
 
-## Repository Layout
-
-```text
-src/
-  application/      Use-case orchestration
-  bootstrap/        Program composition and startup
-  domain/           Domain models and ports
-  foreign/amsrust/  Rust FFI helpers used by CMake
-  foundation/       Shared low-level utilities
-  infrastructure/   Concrete client, config, terminal, and transfer adapters
-  interface/        CLI parsing, rendering, prompt, completion, and adapters
-  third_party/      Vendored Isocline sources
-resource/           Windows icon and resource script
-config/schema/      Configuration schema
-```
-
 ## Build Requirements
-
-The bundled presets are currently Windows-oriented.
 
 - CMake 3.20 or newer
 - Ninja
-- LLVM/Clang with `clang-cl`
 - Rust and `cargo`
-- vcpkg with these packages installed for the selected triplet:
-  OpenSSL, ZLIB, CURL, nlohmann_json, Lua, libssh2, and CLI11
+- OpenSSL, ZLIB, CURL, nlohmann_json, Lua, libssh2, and CLI11
 
-Set `VCPKG_ROOT` before configuring:
+On Windows, install dependencies with vcpkg for the selected triplet and set `VCPKG_ROOT` before configuring:
 
 ```powershell
 $env:VCPKG_ROOT = "D:\Compiler\vcpkg"
 ```
 
-`CMakePresets.json` uses `$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake`, so contributors do not need to edit the preset just because vcpkg is installed in a different directory.
+The Windows presets use `clang-cl`, `llvm-rc`, and `$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake`.
+
+On macOS, the bundled arm64 presets expect Homebrew packages and static pkg-config metadata under `/opt/homebrew`.
 
 ## Build
 
-Configure the static release preset:
+### Windows
+
+Configure the release preset:
 
 ```powershell
-cmake --preset win-clang-static-release
+cmake --preset windows-msvc-release
 ```
 
 Build the executable:
 
 ```powershell
-cmake --build --preset win-clang-static-release --target amsftp
+cmake --build --preset windows-msvc-release --target amsftp
 ```
 
-CMake builds the Rust helper crate in `src/foreign/amsrust` automatically through `cargo build --release --locked`. The release executable is generated at:
+The Windows release executable is generated at:
 
 ```text
-build/win-clang-static-release/amsftp.exe
+build/windows-msvc-release/amsftp.exe
 ```
+
+### macOS
+
+Configure the arm64 release preset:
+
+```sh
+cmake --preset macos-arm64-release
+```
+
+Build the executable:
+
+```sh
+cmake --build --preset macos-arm64-release --target amsftp
+```
+
+The macOS release executable is generated at:
+
+```text
+build/macos-arm64-release/amsftp
+```
+
+CMake builds the Rust helper crate in `src/foreign/amsrust` automatically through `cargo build --release --locked`.
 
 Before publishing a release, check these values in `CMakeLists.txt`:
 
@@ -182,17 +190,22 @@ cp dev@${dev:logs}/app.log @D:\logs\app.log
 
 ## Interactive Keys
 
+### Isocline Input
+
 - `Tab`: open completion or complete the current token
 - `End`: accept an inline completion hint
 - `Up` / `Down`: navigate history when the cursor is on the first or last input row
 - `Ctrl+R` / `Ctrl+S`: search history
 - `Ctrl+C`: cancel prompt input or interrupt a cancellable operation
-- `Ctrl+]`: enter terminal session control mode
 
-## Configuration
+### Terminal Control Mode
 
-Use `config save` to explicitly flush configuration changes:
-
-```text
-config save
-```
+- `Ctrl+]`: enter control mode from an active terminal session
+- `e` or `Esc`: leave control mode and return to the terminal session
+- `q`: detach from the foreground terminal session
+- `Tab` / `Right`: switch to the next terminal session
+- `Shift+Tab` / `Left`: switch to the previous terminal session
+- `Up` / `Down`: scroll terminal history by one row
+- `Page Up` / `Page Down`: scroll terminal history by one page
+- `Home`: jump to the oldest cached terminal history
+- `End`: return to live terminal output
