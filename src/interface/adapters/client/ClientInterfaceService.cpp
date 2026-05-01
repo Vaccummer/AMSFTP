@@ -2893,6 +2893,7 @@ ECM ClientInterfaceService::RemoveHosts(
 }
 
 ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
+  constexpr const char *kOp = "host.set";
   const ECM lock_rcm = config_service_.EnsureConfigWriteLock();
   if (!(lock_rcm)) {
     prompt_io_manager_.ErrorFormat(lock_rcm);
@@ -2900,13 +2901,10 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   }
   const std::string nickname = AMStr::Strip(request.nickname);
   const std::string field = AMStr::lowercase(AMStr::Strip(request.attrname));
+  const bool value_provided =
+      request.value_provided || !request.value.empty();
   if (nickname.empty()) {
-    const ECM err = Err(EC::InvalidArg, "", "", "empty nickname");
-    prompt_io_manager_.ErrorFormat(err);
-    return err;
-  }
-  if (!host_config_manager_.HostExists(nickname)) {
-    const ECM err = Err(EC::HostConfigNotFound, "", "", "host not found");
+    const ECM err = Err(EC::InvalidArg, kOp, "<nickname>", "empty nickname");
     prompt_io_manager_.ErrorFormat(err);
     return err;
   }
@@ -2914,7 +2912,20 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   const auto parsed_field =
       AMDomain::host::HostService::ParseEditableHostSetField(field);
   if (!parsed_field.has_value()) {
-    const ECM err = Err(EC::InvalidArg, "", "", "unsupported property name");
+    const ECM err =
+        Err(EC::InvalidArg, kOp, field, "unsupported property name");
+    prompt_io_manager_.ErrorFormat(err);
+    return err;
+  }
+
+  if (field != "password" && !value_provided) {
+    const ECM err = Err(EC::InvalidArg, kOp, field, "value is required");
+    prompt_io_manager_.ErrorFormat(err);
+    return err;
+  }
+
+  if (!host_config_manager_.HostExists(nickname)) {
+    const ECM err = Err(EC::HostConfigNotFound, kOp, nickname, "host not found");
     prompt_io_manager_.ErrorFormat(err);
     return err;
   }

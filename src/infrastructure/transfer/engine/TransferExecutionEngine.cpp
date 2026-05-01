@@ -131,8 +131,8 @@ ECM TransferExecutionEngine::TransferSignleFile(
   }
 
   auto &pd = runtime_progress;
-  auto *task = task_info->GetCurrentTask();
-  if (!task) {
+  auto task = task_info->GetCurrentTaskCopy();
+  if (!task.has_value()) {
     return {EC::InvalidArg, "", "", "Invalid transfer input"};
   }
   ResetSftpWriteTuning_(pd);
@@ -188,6 +188,7 @@ ECM TransferExecutionEngine::TransferSignleFile(
       }
       task->transferred = 0;
       task_info->Size.cur_task_transferred.store(0, std::memory_order_relaxed);
+      task_info->UpdateCurrentTaskTransferred(0);
     }
   }
 
@@ -203,9 +204,10 @@ ECM TransferExecutionEngine::TransferSignleFile(
     const size_t chunk_size = ResolveTaskBufferSize_(task_info);
     const ECM direct_rcm = detail::ExecuteSequentialDirectTransfer(
         src_client, dst_client, task_info, pd, chunk_size);
+    const auto task_rcm = task_info->GetCurrentTaskResult();
     if (direct_rcm.code != EC::Success &&
-        (!task->rcm.has_value() || task->rcm->code == EC::Success)) {
-      task->rcm = direct_rcm;
+        (!task_rcm.has_value() || task_rcm->code == EC::Success)) {
+      task_info->SetCurrentTaskResult(direct_rcm);
     }
   } else {
     if (!pd.ring_buffer) {
@@ -215,21 +217,26 @@ ECM TransferExecutionEngine::TransferSignleFile(
     std::future<ECM> read_future = EnqueueReadJob_(src_client, task_info, &pd);
     const ECM write_rcm =
         detail::ExecuteBufferToSink(dst_client, task_info, pd);
+    auto task_rcm = task_info->GetCurrentTaskResult();
     if (write_rcm.code != EC::Success &&
-        (!task->rcm.has_value() || task->rcm->code == EC::Success)) {
-      task->rcm = write_rcm;
+        (!task_rcm.has_value() || task_rcm->code == EC::Success)) {
+      task_info->SetCurrentTaskResult(write_rcm);
+      task_rcm = write_rcm;
     }
     if (read_future.valid()) {
       const ECM read_rcm = read_future.get();
-      if ((!task->rcm.has_value() || task->rcm->code == EC::Success) &&
+      task_rcm = task_info->GetCurrentTaskResult();
+      if ((!task_rcm.has_value() || task_rcm->code == EC::Success) &&
           read_rcm.code != EC::Success) {
-        task->rcm = read_rcm;
+        task_info->SetCurrentTaskResult(read_rcm);
       }
     }
   }
 
   task->transferred =
       task_info->Size.cur_task_transferred.load(std::memory_order_relaxed);
+  task_info->UpdateCurrentTaskTransferred(task->transferred);
+  task->rcm = task_info->GetCurrentTaskResult();
 
   if (task_info->Core.control.IsTimeout()) {
     return {EC::OperationTimeout, "", "", "Task timeout"};
@@ -346,193 +353,237 @@ void TransferExecutionEngine::ExecuteTask(const TaskHandle &task_info) {
     return std::nullopt;
   };
 
-  {
-    auto dir_tasks_guard = task_info->Core.dir_tasks.lock();
-    for (auto &task : *dir_tasks_guard) {
-      if (task.IsFinished) {
-        continue;
-      }
-      task_info->SetCurrentTask(&task);
-      if (task_info->IsPauseRequested()) {
-        paused_requested = true;
-        break;
-      }
-      auto stop_rcm = check_stop();
-      if (stop_rcm.has_value()) {
-        task.rcm = *stop_rcm;
-        task.IsFinished = true;
-        record_error(task.rcm);
-        break;
-      }
+  const auto write_task = [&](bool is_dir, size_t index,
+                              const TransferTask &task) {
+    (void)task_info->WriteTaskCopy(is_dir, index, task);
+  };
 
-      const std::string dst_key =
-          task.dst_host.empty() ? std::string("local") : task.dst_host;
-      auto dst_client = detail::ResolveTaskClient(task_clients, dst_key, true);
-      if (!dst_client) {
-        task.rcm = {EC::ClientNotFound, "", "",
-                    "Task destination client is not available"};
-        task.IsFinished = true;
-        record_error(task.rcm);
-        emit_entry_error(task);
-        continue;
-      }
-      {
-        const ECM guard_rcm =
-            detail::EnsureTransferClientReady(dst_client, __func__);
-        if (!(guard_rcm)) {
-          task.rcm = guard_rcm;
-          task.IsFinished = true;
-          record_error(task.rcm);
-          emit_entry_error(task);
-          continue;
-        }
-      }
-
-      task.rcm = dst_client->IOPort().mkdirs(
-          AMDomain::filesystem::MkdirsArgs{task.dst}, task_info->Core.control);
-      task.IsFinished = true;
-      if (task.rcm.has_value() && task.rcm->code != EC::Success) {
-        record_error(task.rcm);
-        emit_entry_error(task);
-      }
-      pd.CallInnerCallback(true);
+  const auto set_entry_rcm = [&](TransferTask *task, const ECM &rcm) {
+    if (!task) {
+      return;
     }
+    task->rcm = rcm;
+    task_info->SetCurrentTaskResult(rcm);
+  };
+
+  const size_t dir_task_count = task_info->GetDirTasksSnapshot().size();
+  for (size_t task_index = 0; task_index < dir_task_count; ++task_index) {
+    auto task_opt = task_info->GetTaskCopy(true, task_index);
+    if (!task_opt.has_value() || task_opt->IsFinished) {
+      continue;
+    }
+    TransferTask task = std::move(*task_opt);
+    task_info->SetCurrentTask(task_index, true, task);
+    if (task_info->IsPauseRequested()) {
+      paused_requested = true;
+      break;
+    }
+    auto stop_rcm = check_stop();
+    if (stop_rcm.has_value()) {
+      set_entry_rcm(&task, *stop_rcm);
+      task.IsFinished = true;
+      record_error(task.rcm);
+      write_task(true, task_index, task);
+      break;
+    }
+
+    const std::string dst_key =
+        task.dst_host.empty() ? std::string("local") : task.dst_host;
+    auto dst_client = detail::ResolveTaskClient(task_clients, dst_key, true);
+    if (!dst_client) {
+      set_entry_rcm(&task,
+                    {EC::ClientNotFound, "", "",
+                     "Task destination client is not available"});
+      task.IsFinished = true;
+      record_error(task.rcm);
+      emit_entry_error(task);
+      write_task(true, task_index, task);
+      continue;
+    }
+    {
+      const ECM guard_rcm =
+          detail::EnsureTransferClientReady(dst_client, __func__);
+      if (!(guard_rcm)) {
+        set_entry_rcm(&task, guard_rcm);
+        task.IsFinished = true;
+        record_error(task.rcm);
+        emit_entry_error(task);
+        write_task(true, task_index, task);
+        continue;
+      }
+    }
+
+    set_entry_rcm(&task, dst_client->IOPort().mkdirs(
+                             AMDomain::filesystem::MkdirsArgs{task.dst},
+                             task_info->Core.control));
+    task.IsFinished = true;
+    if (task.rcm.has_value() && task.rcm->code != EC::Success) {
+      record_error(task.rcm);
+      emit_entry_error(task);
+    }
+    write_task(true, task_index, task);
+    pd.CallInnerCallback(true);
   }
 
-  {
-    auto file_tasks_guard = task_info->Core.file_tasks.lock();
-    for (auto &task : *file_tasks_guard) {
-      if (task.IsFinished) {
-        continue;
-      }
-      if (task_info->IsPauseRequested()) {
-        paused_requested = true;
-        break;
-      }
-      auto stop_rcm = check_stop();
-      if (stop_rcm.has_value()) {
-        task.rcm = *stop_rcm;
-        task.IsFinished = true;
-        record_error(task.rcm);
-        break;
-      }
-
-      task_info->SetCurrentTask(&task);
-
-      auto src_client = task_clients.GetSrcClient(task.src_host);
-      auto dst_client = task_clients.GetDstClient(task.dst_host);
-
-      if (!src_client || !dst_client) {
-        task.rcm = {EC::ClientNotFound, "", "",
-                    "Task client is not available in pool"};
-        task.IsFinished = true;
-        record_error(task.rcm);
-        emit_entry_error(task);
-        continue;
-      }
-      {
-        const ECM src_guard =
-            detail::EnsureTransferClientReady(src_client, __func__);
-        if (!(src_guard)) {
-          task.rcm = src_guard;
-          task.IsFinished = true;
-          record_error(task.rcm);
-          emit_entry_error(task);
-          continue;
-        }
-        const ECM dst_guard =
-            detail::EnsureTransferClientReady(dst_client, __func__);
-        if (!(dst_guard)) {
-          task.rcm = dst_guard;
-          task.IsFinished = true;
-          record_error(task.rcm);
-          emit_entry_error(task);
-          continue;
-        }
-      }
-
-      task.rcm = OK;
-      const size_t resume_offset = task.transferred;
-      if (resume_offset > 0) {
-        if (resume_offset > task.size) {
-          task.rcm = {EC::InvalidOffset, "", "", "Offset exceeds src size"};
-          task.IsFinished = true;
-          record_error(task.rcm);
-          emit_entry_error(task);
-          continue;
-        }
-        auto dst_stat = dst_client->IOPort().stat(
-            AMDomain::filesystem::StatArgs{task.dst, false},
-            task_info->Core.control);
-        if (dst_stat.rcm.code != EC::Success) {
-          task.rcm = dst_stat.rcm;
-          task.IsFinished = true;
-          record_error(task.rcm);
-          emit_entry_error(task);
-          continue;
-        }
-        if (dst_stat.data.info.type == PathType::DIR) {
-          task.rcm = {EC::NotAFile, "", "",
-                      "Dst already exists but is a directory"};
-          task.IsFinished = true;
-          record_error(task.rcm);
-          emit_entry_error(task);
-          continue;
-        }
-        if (resume_offset > dst_stat.data.info.size) {
-          task.rcm = {EC::InvalidOffset, "", "",
-                      "Offset exceeds dst file size"};
-          task.IsFinished = true;
-          record_error(task.rcm);
-          emit_entry_error(task);
-          continue;
-        }
-      }
-
-      const std::string dst_parent = AMPath::dirname(task.dst);
-      if (!dst_parent.empty()) {
-        auto mkdir_parent_rcm = dst_client->IOPort().mkdirs(
-            AMDomain::filesystem::MkdirsArgs{dst_parent},
-            task_info->Core.control);
-        if (!mkdir_parent_rcm) {
-          task.rcm = mkdir_parent_rcm;
-          task.IsFinished = true;
-          record_error(task.rcm);
-          emit_entry_error(task);
-          continue;
-        }
-      }
-
-      task_info->Size.cur_task_transferred.store(resume_offset,
-                                                 std::memory_order_relaxed);
-      if (resume_offset > 0 &&
-          !task_info->Set.keep_start_time.load(std::memory_order_relaxed)) {
-        (void)task_info->AddTransferredSize(resume_offset);
-      }
-
-      pd.io_abort.store(false, std::memory_order_relaxed);
-      if (pd.ring_buffer) {
-        pd.ring_buffer->Reset();
-      }
-      task.rcm = TransferSignleFile(src_client, dst_client, pd);
-      if (task_info->IsPauseRequested() && task.rcm.has_value() &&
-          task.rcm->code == EC::Terminate) {
-        task.rcm = std::nullopt;
-        task.IsFinished = false;
-        paused_requested = true;
-        pd.CallInnerCallback(true);
-        break;
-      }
-      task.IsFinished = true;
-      task_info->Size.finished_filenum.fetch_add(1, std::memory_order_relaxed);
-      if (!task.rcm.has_value() || task.rcm->code == EC::Success) {
-        task_info->Size.success_filenum.fetch_add(1, std::memory_order_relaxed);
-      } else {
-        record_error(task.rcm);
-        emit_entry_error(task);
-      }
-      pd.CallInnerCallback(true);
+  const size_t file_task_count = task_info->GetFileTasksSnapshot().size();
+  for (size_t task_index = 0; task_index < file_task_count; ++task_index) {
+    auto task_opt = task_info->GetTaskCopy(false, task_index);
+    if (!task_opt.has_value() || task_opt->IsFinished) {
+      continue;
     }
+    TransferTask task = std::move(*task_opt);
+    if (task_info->IsPauseRequested()) {
+      paused_requested = true;
+      break;
+    }
+    auto stop_rcm = check_stop();
+    if (stop_rcm.has_value()) {
+      task_info->SetCurrentTask(task_index, false, task);
+      set_entry_rcm(&task, *stop_rcm);
+      task.IsFinished = true;
+      record_error(task.rcm);
+      write_task(false, task_index, task);
+      break;
+    }
+
+    task_info->SetCurrentTask(task_index, false, task);
+
+    auto src_client = task_clients.GetSrcClient(task.src_host);
+    auto dst_client = task_clients.GetDstClient(task.dst_host);
+
+    if (!src_client || !dst_client) {
+      set_entry_rcm(&task, {EC::ClientNotFound, "", "",
+                            "Task client is not available in pool"});
+      task.IsFinished = true;
+      record_error(task.rcm);
+      emit_entry_error(task);
+      write_task(false, task_index, task);
+      continue;
+    }
+    {
+      const ECM src_guard =
+          detail::EnsureTransferClientReady(src_client, __func__);
+      if (!(src_guard)) {
+        set_entry_rcm(&task, src_guard);
+        task.IsFinished = true;
+        record_error(task.rcm);
+        emit_entry_error(task);
+        write_task(false, task_index, task);
+        continue;
+      }
+      const ECM dst_guard =
+          detail::EnsureTransferClientReady(dst_client, __func__);
+      if (!(dst_guard)) {
+        set_entry_rcm(&task, dst_guard);
+        task.IsFinished = true;
+        record_error(task.rcm);
+        emit_entry_error(task);
+        write_task(false, task_index, task);
+        continue;
+      }
+    }
+
+    set_entry_rcm(&task, OK);
+    const size_t resume_offset = task.transferred;
+    if (resume_offset > 0) {
+      if (resume_offset > task.size) {
+        set_entry_rcm(&task,
+                      {EC::InvalidOffset, "", "",
+                       "Offset exceeds src size"});
+        task.IsFinished = true;
+        record_error(task.rcm);
+        emit_entry_error(task);
+        write_task(false, task_index, task);
+        continue;
+      }
+      auto dst_stat = dst_client->IOPort().stat(
+          AMDomain::filesystem::StatArgs{task.dst, false},
+          task_info->Core.control);
+      if (dst_stat.rcm.code != EC::Success) {
+        set_entry_rcm(&task, dst_stat.rcm);
+        task.IsFinished = true;
+        record_error(task.rcm);
+        emit_entry_error(task);
+        write_task(false, task_index, task);
+        continue;
+      }
+      if (dst_stat.data.info.type == PathType::DIR) {
+        set_entry_rcm(&task,
+                      {EC::NotAFile, "", "",
+                       "Dst already exists but is a directory"});
+        task.IsFinished = true;
+        record_error(task.rcm);
+        emit_entry_error(task);
+        write_task(false, task_index, task);
+        continue;
+      }
+      if (resume_offset > dst_stat.data.info.size) {
+        set_entry_rcm(&task,
+                      {EC::InvalidOffset, "", "",
+                       "Offset exceeds dst file size"});
+        task.IsFinished = true;
+        record_error(task.rcm);
+        emit_entry_error(task);
+        write_task(false, task_index, task);
+        continue;
+      }
+    }
+
+    const std::string dst_parent = AMPath::dirname(task.dst);
+    if (!dst_parent.empty()) {
+      auto mkdir_parent_rcm = dst_client->IOPort().mkdirs(
+          AMDomain::filesystem::MkdirsArgs{dst_parent},
+          task_info->Core.control);
+      if (!mkdir_parent_rcm) {
+        set_entry_rcm(&task, mkdir_parent_rcm);
+        task.IsFinished = true;
+        record_error(task.rcm);
+        emit_entry_error(task);
+        write_task(false, task_index, task);
+        continue;
+      }
+    }
+
+    task_info->Size.cur_task_transferred.store(resume_offset,
+                                               std::memory_order_relaxed);
+    if (resume_offset > 0 &&
+        !task_info->Set.keep_start_time.load(std::memory_order_relaxed)) {
+      (void)task_info->AddTransferredSize(resume_offset);
+    }
+
+    pd.io_abort.store(false, std::memory_order_relaxed);
+    if (pd.ring_buffer) {
+      pd.ring_buffer->Reset();
+    }
+    task.rcm = TransferSignleFile(src_client, dst_client, pd);
+    if (const auto current_task = task_info->GetCurrentTaskCopy();
+        current_task.has_value()) {
+      task.transferred = current_task->transferred;
+      if (current_task->rcm.has_value() &&
+          current_task->rcm->code != EC::Success) {
+        task.rcm = current_task->rcm;
+      }
+    }
+    if (task_info->IsPauseRequested() && task.rcm.has_value() &&
+        task.rcm->code == EC::Terminate) {
+      task.rcm = std::nullopt;
+      task_info->SetCurrentTaskResult(OK);
+      task.IsFinished = false;
+      paused_requested = true;
+      write_task(false, task_index, task);
+      pd.CallInnerCallback(true);
+      break;
+    }
+    task.IsFinished = true;
+    task_info->Size.finished_filenum.fetch_add(1, std::memory_order_relaxed);
+    if (!task.rcm.has_value() || task.rcm->code == EC::Success) {
+      task_info->Size.success_filenum.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      record_error(task.rcm);
+      emit_entry_error(task);
+    }
+    write_task(false, task_index, task);
+    pd.CallInnerCallback(true);
   }
 
   task_info->ClearCurrentTask();

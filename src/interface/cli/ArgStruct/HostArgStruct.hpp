@@ -103,12 +103,22 @@ struct HostRemoveArgs : BaseArgStruct {
  */
 struct HostSetArgs : BaseArgStruct {
   AMInterface::client::SetHostValueRequest request = {};
+  std::vector<std::string> value_tokens = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override {
     (void)ctx;
-    return managers.interfaces.client_interface_service->SetHostValue(request);
+    AMInterface::client::SetHostValueRequest normalized = request;
+    normalized.value_provided = !value_tokens.empty() || !request.value.empty();
+    if (!value_tokens.empty()) {
+      normalized.value = value_tokens.front();
+    }
+    return managers.interfaces.client_interface_service->SetHostValue(
+        normalized);
   }
-  void reset() override { request = {}; }
+  void reset() override {
+    request = {};
+    value_tokens.clear();
+  }
 };
 
 /**

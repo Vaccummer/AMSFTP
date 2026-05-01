@@ -62,6 +62,7 @@ struct SetHostValueRequest {
   std::string nickname = {};
   std::string attrname = {};
   std::string value = {};
+  bool value_provided = false;
 };
 
 } // namespace AMInterface::client

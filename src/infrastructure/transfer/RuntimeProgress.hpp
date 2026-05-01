@@ -4,6 +4,7 @@
 #include "infrastructure/transfer/StreamRingBuffer.hpp"
 
 #include <cstddef>
+#include <optional>
 
 namespace AMInfra::transfer {
 struct SftpWriteTuning {
@@ -30,6 +31,10 @@ struct TransferRuntimeProgress {
   explicit TransferRuntimeProgress(TaskHandle task_info = nullptr);
   void CallInnerCallback(bool force = false);
   void UpdateSize(size_t delta) const;
-  [[nodiscard]] AMDomain::transfer::TransferTask *GetCurrentTask() const;
+  void SetCurrentTaskResult(const ECM &rcm) const;
+  [[nodiscard]] std::optional<ECM> GetCurrentTaskResult() const;
+  [[nodiscard]] size_t GetCurrentTaskTransferred() const;
+  [[nodiscard]] std::optional<AMDomain::transfer::TransferTask>
+  GetCurrentTaskCopy() const;
 };
 } // namespace AMInfra::transfer
