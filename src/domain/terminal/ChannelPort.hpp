@@ -71,6 +71,8 @@ struct ChannelCacheCopyResult {
   ChannelVtSnapshot vt_snapshot = {};
   std::string vt_main_replay_ansi = {};
   std::string vt_visible_frame_ansi = {};
+  bool vt_visible_frame_runs_available = false;
+  std::vector<ChannelVtRenderRun> vt_visible_frame_runs = {};
 };
 
 struct ChannelCacheTruncateArgs {

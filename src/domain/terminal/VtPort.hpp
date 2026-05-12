@@ -4,8 +4,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace AMDomain::terminal {
 
@@ -33,11 +35,20 @@ struct ChannelVtSnapshot {
   size_t rendered_main_rows = 0;
 };
 
+struct ChannelVtRenderRun {
+  int row = 0;
+  int col = 0;
+  std::string sgr = {};
+  std::string text = {};
+};
+
 struct ChannelRenderFrameResult {
   bool in_alternate_screen = false;
   ChannelVtSnapshot vt_snapshot = {};
   std::string vt_main_replay_ansi = {};
   std::string vt_visible_frame_ansi = {};
+  bool vt_visible_frame_runs_available = false;
+  std::vector<ChannelVtRenderRun> vt_visible_frame_runs = {};
 };
 
 struct ChannelRenderFrameArgs {
@@ -57,6 +68,8 @@ public:
   [[nodiscard]] virtual std::string RenderPlainTextHistory() const = 0;
   [[nodiscard]] virtual std::string
   RenderVisibleFrameAnsi(uint64_t viewport_offset = 0) const = 0;
+  [[nodiscard]] virtual std::optional<std::vector<ChannelVtRenderRun>>
+  RenderVisibleFrameRuns(uint64_t viewport_offset = 0) const = 0;
 };
 
 class IVtFramePort {

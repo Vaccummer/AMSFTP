@@ -68,6 +68,8 @@ private:
     bool in_alternate_screen = false;
     std::string main_replay_ansi = {};
     std::string visible_frame_ansi = {};
+    bool visible_frame_runs_available = false;
+    std::vector<AMT::ChannelVtRenderRun> visible_frame_runs = {};
   };
 
 public:
@@ -234,6 +236,10 @@ public:
     out.data.vt_main_replay_ansi = std::move(render_frame.vt_main_replay_ansi);
     out.data.vt_visible_frame_ansi =
         std::move(render_frame.vt_visible_frame_ansi);
+    out.data.vt_visible_frame_runs_available =
+        render_frame.vt_visible_frame_runs_available;
+    out.data.vt_visible_frame_runs =
+        std::move(render_frame.vt_visible_frame_runs);
     out.rcm = OK;
     return out;
   }
@@ -709,9 +715,19 @@ private:
     return state_.vt.RenderVisibleFrameAnsi(viewport_offset);
   }
 
+  [[nodiscard]] std::optional<std::vector<AMT::ChannelVtRenderRun>>
+  RenderVtVisibleFrameRunsRawUnlocked_(uint64_t viewport_offset) const {
+    if (!state_.vt.Snapshot().available) {
+      return std::nullopt;
+    }
+    return state_.vt.RenderVisibleFrameRuns(viewport_offset);
+  }
+
   struct VtRenderBundle_ {
     std::optional<std::string> main_replay_ansi = std::nullopt;
     std::optional<std::string> visible_frame_ansi = std::nullopt;
+    std::optional<std::vector<AMT::ChannelVtRenderRun>> visible_frame_runs =
+        std::nullopt;
   };
 
   [[nodiscard]] VtRenderBundle_
@@ -736,10 +752,20 @@ private:
           RenderVtMainReplayRawUnlocked_().value_or("");
       vt_render_cache_.visible_frame_ansi =
           RenderVtVisibleFrameRawUnlocked_(viewport_offset).value_or("");
+      if (auto runs = RenderVtVisibleFrameRunsRawUnlocked_(viewport_offset)) {
+        vt_render_cache_.visible_frame_runs_available = true;
+        vt_render_cache_.visible_frame_runs = std::move(*runs);
+      } else {
+        vt_render_cache_.visible_frame_runs_available = false;
+        vt_render_cache_.visible_frame_runs.clear();
+      }
     }
 
     out.main_replay_ansi = vt_render_cache_.main_replay_ansi;
     out.visible_frame_ansi = vt_render_cache_.visible_frame_ansi;
+    if (vt_render_cache_.visible_frame_runs_available) {
+      out.visible_frame_runs = vt_render_cache_.visible_frame_runs;
+    }
     return out;
   }
 
@@ -758,6 +784,11 @@ private:
         std::move(vt_render_bundle.main_replay_ansi).value_or("");
     out.vt_visible_frame_ansi =
         std::move(vt_render_bundle.visible_frame_ansi).value_or("");
+    out.vt_visible_frame_runs_available =
+        vt_render_bundle.visible_frame_runs.has_value();
+    out.vt_visible_frame_runs =
+        std::move(vt_render_bundle.visible_frame_runs)
+            .value_or(std::vector<AMT::ChannelVtRenderRun>{});
     return out;
   }
 

@@ -693,6 +693,35 @@ SplitAnsiFrameLines_(std::string_view frame) {
   return lines;
 }
 
+void AppendTerminalVtRuns_(
+    std::string *out,
+    const std::vector<AMDomain::terminal::ChannelVtRenderRun> &runs,
+    int row_offset, int rows, int cols) {
+  if (out == nullptr) {
+    return;
+  }
+  const int first_content_row =
+      std::clamp(row_offset + 1, 1, std::max(1, rows));
+  for (int row = first_content_row; row <= rows; ++row) {
+    *out += AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row);
+  }
+
+  for (const auto &run : runs) {
+    const int target_row = run.row + 1 + row_offset;
+    const int target_col = run.col + 1;
+    if (target_row < 1 || target_row > rows || target_col < 1 ||
+        target_col > cols || run.text.empty()) {
+      continue;
+    }
+    *out += AMStr::fmt("\x1b[{};{}H", target_row, target_col);
+    if (!run.sgr.empty()) {
+      *out += run.sgr;
+    }
+    *out += run.text;
+  }
+  *out += "\x1b[0m";
+}
+
 [[nodiscard]] std::vector<std::string>
 SplitTerminalBannerLines_(std::string_view banner) {
   std::vector<std::string> lines = {};
@@ -961,6 +990,8 @@ void AppendTerminalFixedHeader_(std::string *out,
 constexpr const char *kTerminalEnterAlternateScreen_ = "\x1b[?1049h";
 constexpr const char *kTerminalExitAlternateScreen_ = "\x1b[?1049l";
 constexpr const char *kTerminalClearAndHome_ = "\x1b[H\x1b[2J";
+constexpr const char *kTerminalDisableAutoWrap_ = "\x1b[?7l";
+constexpr const char *kTerminalEnableAutoWrap_ = "\x1b[?7h";
 
 class MainScreenRenderTracker_ final : NonCopyableNonMovable {
 public:
@@ -2098,8 +2129,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
   const AMTerminalTools::TerminalViewportInfo geometry =
       AMTerminalTools::GetTerminalViewportInfo();
   const int initial_header_rows = FixedHeaderLineCount_(
-      terminal_banner_lines, terminal_control_note_lines,
-      arg.start_in_god_mode, geometry.rows);
+      terminal_banner_lines, terminal_control_note_lines, false, geometry.rows);
   const AMTerminalTools::TerminalViewportInfo initial_content_geometry =
       BuildContentGeometry_(geometry, initial_header_rows);
   std::string channel_name = AMStr::Strip(status_result.data.current_channel);
@@ -2196,6 +2226,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
   bool last_server_in_alternate_screen = false;
   bool last_local_input_active = false;
   AMTerminalTools::TerminalViewportInfo last_render_geometry = geometry;
+  uint64_t last_rendered_viewport_offset = 0;
   std::vector<std::string> last_rendered_lines = {};
   bool have_last_vt_snapshot = false;
   AMDomain::terminal::ChannelVtSnapshot last_vt_snapshot = {};
@@ -2247,6 +2278,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
       last_server_in_alternate_screen = false;
       last_local_input_active = false;
       last_render_geometry = geometry;
+      last_rendered_viewport_offset = 0;
       last_rendered_lines.clear();
       have_last_vt_snapshot = false;
       last_vt_snapshot = {};
@@ -2286,6 +2318,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
         terminal_banner_lines, terminal_control_note_lines, control_active,
         current_geometry.rows);
     const std::vector<std::string> current_lines = SplitAnsiFrameLines_(frame);
+    const bool structured_frame_available =
+        vt_snapshot.available && frame_result.vt_visible_frame_runs_available;
     const bool local_input_active = browse_active || control_active;
     const std::string input_protocol_ansi =
         BuildTerminalInputProtocolAnsi_(vt_snapshot, local_input_active);
@@ -2295,8 +2329,15 @@ ECM TerminalInterfaceService::LaunchTerminal(
         current_geometry.rows != last_render_geometry.rows ||
         last_server_in_alternate_screen != vt_snapshot.in_alternate_screen ||
         last_control_layer_active != control_active;
+    const bool vt_damage_changed =
+        !have_last_vt_snapshot ||
+        vt_snapshot.damage_serial != last_vt_snapshot.damage_serial;
+    const bool viewport_offset_changed =
+        viewport_offset != last_rendered_viewport_offset;
     const bool lines_changed =
-        force_full_clear || current_lines != last_rendered_lines;
+        force_full_clear || viewport_offset_changed ||
+        (structured_frame_available ? vt_damage_changed
+                                    : current_lines != last_rendered_lines);
     const bool input_protocol_changed =
         !have_last_vt_snapshot ||
         InputProtocolStateChanged_(vt_snapshot, last_vt_snapshot) ||
@@ -2335,8 +2376,16 @@ ECM TerminalInterfaceService::LaunchTerminal(
                     current_lines.size() * 24U + 128U);
     repaint += input_protocol_ansi;
     repaint += "\x1b[?25l";
+    repaint += kTerminalDisableAutoWrap_;
     repaint += "\x1b[0m";
-    if (force_full_clear) {
+    if (structured_frame_available) {
+      if (force_full_clear) {
+        repaint += kTerminalClearAndHome_;
+      }
+      AppendTerminalVtRuns_(&repaint, frame_result.vt_visible_frame_runs,
+                            row_offset, current_geometry.rows,
+                            current_geometry.cols);
+    } else if (force_full_clear) {
       repaint += kTerminalClearAndHome_;
       for (size_t i = 0; i < current_lines.size(); ++i) {
         const int target_row = static_cast<int>(i + 1U + row_offset);
@@ -2404,10 +2453,12 @@ ECM TerminalInterfaceService::LaunchTerminal(
           row_offset, current_geometry.cols);
     }
     repaint += restore_cursor_after_banner;
+    repaint += kTerminalEnableAutoWrap_;
     WriteTerminalBytes_(repaint);
     last_rendered_lines = current_lines;
     last_local_input_active = local_input_active;
     last_render_geometry = current_geometry;
+    last_rendered_viewport_offset = viewport_offset;
     have_last_vt_snapshot = vt_snapshot.available;
     last_vt_snapshot = vt_snapshot;
     last_control_layer_active = control_active;
@@ -2477,10 +2528,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
       return;
     }
     auto const current_geometry = AMTerminalTools::GetTerminalViewportInfo();
-    const bool control_active =
-        control_layer_active.load(std::memory_order_acquire);
     const int fixed_header_rows = FixedHeaderLineCount_(
-        terminal_banner_lines, terminal_control_note_lines, control_active,
+        terminal_banner_lines, terminal_control_note_lines, false,
         current_geometry.rows);
     if (current_geometry.cols == last_geometry.cols &&
         current_geometry.rows == last_geometry.rows &&

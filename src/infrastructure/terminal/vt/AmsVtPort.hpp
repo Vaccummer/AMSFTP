@@ -2,10 +2,12 @@
 
 #include "domain/terminal/TerminalModel.hpp"
 #include "domain/terminal/VtPort.hpp"
+#include "foundation/tools/json.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -159,6 +161,15 @@ public:
         AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(handle_, viewport_offset));
   }
 
+  [[nodiscard]] std::optional<std::vector<AMT::ChannelVtRenderRun>>
+  RenderVisibleFrameRuns(uint64_t viewport_offset = 0) const override {
+    if (handle_ == nullptr) {
+      return std::nullopt;
+    }
+    return ParseRenderRunsJson_(TakeAmsVtString_(
+        AmsVtRenderVisibleFrameRunsJsonUtf8(handle_, viewport_offset)));
+  }
+
 private:
   [[nodiscard]] static std::string TakeAmsVtString_(char *rendered) {
     if (rendered == nullptr) {
@@ -167,6 +178,40 @@ private:
     std::string out(rendered);
     AmsVtFreeString(rendered);
     return out;
+  }
+
+  [[nodiscard]] static std::optional<std::vector<AMT::ChannelVtRenderRun>>
+  ParseRenderRunsJson_(const std::string &text) {
+    if (text.empty()) {
+      return std::nullopt;
+    }
+
+    try {
+      const AMJson::Json root = AMJson::Json::parse(text);
+      if (!root.is_array()) {
+        return std::nullopt;
+      }
+
+      std::vector<AMT::ChannelVtRenderRun> runs = {};
+      runs.reserve(root.size());
+      for (const auto &item : root) {
+        if (!item.is_object()) {
+          continue;
+        }
+        AMT::ChannelVtRenderRun run = {};
+        (void)AMJson::QueryKey(item, {"row"}, &run.row);
+        (void)AMJson::QueryKey(item, {"col"}, &run.col);
+        (void)AMJson::QueryKey(item, {"sgr"}, &run.sgr);
+        (void)AMJson::QueryKey(item, {"text"}, &run.text);
+        if (run.row < 0 || run.col < 0 || run.text.empty()) {
+          continue;
+        }
+        runs.push_back(std::move(run));
+      }
+      return runs;
+    } catch (...) {
+      return std::nullopt;
+    }
   }
 
   [[nodiscard]] static std::string StripAnsiControls_(std::string_view text) {

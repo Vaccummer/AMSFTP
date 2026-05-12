@@ -10,6 +10,7 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
+use serde::Serialize;
 
 #[repr(C)]
 pub struct AmsVtSnapshot {
@@ -134,6 +135,14 @@ struct CellStyle {
     flags: Flags,
 }
 
+#[derive(Serialize)]
+struct RenderRun {
+    row: i32,
+    col: i32,
+    sgr: String,
+    text: String,
+}
+
 impl Default for CellStyle {
     fn default() -> Self {
         Self {
@@ -230,6 +239,12 @@ fn push_sgr(out: &mut String, style: CellStyle) {
     out.push('m');
 }
 
+fn sgr_for_style(style: CellStyle) -> String {
+    let mut out = String::new();
+    push_sgr(&mut out, style);
+    out
+}
+
 fn line_render_width(vt: &AmsVtHandle, line: Line) -> usize {
     let row = &vt.term.grid()[line];
     let wrapline = row[Column(vt.cols - 1)].flags.contains(Flags::WRAPLINE);
@@ -308,6 +323,119 @@ fn render_line_ansi_with_width(vt: &AmsVtHandle, line: Line, width: usize) -> St
 
 fn render_line_ansi(vt: &AmsVtHandle, line: Line) -> String {
     render_line_ansi_with_width(vt, line, line_render_width(vt, line))
+}
+
+fn cell_render_char(cell: &Cell) -> char {
+    if cell.flags.contains(Flags::HIDDEN) || cell.c == '\t' || cell.c.is_control() {
+        ' '
+    } else {
+        cell.c
+    }
+}
+
+fn cell_needs_projection_boundary(cell: &Cell) -> bool {
+    cell.c as u32 > 0x7f || cell.zerowidth().is_some()
+}
+
+fn cell_has_renderable_content(cell: &Cell, style: CellStyle) -> bool {
+    !cell.is_empty() || style != CellStyle::default()
+}
+
+fn render_visible_frame_runs(vt: &AmsVtHandle, viewport_offset: u64) -> Vec<RenderRun> {
+    let rows = visible_frame_row_count_with_offset(vt, viewport_offset);
+    let mut runs = Vec::new();
+    for row_index in 0..rows {
+        let line = visible_viewport_line(vt, row_index, viewport_offset);
+        let width = visible_line_render_width(vt, line);
+        let row = &vt.term.grid()[line];
+        let mut current_style: Option<CellStyle> = None;
+        let mut current_col: usize = 0;
+        let mut current_text = String::new();
+
+        let flush_run = |runs: &mut Vec<RenderRun>,
+                         current_style: &mut Option<CellStyle>,
+                         current_text: &mut String,
+                         current_col: usize| {
+            if current_text.is_empty() {
+                return;
+            }
+            let style = (*current_style).unwrap_or_default();
+            runs.push(RenderRun {
+                row: row_index as i32,
+                col: current_col as i32,
+                sgr: sgr_for_style(style),
+                text: std::mem::take(current_text),
+            });
+        };
+
+        for column in 0..width {
+            let cell = &row[Column(column)];
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+
+            let style = CellStyle::from(cell);
+            let needs_boundary = cell_needs_projection_boundary(cell);
+            if !cell_has_renderable_content(cell, style) {
+                flush_run(
+                    &mut runs,
+                    &mut current_style,
+                    &mut current_text,
+                    current_col,
+                );
+                current_style = None;
+                continue;
+            }
+
+            if needs_boundary {
+                flush_run(
+                    &mut runs,
+                    &mut current_style,
+                    &mut current_text,
+                    current_col,
+                );
+                current_style = Some(style);
+                current_col = column;
+            } else if current_style != Some(style) {
+                flush_run(
+                    &mut runs,
+                    &mut current_style,
+                    &mut current_text,
+                    current_col,
+                );
+                current_style = Some(style);
+                current_col = column;
+            }
+
+            current_text.push(cell_render_char(cell));
+            if let Some(chars) = cell.zerowidth() {
+                for ch in chars {
+                    current_text.push(*ch);
+                }
+            }
+
+            if needs_boundary {
+                flush_run(
+                    &mut runs,
+                    &mut current_style,
+                    &mut current_text,
+                    current_col,
+                );
+                current_style = None;
+            }
+        }
+
+        flush_run(
+            &mut runs,
+            &mut current_style,
+            &mut current_text,
+            current_col,
+        );
+    }
+    runs
 }
 
 fn line_is_wrapped(vt: &AmsVtHandle, line: Line) -> bool {
@@ -559,6 +687,21 @@ pub extern "C" fn AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(
         }
     }
     into_c_string(out)
+}
+
+#[no_mangle]
+pub extern "C" fn AmsVtRenderVisibleFrameRunsJsonUtf8(
+    handle: *const AmsVtHandle,
+    viewport_offset: u64,
+) -> *mut c_char {
+    let Some(vt) = handle_ref(handle) else {
+        return ptr::null_mut();
+    };
+
+    match serde_json::to_string(&render_visible_frame_runs(vt, viewport_offset)) {
+        Ok(text) => into_c_string(text),
+        Err(_) => empty_c_string(),
+    }
 }
 
 #[no_mangle]

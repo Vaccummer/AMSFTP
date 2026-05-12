@@ -55,6 +55,8 @@ char *AmsVtRenderMainReplayAnsiUtf8(const AmsVtHandle *handle);
 char *AmsVtRenderVisibleFrameAnsiUtf8(const AmsVtHandle *handle);
 char *AmsVtRenderVisibleFrameWithOffsetAnsiUtf8(const AmsVtHandle *handle,
                                                 uint64_t viewport_offset);
+char *AmsVtRenderVisibleFrameRunsJsonUtf8(const AmsVtHandle *handle,
+                                          uint64_t viewport_offset);
 
 void AmsVtFreeString(char *text);
 
