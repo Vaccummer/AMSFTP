@@ -25,6 +25,7 @@ struct TerminalManagerArg {
   std::string init_cmd = "";
   int read_timeout_ms = -1;
   int send_timeout_ms = 0;
+  int rows_per_scroll = 3;
   ChannelCacheThresholdBytes channel_cache_threshold_bytes = {};
 };
 
@@ -38,6 +39,7 @@ inline void NormalizeTerminalManagerArg(TerminalManagerArg *arg) {
   if (arg->send_timeout_ms < -1) {
     arg->send_timeout_ms = 0;
   }
+  arg->rows_per_scroll = std::max(1, arg->rows_per_scroll);
   arg->channel_cache_threshold_bytes.warning =
       std::max<size_t>(1U, arg->channel_cache_threshold_bytes.warning);
   arg->channel_cache_threshold_bytes.terminate =

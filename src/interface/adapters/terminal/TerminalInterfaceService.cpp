@@ -75,6 +75,17 @@ struct TerminalBannerConfig_ {
   TerminalBannerAlign_ align = TerminalBannerAlign_::Left;
 };
 
+enum class MouseSequenceParseStatus_ { NoMatch = 0, Incomplete, Match };
+
+struct TerminalMouseEvent_ {
+  size_t sequence_length = 0U;
+  int button_code = 0;
+  bool release = false;
+  bool shift = false;
+  bool wheel_up = false;
+  bool wheel_down = false;
+};
+
 [[nodiscard]] AMDomain::terminal::ChannelOpenArgs
 BuildChannelOpenArgs_(const std::string &channel_name,
                       const AMTerminalTools::TerminalViewportInfo &geometry) {
@@ -350,6 +361,7 @@ void RestoreCliPromptStateAfterTerminalExit_() {
 [[nodiscard]] std::string BuildTerminalInputProtocolAnsi_(
     const AMDomain::terminal::ChannelVtSnapshot &vt_snapshot,
     bool local_input_active) {
+  (void)local_input_active;
   constexpr std::string_view kDisableMouseProtocols =
       "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1007l";
   std::string out(kDisableMouseProtocols);
@@ -357,7 +369,7 @@ void RestoreCliPromptStateAfterTerminalExit_() {
   out += "\x1b>";
 
   if (vt_snapshot.available) {
-    if (!local_input_active && vt_snapshot.mouse_reporting_active) {
+    if (vt_snapshot.mouse_reporting_active) {
       if (vt_snapshot.mouse_report_click) {
         out += "\x1b[?1000h";
       }
@@ -373,10 +385,8 @@ void RestoreCliPromptStateAfterTerminalExit_() {
       if (vt_snapshot.mouse_sgr_encoding) {
         out += "\x1b[?1006h";
       }
-    }
-    if (!local_input_active && vt_snapshot.in_alternate_screen &&
-        !vt_snapshot.mouse_reporting_active && vt_snapshot.alternate_scroll) {
-      out += "\x1b[?1007h";
+    } else {
+      out += "\x1b[?1000h\x1b[?1006h";
     }
     if (vt_snapshot.app_cursor_keys) {
       out += "\x1b[?1h";
@@ -386,6 +396,93 @@ void RestoreCliPromptStateAfterTerminalExit_() {
     }
   }
   return out;
+}
+
+[[nodiscard]] MouseSequenceParseStatus_
+ParseSgrMouseSequence_(std::string_view text, TerminalMouseEvent_ *out) {
+  if (text.size() < 3U || text[0] != '\x1b' || text[1] != '[' ||
+      text[2] != '<') {
+    return MouseSequenceParseStatus_::NoMatch;
+  }
+
+  size_t pos = 3U;
+  auto read_number = [&](int *value) -> MouseSequenceParseStatus_ {
+    if (value == nullptr) {
+      return MouseSequenceParseStatus_::NoMatch;
+    }
+    if (pos >= text.size()) {
+      return MouseSequenceParseStatus_::Incomplete;
+    }
+    if (std::isdigit(static_cast<unsigned char>(text[pos])) == 0) {
+      return MouseSequenceParseStatus_::NoMatch;
+    }
+    int parsed = 0;
+    const char *begin = text.data() + pos;
+    const char *end = text.data() + text.size();
+    const auto result = std::from_chars(begin, end, parsed);
+    if (result.ec == std::errc::invalid_argument) {
+      return MouseSequenceParseStatus_::NoMatch;
+    }
+    if (result.ec == std::errc::result_out_of_range) {
+      return MouseSequenceParseStatus_::NoMatch;
+    }
+    pos = static_cast<size_t>(result.ptr - text.data());
+    *value = parsed;
+    return MouseSequenceParseStatus_::Match;
+  };
+
+  int button_code = 0;
+  int column = 0;
+  int row = 0;
+  auto status = read_number(&button_code);
+  if (status != MouseSequenceParseStatus_::Match) {
+    return status;
+  }
+  if (pos >= text.size()) {
+    return MouseSequenceParseStatus_::Incomplete;
+  }
+  if (text[pos] != ';') {
+    return MouseSequenceParseStatus_::NoMatch;
+  }
+  ++pos;
+
+  status = read_number(&column);
+  if (status != MouseSequenceParseStatus_::Match) {
+    return status;
+  }
+  if (pos >= text.size()) {
+    return MouseSequenceParseStatus_::Incomplete;
+  }
+  if (text[pos] != ';') {
+    return MouseSequenceParseStatus_::NoMatch;
+  }
+  ++pos;
+
+  status = read_number(&row);
+  if (status != MouseSequenceParseStatus_::Match) {
+    return status;
+  }
+  if (pos >= text.size()) {
+    return MouseSequenceParseStatus_::Incomplete;
+  }
+
+  const char final = text[pos];
+  if (final != 'M' && final != 'm') {
+    return MouseSequenceParseStatus_::NoMatch;
+  }
+  if (out != nullptr) {
+    out->sequence_length = pos + 1U;
+    out->button_code = button_code;
+    out->release = final == 'm';
+    out->shift = (button_code & 4) != 0;
+    const bool wheel = (button_code & 64) != 0;
+    const int wheel_button = button_code & 3;
+    out->wheel_up = wheel && final == 'M' && wheel_button == 0;
+    out->wheel_down = wheel && final == 'M' && wheel_button == 1;
+  }
+  (void)column;
+  (void)row;
+  return MouseSequenceParseStatus_::Match;
 }
 
 class ScopedPromptOutputCache_ final : NonCopyableNonMovable {
@@ -1868,8 +1965,10 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const TerminalLaunchArg &arg,
     const std::optional<ControlComponent> &control_opt) const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  const int send_timeout_ms = terminal_service_.GetInitArg().send_timeout_ms;
+  const auto terminal_manager_arg = terminal_service_.GetInitArg();
+  const int send_timeout_ms = terminal_manager_arg.send_timeout_ms;
   const int write_kick_timeout_ms = (send_timeout_ms < 0) ? 0 : send_timeout_ms;
+  const int rows_per_scroll = terminal_manager_arg.rows_per_scroll;
   std::string default_nickname = filesystem_service_.CurrentNickname();
   if (default_nickname.empty()) {
     default_nickname = AMDomain::host::klocalname;
@@ -2459,8 +2558,52 @@ ECM TerminalInterfaceService::LaunchTerminal(
       }
       (void)channel_port->RequestForegroundDetach();
     };
+    auto append_alternate_scroll_key = [&](bool up) {
+      const auto vt_snapshot = load_vt_snapshot();
+      const std::string_view seq =
+          up ? (vt_snapshot.app_cursor_keys ? "\x1bOA" : "\x1b[A")
+             : (vt_snapshot.app_cursor_keys ? "\x1bOB" : "\x1b[B");
+      for (int i = 0; i < rows_per_scroll; ++i) {
+        passthrough.append(seq.data(), seq.size());
+      }
+    };
 
     while (!pending_local_input.empty()) {
+      TerminalMouseEvent_ mouse_event = {};
+      const MouseSequenceParseStatus_ mouse_status =
+          ParseSgrMouseSequence_(pending_local_input, &mouse_event);
+      if (mouse_status == MouseSequenceParseStatus_::Incomplete) {
+        break;
+      }
+      if (mouse_status == MouseSequenceParseStatus_::Match) {
+        const auto vt_snapshot = load_vt_snapshot();
+        if (vt_snapshot.available && vt_snapshot.mouse_reporting_active) {
+          passthrough_escape_sequence(passthrough,
+                                      mouse_event.sequence_length);
+          continue;
+        }
+
+        pending_local_input.erase(0, mouse_event.sequence_length);
+        if (mouse_event.shift) {
+          continue;
+        }
+        if (mouse_event.wheel_up || mouse_event.wheel_down) {
+          if (vt_snapshot.available && vt_snapshot.in_alternate_screen &&
+              vt_snapshot.alternate_scroll) {
+            append_alternate_scroll_key(mouse_event.wheel_up);
+            continue;
+          }
+          const uint64_t scroll_step =
+              static_cast<uint64_t>(rows_per_scroll);
+          if (mouse_event.wheel_up) {
+            scroll_history_up(scroll_step);
+          } else {
+            scroll_history_down(scroll_step);
+          }
+        }
+        continue;
+      }
+
       if (control_layer_active.load(std::memory_order_acquire)) {
         size_t seq_len = 0U;
         if (pending_local_input.front() == '\x1d') {

@@ -629,6 +629,8 @@ public:
                            &typed->read_timeout_ms);
     (void)AMJson::QueryKey(options, {"TerminalManager", "send_timeout_ms"},
                            &typed->send_timeout_ms);
+    (void)AMJson::QueryKey(options, {"TerminalManager", "rows_per_scroll"},
+                           &typed->rows_per_scroll);
     (void)AMJson::QueryKey(
         options, {"TerminalManager", "channel_cache_threshold_bytes", "warning"},
         &typed->channel_cache_threshold_bytes.warning);
@@ -660,6 +662,8 @@ public:
         typed.read_timeout_ms;
     (*root)["Options"]["TerminalManager"]["send_timeout_ms"] =
         typed.send_timeout_ms;
+    (*root)["Options"]["TerminalManager"]["rows_per_scroll"] =
+        typed.rows_per_scroll;
     (*root)["Options"]["TerminalManager"]["channel_cache_threshold_bytes"]
            ["warning"] = typed.channel_cache_threshold_bytes.warning;
     (*root)["Options"]["TerminalManager"]["channel_cache_threshold_bytes"]

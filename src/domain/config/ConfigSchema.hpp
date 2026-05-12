@@ -179,6 +179,10 @@ inline constexpr const char *kSettingsTomlSchemaJson = R"json(
                 }
               ]
             },
+            "rows_per_scroll": {
+              "type": "integer",
+              "minimum": 1
+            },
             "channel_cache_threshold_bytes": {
               "type": "object",
               "properties": {
