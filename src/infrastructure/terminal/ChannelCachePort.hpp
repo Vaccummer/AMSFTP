@@ -1,5 +1,4 @@
 #pragma once
-
 #include "domain/terminal/ChannelPort.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/terminal/vt/AmsVtPort.hpp"

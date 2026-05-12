@@ -876,6 +876,14 @@ private:
   }
 
 private:
+  void SignalStop_() {
+#ifdef _WIN32
+    (void)SetEvent(loop_events_.stop_event);
+#else
+    SignalPipe_(loop_events_.stop_pipe[1]);
+#endif
+  }
+
 #ifdef _WIN32
   bool EnsureLoopEvents_() {
     if (loop_events_.state_event == nullptr) {
@@ -1081,48 +1089,6 @@ private:
     NotifyState_();
   }
 
-  void DrainRemote_() {
-    for (int i = 0; i < 32; ++i) {
-      auto r = ReadWrapped({32U * 1024U}, {});
-      if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
-        if (r.data.hard_limit_hit) {
-          (void)RawClose_(true, 1500, {});
-        }
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!(r.rcm)) {
-          foreground_.last_error = r.rcm;
-        } else if (!(r.data.last_error)) {
-          foreground_.last_error = r.data.last_error;
-        }
-        if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
-          foreground_.closed = true;
-          stop_requested_.store(true, std::memory_order_release);
-          (void)SetEvent(loop_events_.stop_event);
-          NotifyState_();
-        }
-        return;
-      }
-      if (QueueTerminalResponse_(r.data.terminal_response)) {
-        FlushSend_();
-      }
-      if (r.data.output.empty()) {
-        return;
-      }
-    }
-  }
-
-  [[nodiscard]] bool QueueTerminalResponse_(std::string_view response) {
-    if (response.empty()) {
-      return false;
-    }
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!foreground_.foreground_bound || foreground_.closed) {
-      return false;
-    }
-    foreground_.send_buffer.append(response.data(), response.size());
-    return true;
-  }
-
   void FlushSend_() {
     for (int i = 0; i < 16 && !foreground_.send_buffer.empty(); ++i) {
       size_t const n =
@@ -1137,7 +1103,7 @@ private:
             w.rcm.code == EC::ClientNotFound) {
           foreground_.closed = true;
           stop_requested_.store(true, std::memory_order_release);
-          (void)SetEvent(loop_events_.stop_event);
+          SignalStop_();
           NotifyState_();
         }
         return;
@@ -1424,48 +1390,6 @@ private:
     NotifyState_();
   }
 
-  void DrainRemote_() {
-    for (int i = 0; i < 32; ++i) {
-      auto r = ReadWrapped({32U * 1024U}, {});
-      if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
-        if (r.data.hard_limit_hit) {
-          (void)RawClose_(true, 1500, {});
-        }
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!(r.rcm)) {
-          foreground_.last_error = r.rcm;
-        } else if (!(r.data.last_error)) {
-          foreground_.last_error = r.data.last_error;
-        }
-        if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
-          foreground_.closed = true;
-          stop_requested_.store(true, std::memory_order_release);
-          SignalPipe_(loop_events_.stop_pipe[1]);
-          NotifyState_();
-        }
-        return;
-      }
-      if (QueueTerminalResponse_(r.data.terminal_response)) {
-        FlushSend_();
-      }
-      if (r.data.output.empty()) {
-        return;
-      }
-    }
-  }
-
-  [[nodiscard]] bool QueueTerminalResponse_(std::string_view response) {
-    if (response.empty()) {
-      return false;
-    }
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!foreground_.foreground_bound || foreground_.closed) {
-      return false;
-    }
-    foreground_.send_buffer.append(response.data(), response.size());
-    return true;
-  }
-
   void FlushSend_() {
     for (int i = 0; i < 16; ++i) {
       std::string chunk = {};
@@ -1488,7 +1412,7 @@ private:
             w.rcm.code == EC::ClientNotFound) {
           foreground_.closed = true;
           stop_requested_.store(true, std::memory_order_release);
-          SignalPipe_(loop_events_.stop_pipe[1]);
+          SignalStop_();
           NotifyState_();
         }
         return;
@@ -1607,6 +1531,48 @@ private:
     FlushSend_();
   }
 #endif
+
+  void DrainRemote_() {
+    for (int i = 0; i < 32; ++i) {
+      auto r = ReadWrapped({32U * 1024U}, {});
+      if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
+        if (r.data.hard_limit_hit) {
+          (void)RawClose_(true, 1500, {});
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!(r.rcm)) {
+          foreground_.last_error = r.rcm;
+        } else if (!(r.data.last_error)) {
+          foreground_.last_error = r.data.last_error;
+        }
+        if (!(r.rcm) || r.data.eof || r.data.hard_limit_hit) {
+          foreground_.closed = true;
+          stop_requested_.store(true, std::memory_order_release);
+          SignalStop_();
+          NotifyState_();
+        }
+        return;
+      }
+      if (QueueTerminalResponse_(r.data.terminal_response)) {
+        FlushSend_();
+      }
+      if (r.data.output.empty()) {
+        return;
+      }
+    }
+  }
+
+  [[nodiscard]] bool QueueTerminalResponse_(std::string_view response) {
+    if (response.empty()) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!foreground_.foreground_bound || foreground_.closed) {
+      return false;
+    }
+    foreground_.send_buffer.append(response.data(), response.size());
+    return true;
+  }
 
   detail::ChannelBinding_ binding_ = {};
   detail::ChannelIdentity_ identity_ = {};

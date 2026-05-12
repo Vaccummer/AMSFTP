@@ -86,7 +86,6 @@ public:
   }
 
   void Reset() {
-
     if (handle_ != nullptr) {
       AmsVtFree(handle_);
       handle_ = nullptr;
@@ -101,7 +100,6 @@ public:
 
   [[nodiscard]] AMT::ChannelVtSnapshot Snapshot() const override {
     AMT::ChannelVtSnapshot out = {};
-
     if (handle_ == nullptr) {
       return out;
     }
@@ -134,7 +132,6 @@ public:
   }
 
   [[nodiscard]] std::string RenderMainReplayAnsi() const override {
-
     if (handle_ == nullptr) {
       return {};
     }
@@ -146,7 +143,6 @@ public:
   }
 
   [[nodiscard]] std::string RenderPlainTextHistory() const override {
-
     if (handle_ == nullptr) {
       return {};
     }
@@ -160,7 +156,6 @@ public:
 
   [[nodiscard]] std::string
   RenderVisibleFrameAnsi(uint64_t viewport_offset = 0) const override {
-
     if (handle_ == nullptr) {
       return {};
     }
