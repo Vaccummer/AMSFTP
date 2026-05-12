@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <thread>
 
 #ifdef _WIN32
@@ -1101,10 +1102,25 @@ private:
         }
         return;
       }
+      if (QueueTerminalResponse_(r.data.terminal_response)) {
+        FlushSend_();
+      }
       if (r.data.output.empty()) {
         return;
       }
     }
+  }
+
+  [[nodiscard]] bool QueueTerminalResponse_(std::string_view response) {
+    if (response.empty()) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!foreground_.foreground_bound || foreground_.closed) {
+      return false;
+    }
+    foreground_.send_buffer.append(response.data(), response.size());
+    return true;
   }
 
   void FlushSend_() {
@@ -1429,10 +1445,25 @@ private:
         }
         return;
       }
+      if (QueueTerminalResponse_(r.data.terminal_response)) {
+        FlushSend_();
+      }
       if (r.data.output.empty()) {
         return;
       }
     }
+  }
+
+  [[nodiscard]] bool QueueTerminalResponse_(std::string_view response) {
+    if (response.empty()) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!foreground_.foreground_bound || foreground_.closed) {
+      return false;
+    }
+    foreground_.send_buffer.append(response.data(), response.size());
+    return true;
   }
 
   void FlushSend_() {

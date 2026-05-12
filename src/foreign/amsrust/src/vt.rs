@@ -3,8 +3,9 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
+use std::sync::{Arc, Mutex};
 
-use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, GridCell};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -56,15 +57,42 @@ impl Dimensions for AmsVtSize {
     }
 }
 
-struct AmsVtEvents;
+#[derive(Clone)]
+struct AmsVtEvents {
+    pending_pty_write: Arc<Mutex<String>>,
+    size: Arc<Mutex<AmsVtSize>>,
+}
 
 impl EventListener for AmsVtEvents {
-    fn send_event(&self, _event: Event) {}
+    fn send_event(&self, event: Event) {
+        let text = match event {
+            Event::PtyWrite(text) => text,
+            Event::TextAreaSizeRequest(formatter) => {
+                let size = self
+                    .size
+                    .lock()
+                    .map(|guard| *guard)
+                    .unwrap_or(AmsVtSize { rows: 24, cols: 80 });
+                formatter(WindowSize {
+                    num_lines: min(size.rows, u16::MAX as usize) as u16,
+                    num_cols: min(size.cols, u16::MAX as usize) as u16,
+                    cell_width: 8,
+                    cell_height: 16,
+                })
+            }
+            _ => return,
+        };
+        if let Ok(mut pending) = self.pending_pty_write.lock() {
+            pending.push_str(&text);
+        }
+    }
 }
 
 pub struct AmsVtHandle {
     term: Term<AmsVtEvents>,
     processor: Processor,
+    pending_pty_write: Arc<Mutex<String>>,
+    size: Arc<Mutex<AmsVtSize>>,
     rows: usize,
     cols: usize,
     damage_serial: u64,
@@ -498,11 +526,22 @@ fn visible_frame_row_count_with_offset(vt: &AmsVtHandle, viewport_offset: u64) -
 pub extern "C" fn AmsVtCreate(rows: i32, cols: i32, scrollback_limit: u64) -> *mut AmsVtHandle {
     let size = normalized_size(rows, cols);
     let config = make_config(scrollback_limit);
-    let term = Term::new(config, &size, AmsVtEvents);
+    let pending_pty_write = Arc::new(Mutex::new(String::new()));
+    let shared_size = Arc::new(Mutex::new(size));
+    let term = Term::new(
+        config,
+        &size,
+        AmsVtEvents {
+            pending_pty_write: Arc::clone(&pending_pty_write),
+            size: Arc::clone(&shared_size),
+        },
+    );
 
     Box::into_raw(Box::new(AmsVtHandle {
         term,
         processor: Processor::new(),
+        pending_pty_write,
+        size: shared_size,
         rows: size.rows,
         cols: size.cols,
         damage_serial: 0,
@@ -526,6 +565,9 @@ pub extern "C" fn AmsVtResize(handle: *mut AmsVtHandle, rows: i32, cols: i32) {
     vt.term.resize(size);
     vt.rows = size.rows;
     vt.cols = size.cols;
+    if let Ok(mut shared_size) = vt.size.lock() {
+        *shared_size = size;
+    }
     vt.damage_serial = vt.damage_serial.wrapping_add(1);
 }
 
@@ -541,6 +583,17 @@ pub extern "C" fn AmsVtFeed(handle: *mut AmsVtHandle, data: *const u8, len: usiz
     let bytes = unsafe { slice::from_raw_parts(data, len) };
     vt.processor.advance(&mut vt.term, bytes);
     vt.damage_serial = vt.damage_serial.wrapping_add(1);
+}
+
+#[no_mangle]
+pub extern "C" fn AmsVtTakePendingPtyWriteUtf8(handle: *mut AmsVtHandle) -> *mut c_char {
+    let Some(vt) = handle_mut(handle) else {
+        return ptr::null_mut();
+    };
+    match vt.pending_pty_write.lock() {
+        Ok(mut pending) => into_c_string(std::mem::take(&mut *pending)),
+        Err(_) => empty_c_string(),
+    }
 }
 
 #[no_mangle]

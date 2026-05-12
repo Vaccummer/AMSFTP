@@ -62,6 +62,7 @@ public:
   virtual void Feed(std::string_view bytes) = 0;
   virtual void Resize(int cols, int rows) = 0;
   virtual void Clear() = 0;
+  [[nodiscard]] virtual std::string TakePendingPtyWrite() = 0;
 
   [[nodiscard]] virtual ChannelVtSnapshot Snapshot() const = 0;
   [[nodiscard]] virtual std::string RenderMainReplayAnsi() const = 0;

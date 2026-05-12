@@ -55,6 +55,7 @@ struct ChannelCacheReplayResult {
 
 struct ChannelReadWrappedResult {
   std::string output = {};
+  std::string terminal_response = {};
   std::string channel_name = {};
   bool eof = false;
   bool in_alternate_screen = false;

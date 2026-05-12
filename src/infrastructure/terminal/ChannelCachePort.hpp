@@ -378,6 +378,7 @@ public:
       if (!read_result.data.output.empty()) {
         state_.latest_output = read_result.data.output;
         FeedRawOutputToVtUnlocked_(read_result.data.output);
+        out.data.terminal_response = TakePendingVtPtyWriteUnlocked_();
         auto parsed = ParseScreenChunk_(state_.cache.in_alternate_screen,
                                         state_.pending_escape_tail,
                                         read_result.data.output);
@@ -679,6 +680,10 @@ private:
     state_.vt.Feed(output);
   }
 
+  [[nodiscard]] std::string TakePendingVtPtyWriteUnlocked_() {
+    return state_.vt.TakePendingPtyWrite();
+  }
+
   void RebuildVtFromCacheUnlocked_() {
     ResetVtUnlocked_();
 
@@ -697,6 +702,7 @@ private:
     if (current_screen != final_screen) {
       state_.vt.FeedScreenToggle(final_screen == AMT::ScreenKind::Alternate);
     }
+    (void)TakePendingVtPtyWriteUnlocked_();
   }
 
   [[nodiscard]] std::optional<std::string>

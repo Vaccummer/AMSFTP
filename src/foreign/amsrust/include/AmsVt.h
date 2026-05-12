@@ -38,6 +38,7 @@ void AmsVtFree(AmsVtHandle *handle);
 
 void AmsVtResize(AmsVtHandle *handle, int32_t rows, int32_t cols);
 void AmsVtFeed(AmsVtHandle *handle, const uint8_t *data, size_t len);
+char *AmsVtTakePendingPtyWriteUtf8(AmsVtHandle *handle);
 
 AmsVtSnapshot AmsVtGetSnapshot(const AmsVtHandle *handle);
 

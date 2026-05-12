@@ -78,6 +78,13 @@ public:
     Ensure(cols_, rows_);
   }
 
+  [[nodiscard]] std::string TakePendingPtyWrite() override {
+    if (handle_ == nullptr) {
+      return {};
+    }
+    return TakeAmsVtString_(AmsVtTakePendingPtyWriteUtf8(handle_));
+  }
+
   void Reset() {
 
     if (handle_ != nullptr) {

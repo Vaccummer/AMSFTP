@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -825,6 +826,18 @@ private:
     return true;
   }
 
+  [[nodiscard]] bool QueueTerminalResponse_(std::string_view response) {
+    if (response.empty()) {
+      return false;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!foreground_.foreground_bound || foreground_.closed) {
+      return false;
+    }
+    foreground_.send_buffer.append(response.data(), response.size());
+    return true;
+  }
+
   void RunLoop_() {
     {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -867,6 +880,10 @@ private:
 
         if (!read_result.data.output.empty()) {
           progressed = true;
+        }
+        if (QueueTerminalResponse_(read_result.data.terminal_response)) {
+          progressed = true;
+          (void)FlushSend_();
         }
 
         if (!(read_result.data.last_error)) {
