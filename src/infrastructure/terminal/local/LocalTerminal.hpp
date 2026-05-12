@@ -123,6 +123,14 @@ public:
     return GetRequestSnapshot_();
   }
 
+  [[nodiscard]] AMDomain::client::OS_TYPE GetOSType() const override {
+    const auto binding = GetBindingSnapshot_();
+    if (!binding.owner_client) {
+      return AMDomain::client::OS_TYPE::Unknown;
+    }
+    return binding.owner_client->ConfigPort().GetOSType();
+  }
+
   ECMData<AMT::ChannelOpenResult>
   OpenChannel(const AMT::ChannelOpenArgs &open_args,
               const ControlComponent &control = {}) override {

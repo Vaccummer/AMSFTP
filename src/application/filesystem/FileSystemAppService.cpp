@@ -648,7 +648,9 @@ FileSystemAppService::ResolveTrashDir(const PathTarget &source,
     return {PathTarget{},
             Err(EC::CommonFailure, "filesystem", "", "Client metadata not found")};
   }
-  trash_dir = AMStr::Strip(metadata->trash_dir);
+  ClientMetaData resolved_metadata = *metadata;
+  trash_dir = AMStr::Strip(resolved_metadata.trash_dir);
+  const bool uses_default_trash_dir = trash_dir.empty();
   if (trash_dir.empty()) {
     trash_dir = "~/.AMSFTP_Trash";
   }
@@ -657,6 +659,15 @@ FileSystemAppService::ResolveTrashDir(const PathTarget &source,
       ResolveAbsolutePath(source_resolved.data.client, trash_dir, control);
   if (!(abs_rcm.rcm)) {
     return {PathTarget{}, abs_rcm.rcm};
+  }
+
+  if (uses_default_trash_dir) {
+    resolved_metadata.trash_dir = abs_rcm.data;
+    const ECM metadata_rcm = ClientAppService::SetClientMetadata(
+        source_resolved.data.client, resolved_metadata);
+    if (!(metadata_rcm)) {
+      return {PathTarget{}, metadata_rcm};
+    }
   }
 
   PathTarget out = {};
@@ -1438,6 +1449,8 @@ FileSystemAppService::Saferm(std::vector<PathTarget> targets,
           bucket_dir.path = AMPath::join(trash_dir.path, bucket);
           prepare_rcm = Mkdirs(bucket_dir, control);
           if ((prepare_rcm)) {
+            ClearBaseIOCacheByPath(bucket_dir.nickname, trash_dir.path);
+            ClearBaseIOCacheByPath(bucket_dir.nickname, bucket_dir.path);
             bucket_dir_map[nickname] = bucket_dir;
           }
         }

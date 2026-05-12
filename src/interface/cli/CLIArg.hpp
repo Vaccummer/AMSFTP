@@ -49,6 +49,7 @@ struct CliFilesystemArgs {
   RmArgs rm = {};
   TreeArgs tree = {};
   RealpathArgs realpath = {};
+  LaunchArgs launch = {};
   RttArgs rtt = {};
   ClearArgs clear = {};
   CpArgs cp = {};
@@ -72,6 +73,14 @@ struct CliTermArgs {
   TermListArgs ls = {};
   TermRemoveArgs rm = {};
   TermClearArgs clear = {};
+};
+
+struct CliTrashArgs {
+  TrashPathArgs path = {};
+  TrashLsArgs ls = {};
+  TrashStatArgs stat = {};
+  TrashRemoveArgs rm = {};
+  TrashFetchArgs fetch = {};
 };
 
 struct CliClientArgs {
@@ -117,6 +126,7 @@ struct CliArgsPool {
   CliProfileArgs profile = {};
   CliFilesystemArgs fs = {};
   CliTermArgs term = {};
+  CliTrashArgs trash = {};
   CliClientArgs client = {};
   CliPoolArgs pool = {};
   CliVarArgs var = {};

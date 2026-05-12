@@ -274,6 +274,83 @@ struct RealpathArgs : BaseArgStruct {
   void reset() override { path.clear(); }
 };
 
+struct LaunchArgs : BaseArgStruct {
+  std::string path = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    AMInterface::filesystem::FilesystemLaunchArg arg = {};
+    arg.raw_path = path;
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_path);
+    return managers.interfaces.filesystem_interface_service->Launch(arg);
+  }
+  void reset() override { path.clear(); }
+};
+
+struct TrashPathArgs : BaseArgStruct {
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    AMInterface::filesystem::FilesystemTrashPathArg arg = {};
+    return managers.interfaces.filesystem_interface_service->TrashPath(arg);
+  }
+  void reset() override {}
+};
+
+struct TrashLsArgs : BaseArgStruct {
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    AMInterface::filesystem::FilesystemTrashLsArg arg = {};
+    return managers.interfaces.filesystem_interface_service->TrashLs(arg);
+  }
+  void reset() override {}
+};
+
+struct TrashStatArgs : BaseArgStruct {
+  size_t index = 0;
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    AMInterface::filesystem::FilesystemTrashStatArg arg = {};
+    arg.index = index;
+    return managers.interfaces.filesystem_interface_service->TrashStat(arg);
+  }
+  void reset() override { index = 0; }
+};
+
+struct TrashRemoveArgs : BaseArgStruct {
+  std::vector<size_t> indices = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    AMInterface::filesystem::FilesystemTrashRemoveArg arg = {};
+    arg.indices = indices;
+    return managers.interfaces.filesystem_interface_service->TrashRemove(arg);
+  }
+  void reset() override { indices.clear(); }
+};
+
+struct TrashFetchArgs : BaseArgStruct {
+  std::vector<size_t> indices = {};
+  std::string output = {};
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override {
+    (void)ctx;
+    AMInterface::filesystem::FilesystemTrashFetchArg arg = {};
+    arg.indices = indices;
+    arg.raw_output = output;
+    managers.interfaces.var_interface_service->VSubstitutePathLike(
+        arg.raw_output);
+    return managers.interfaces.filesystem_interface_service->TrashFetch(arg);
+  }
+  void reset() override {
+    indices.clear();
+    output.clear();
+  }
+};
+
 struct RttArgs : BaseArgStruct {
   AMInterface::filesystem::FilesystemTestRTTArg request = {};
   [[nodiscard]] ECM Run(const CLIServices &managers,

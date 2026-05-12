@@ -1,10 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
 project(AMSFTP LANGUAGES C CXX)
 
+# Compile args set
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(AMSFTP_LINK_MODE "static" CACHE STRING "Link mode: static or dynamic")
 set_property(CACHE AMSFTP_LINK_MODE PROPERTY STRINGS static dynamic)
+
+set(AMSFTP_PROGRAM_NAME "AMSFTP")
+set(AMSFTP_PROGRAM_VERSION "1.0.0")
+set(AMSFTP_RAW_DESCRIPTION "this program is a CLI program for multi-host SFTP/FTP/HTTP file management and SSH sessions.")
+set(AMSFTP_PASSWORD_KEY "AMSFTP_Static_Key_Change_Me_2026")
+set(AMSFTP_RUST_DIR "${PROJECT_SOURCE_DIR}/src/foreign/amsrust")
+# Compile args set
 
 if(MSVC AND AMSFTP_LINK_MODE STREQUAL "static" AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -69,11 +78,8 @@ endif()
 
 set(AMSFTP_BUILD_LINKAGE "${AMSFTP_LINK_MODE}")
 
-set(AMSFTP_PROGRAM_NAME "AMSFTP")
-set(AMSFTP_PROGRAM_VERSION "1.0.0")
-
 set(AMSFTP_APP_DESCRIPTION_TEXT
-    "${AMSFTP_PROGRAM_NAME}\\nthis program is a CLI program for multi-host SFTP/FTP/HTTP file management and SSH sessions.")
+    "${AMSFTP_PROGRAM_NAME}\\n${AMSFTP_RAW_DESCRIPTION}")
 set(AMSFTP_APP_VERSION_TEXT
     "${AMSFTP_PROGRAM_NAME} ${AMSFTP_PROGRAM_VERSION}\\ncompiler: ${AMSFTP_BUILD_COMPILER} ${CMAKE_CXX_COMPILER_VERSION}\\ntarget: ${AMSFTP_BUILD_OS}/${AMSFTP_BUILD_ARCH}\\nlinkage: ${AMSFTP_BUILD_LINKAGE}")
 
@@ -245,7 +251,7 @@ else()
   target_link_libraries(amsftp PRIVATE PkgConfig::LIBSSH2)
 endif()
 target_compile_definitions(amsftp PRIVATE
-  AMSFTP_PASSWORD_KEY="AMSFTP_Static_Key_Change_Me_2026"
+  AMSFTP_PASSWORD_KEY="${AMSFTP_PASSWORD_KEY}"
   AMSFTP_APP_DESCRIPTION="${AMSFTP_APP_DESCRIPTION_TEXT}"
   AMSFTP_APP_VERSION="${AMSFTP_APP_VERSION_TEXT}"
 )
@@ -300,7 +306,6 @@ if(WIN32)
 endif()
 
 # -- Rust FFI -----------------------------------------------------------------
-set(AMSFTP_RUST_DIR "${PROJECT_SOURCE_DIR}/src/foreign/amsrust")
 find_program(CARGO_EXECUTABLE cargo)
 if(NOT CARGO_EXECUTABLE)
   message(FATAL_ERROR "cargo executable not found; Rust FFI crate is required.")

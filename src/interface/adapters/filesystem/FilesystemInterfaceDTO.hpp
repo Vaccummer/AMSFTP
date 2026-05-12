@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,27 @@ struct FilesystemFindArg {
 
 struct FilesystemRealpathArg {
   std::string raw_path = {};
+};
+
+struct FilesystemLaunchArg {
+  std::string raw_path = {};
+};
+
+struct FilesystemTrashPathArg {};
+
+struct FilesystemTrashLsArg {};
+
+struct FilesystemTrashStatArg {
+  size_t index = 0;
+};
+
+struct FilesystemTrashRemoveArg {
+  std::vector<size_t> indices = {};
+};
+
+struct FilesystemTrashFetchArg {
+  std::vector<size_t> indices = {};
+  std::string raw_output = {};
 };
 
 struct FilesystemTreeArg {

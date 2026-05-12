@@ -548,6 +548,46 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args) {
                       node.AddPositionalRule(0, Sem::Path, false);
                     });
 
+  root->AddFunction("launch", "Open a local path with the default program",
+                    args, &CliArgsPool::fs, &CliFilesystemArgs::launch,
+                    [&args](CommandNode &node) {
+                      node.AddOption("path", args.fs.launch.path, 1, 1,
+                                     "Local path to open", true);
+                      node.AddPositionalRule(0, Sem::Path, false);
+                    });
+
+  CommandNode *trash_module_node = root->AddFunction("trash", "Trash manager");
+  if (trash_module_node) {
+    trash_module_node->AddFunction("path", "Print trash directory path", args,
+                                   &CliArgsPool::trash, &CliTrashArgs::path);
+    trash_module_node->AddFunction("ls", "List deleted trash entries", args,
+                                   &CliArgsPool::trash, &CliTrashArgs::ls);
+    trash_module_node->AddFunction(
+        "stat", "Print one trash item stat", args, &CliArgsPool::trash,
+        &CliTrashArgs::stat, [&args](CommandNode &node) {
+          node.AddOption("index", args.trash.stat.index, 1, 1,
+                         "Trash item index", true);
+          node.AddPositionalRule(0, Sem::None, false);
+        });
+    trash_module_node->AddFunction(
+        "rm", "Permanently remove trash items", args, &CliArgsPool::trash,
+        &CliTrashArgs::rm, [&args](CommandNode &node) {
+          node.AddOption("indices", args.trash.rm.indices, 1,
+                         static_cast<size_t>(-1), "Trash item indices", true);
+          node.AddPositionalRule(0, Sem::None, true);
+        });
+    trash_module_node->AddFunction(
+        "fetch", "Fetch trash items to current client", args,
+        &CliArgsPool::trash, &CliTrashArgs::fetch,
+        [&args](CommandNode &node) {
+          node.AddOption("indices", args.trash.fetch.indices, 1,
+                         static_cast<size_t>(-1), "Trash item indices", true);
+          node.AddOption("-o", "--output", args.trash.fetch.output, 1, 1,
+                         Sem::Path, "Destination directory path");
+          node.AddPositionalRule(0, Sem::None, true);
+        });
+  }
+
   root->AddFunction("rtt", "Measure current client RTT", args, &CliArgsPool::fs,
                     &CliFilesystemArgs::rtt, [&args](CommandNode &node) {
                       node.AddOption("times", args.fs.rtt.request.times, 0, 1,

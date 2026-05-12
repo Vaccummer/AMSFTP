@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <iomanip>
 #include <sstream>
@@ -17,14 +18,20 @@
 #include <unordered_set>
 
 #ifdef _WIN32
+#include <shellapi.h>
 #include <windows.h>
+
 #else
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <spawn.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+
+extern char **environ;
 #endif
 
 namespace AMInterface::filesystem {
@@ -95,10 +102,251 @@ bool IsAlreadyExistsError_(ErrorCode ec) {
          ec == ErrorCode::TargetAlreadyExists;
 }
 
+ECM OpenPathWithDefaultProgram_(const std::filesystem::path &path) {
+#ifdef _WIN32
+  const auto rc = reinterpret_cast<intptr_t>(
+      ShellExecuteW(nullptr, L"open", path.wstring().c_str(), nullptr, nullptr,
+                    SW_SHOWNORMAL));
+  if (rc <= 32) {
+    return Err(EC::CommonFailure, "launch", path.string(),
+               AMStr::fmt("ShellExecuteW failed: {}", rc));
+  }
+  return OK;
+#else
+#ifdef __APPLE__
+  const char *launcher = "open";
+#else
+  const char *launcher = "xdg-open";
+#endif
+  const std::string path_text = path.string();
+  char *const argv[] = {const_cast<char *>(launcher),
+                        const_cast<char *>(path_text.c_str()), nullptr};
+  pid_t pid = 0;
+  const int spawn_rc =
+      posix_spawnp(&pid, launcher, nullptr, nullptr, argv, environ);
+  if (spawn_rc != 0) {
+    return Err(EC::CommonFailure, "launch", path_text,
+               AMStr::fmt("{} failed: {}", launcher, std::strerror(spawn_rc)));
+  }
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0) {
+    return Err(EC::CommonFailure, "launch", path_text,
+               AMStr::fmt("waitpid failed: {}", std::strerror(errno)));
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    return Err(EC::CommonFailure, "launch", path_text,
+               AMStr::fmt("{} exited with status {}", launcher, status));
+  }
+  return OK;
+#endif
+}
+
 struct TreeNode_ {
   std::vector<PathInfo> dirs = {};
   std::vector<PathInfo> files = {};
 };
+
+struct TrashDisplayEntry_ {
+  size_t index = 0;
+  std::string bucket_sort_key = {};
+  std::string timestamp = {};
+  PathTarget target = {};
+  PathInfo entry = {};
+};
+
+bool ParseTrashBucketTimestamp_(const std::string &name,
+                                std::string *out_timestamp) {
+  if (!out_timestamp) {
+    return false;
+  }
+
+  int year = 0;
+  int month = 0;
+  int day = 0;
+  int hour = 0;
+  int minute = 0;
+  int second = 0;
+  char tail = '\0';
+  const int matched_with_seconds =
+      sscanf_s(name.c_str(), "%d-%d-%d-%d-%d-%d%c", &year, &month, &day, &hour,
+               &minute, &second, &tail);
+  if (matched_with_seconds != 6) {
+    const int matched_without_seconds =
+        sscanf_s(name.c_str(), "%d-%d-%d-%d-%d%c", &year, &month, &day, &hour,
+                 &minute, &tail);
+    if (matched_without_seconds != 5) {
+      return false;
+    }
+  }
+
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 ||
+      hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+    return false;
+  }
+
+  std::ostringstream formatted = {};
+  formatted << std::setfill('0') << std::setw(4) << year << "/" << std::setw(2)
+            << month << "/" << std::setw(2) << day << " " << std::setw(2)
+            << hour << ":" << std::setw(2) << minute;
+  *out_timestamp = formatted.str();
+  return true;
+}
+
+ECMData<PathTarget> ResolveCurrentTrashDir_(
+    AMApplication::filesystem::FileSystemAppService &filesystem_service,
+    const ControlComponent &control) {
+  PathTarget source = {};
+  auto cwd_result = filesystem_service.GetCwd(control);
+  if ((cwd_result.rcm)) {
+    source = std::move(cwd_result.data);
+  } else {
+    source.nickname = filesystem_service.CurrentNickname();
+    source.path = ".";
+  }
+  if (source.nickname.empty()) {
+    source.nickname = filesystem_service.CurrentNickname();
+  }
+  if (source.path.empty()) {
+    source.path = ".";
+  }
+  return filesystem_service.ResolveTrashDir(source, control);
+}
+
+std::string FormatTrashSize_(const PathInfo &entry) {
+  if (entry.type == PathType::DIR) {
+    return "-";
+  }
+  return AMStr::FormatSize(entry.size);
+}
+
+size_t TrashSizeWidth_(const std::vector<TrashDisplayEntry_> &rows) {
+  size_t width = 8;
+  for (const auto &row : rows) {
+    width = std::max(width, FormatTrashSize_(row.entry).size());
+  }
+  return width;
+}
+
+std::string
+BuildTrashEntryLine_(AMInterface::style::AMStyleService &style_service,
+                     const TrashDisplayEntry_ &row, size_t size_width) {
+  std::ostringstream size_part = {};
+  size_part << std::right << std::setw(static_cast<int>(size_width))
+            << FormatTrashSize_(row.entry);
+  const std::string styled_name = style_service.Format(
+      row.entry.name, AMInterface::style::StyleIndex::None, &row.entry);
+  return AMStr::fmt("\\[{}] {} {} {}", row.index, row.timestamp,
+                    size_part.str(), styled_name);
+}
+
+ECMData<std::vector<TrashDisplayEntry_>> LoadTrashEntries_(
+    AMApplication::filesystem::FileSystemAppService &filesystem_service,
+    const ControlComponent &control,
+    std::function<void(const ECM &)> on_error = {}) {
+  auto trash_result = ResolveCurrentTrashDir_(filesystem_service, control);
+  if (!(trash_result.rcm)) {
+    return {std::vector<TrashDisplayEntry_>{}, trash_result.rcm};
+  }
+
+  auto buckets_result = filesystem_service.Listdir(trash_result.data, control);
+  if (!(buckets_result.rcm)) {
+    if (AMDomain::filesystem::service::IsPathNotExistError(
+            buckets_result.rcm.code)) {
+      return {std::vector<TrashDisplayEntry_>{}, OK};
+    }
+    return {std::vector<TrashDisplayEntry_>{}, buckets_result.rcm};
+  }
+
+  std::vector<PathInfo> buckets = {};
+  buckets.reserve(buckets_result.data.size());
+  for (const auto &bucket : buckets_result.data) {
+    if (bucket.type != PathType::DIR) {
+      continue;
+    }
+    std::string timestamp = {};
+    if (!ParseTrashBucketTimestamp_(bucket.name, &timestamp)) {
+      continue;
+    }
+    buckets.push_back(bucket);
+  }
+  std::sort(buckets.begin(), buckets.end(),
+            [](const PathInfo &lhs, const PathInfo &rhs) {
+              return lhs.name < rhs.name;
+            });
+
+  std::vector<TrashDisplayEntry_> rows = {};
+  ECM status = OK;
+  for (const auto &bucket : buckets) {
+    if (auto stop_rcm = control.BuildECM("trash.ls", bucket.path);
+        stop_rcm.has_value()) {
+      return {std::move(rows), *stop_rcm};
+    }
+
+    std::string timestamp = {};
+    if (!ParseTrashBucketTimestamp_(bucket.name, &timestamp)) {
+      continue;
+    }
+
+    PathTarget bucket_target = trash_result.data;
+    bucket_target.path = bucket.path;
+    auto entries_result = filesystem_service.Listdir(bucket_target, control);
+    if (!(entries_result.rcm)) {
+      if (on_error) {
+        on_error(entries_result.rcm);
+      }
+      status = MergeStatus_(status, entries_result.rcm);
+      continue;
+    }
+
+    for (const auto &entry : entries_result.data) {
+      TrashDisplayEntry_ row = {};
+      row.bucket_sort_key = bucket.name;
+      row.timestamp = timestamp;
+      row.target = trash_result.data;
+      row.target.path = entry.path;
+      row.entry = entry;
+      rows.push_back(std::move(row));
+    }
+  }
+
+  std::sort(rows.begin(), rows.end(),
+            [](const TrashDisplayEntry_ &lhs, const TrashDisplayEntry_ &rhs) {
+              if (lhs.bucket_sort_key != rhs.bucket_sort_key) {
+                return lhs.bucket_sort_key < rhs.bucket_sort_key;
+              }
+              return AMStr::lowercase(lhs.entry.name) <
+                     AMStr::lowercase(rhs.entry.name);
+            });
+  for (size_t i = 0; i < rows.size(); ++i) {
+    rows[i].index = i;
+  }
+  return {std::move(rows), status};
+}
+
+ECMData<std::vector<TrashDisplayEntry_>>
+SelectTrashEntries_(const std::vector<TrashDisplayEntry_> &rows,
+                    const std::vector<size_t> &indices) {
+  if (indices.empty()) {
+    return {std::vector<TrashDisplayEntry_>{},
+            Err(EC::InvalidArg, "trash", "<index>", "No index is given")};
+  }
+
+  std::vector<TrashDisplayEntry_> selected = {};
+  selected.reserve(indices.size());
+  std::unordered_set<size_t> seen = {};
+  for (const size_t index : indices) {
+    if (index >= rows.size()) {
+      return {std::move(selected),
+              Err(EC::IndexOutOfRange, "trash", std::to_string(index),
+                  "Trash index is out of range")};
+    }
+    if (!seen.insert(index).second) {
+      continue;
+    }
+    selected.push_back(rows[index]);
+  }
+  return {std::move(selected), OK};
+}
 
 namespace interface_print {
 std::string FormatStatTime(double value) {
@@ -198,10 +446,9 @@ void PrintLsNamesGrid(AMInterface::prompt::PromptIOManager &prompt_io_manager,
   }
 }
 
-void PrintLsLongEntries(
-    AMInterface::prompt::PromptIOManager &prompt_io_manager,
-    AMInterface::style::AMStyleService &style_service,
-    const std::vector<PathInfo> &entries) {
+void PrintLsLongEntries(AMInterface::prompt::PromptIOManager &prompt_io_manager,
+                        AMInterface::style::AMStyleService &style_service,
+                        const std::vector<PathInfo> &entries) {
   size_t mode_width = 0;
   size_t owner_width = 0;
   size_t size_width = 0;
@@ -648,12 +895,12 @@ ECM FilesystemInterfaceSerivce::Find(
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   ECM status = OK;
-  auto result = filesystem_service_.find(
-      target, SearchType::All, control, {},
-      [this, &status](const PathTarget &, ECM rcm) {
-        prompt_io_manager_.ErrorFormat(rcm);
-        status = MergeStatus_(status, rcm);
-      });
+  auto result =
+      filesystem_service_.find(target, SearchType::All, control, {},
+                               [this, &status](const PathTarget &, ECM rcm) {
+                                 prompt_io_manager_.ErrorFormat(rcm);
+                                 status = MergeStatus_(status, rcm);
+                               });
 
   if (!(result.rcm)) {
     return result.rcm;
@@ -661,14 +908,13 @@ ECM FilesystemInterfaceSerivce::Find(
 
   const std::string pattern_label =
       recursive_pattern_mode ? raw_pattern : raw_path;
-  const std::string styled_count = style_service_.Format(
-      std::to_string(result.data.size()),
-      AMInterface::style::StyleIndex::Number);
+  const std::string styled_count =
+      style_service_.Format(std::to_string(result.data.size()),
+                            AMInterface::style::StyleIndex::Number);
   const std::string styled_pattern = style_service_.Format(
       pattern_label, AMInterface::style::StyleIndex::FindPattern);
-  prompt_io_manager_.Print(
-      AMStr::fmt("Find {} Result for pattern {}", styled_count,
-                 styled_pattern));
+  prompt_io_manager_.Print(AMStr::fmt("Find {} Result for pattern {}",
+                                      styled_count, styled_pattern));
   for (const auto &entry : result.data) {
     prompt_io_manager_.Print(style_service_.Format(
         entry.path, AMInterface::style::StyleIndex::None, &entry));
@@ -744,6 +990,359 @@ ECM FilesystemInterfaceSerivce::Realpath(
 
   prompt_io_manager_.ErrorFormat(stat_result.rcm);
   return stat_result.rcm;
+}
+
+ECM FilesystemInterfaceSerivce::Launch(
+    const FilesystemLaunchArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  const std::string raw_path = AMStr::Strip(arg.raw_path);
+  if (raw_path.empty()) {
+    const ECM rcm = Err(EC::InvalidArg, "launch", "<path>",
+                        "launch requires one local path");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto resolved_result =
+      AMInterface::parser::AMInputPreprocess::ResolveStringMeta(raw_path);
+  if (!(resolved_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(resolved_result.rcm);
+    return resolved_result.rcm;
+  }
+
+  const auto &resolved = resolved_result.data;
+  const size_t at_pos = FindFirstNonEscapedAt_(resolved);
+  std::string local_path = resolved.value;
+  if (resolved.value == "@") {
+    local_path = ".";
+  } else if (at_pos == 0U) {
+    local_path = resolved.value.substr(1);
+  } else if (at_pos != std::string::npos) {
+    const std::string nickname_part = resolved.value.substr(0, at_pos);
+    if (IsValidNicknameToken_(nickname_part)) {
+      const std::string nickname = NormalizeNickname(nickname_part);
+      if (!AMDomain::host::HostService::IsLocalNickname(nickname)) {
+        const ECM rcm = Err(EC::InvalidArg, "launch", resolved.value,
+                            "launch only accepts local paths");
+        prompt_io_manager_.ErrorFormat(rcm);
+        return rcm;
+      }
+      local_path = resolved.value.substr(at_pos + 1);
+      if (local_path.empty()) {
+        local_path = ".";
+      }
+    }
+  }
+
+  local_path = NormalizePath(AMStr::Strip(local_path));
+  if (local_path.empty()) {
+    local_path = ".";
+  }
+
+  const auto local_client = client_service_.GetLocalClient();
+  if (!local_client) {
+    const ECM rcm =
+        Err(EC::InvalidHandle, "launch", "local", "Local client not available");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto abs_result =
+      AMApplication::filesystem::FileSystemAppService::ResolveAbsolutePath(
+          local_client, local_path, control);
+  if (!(abs_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(abs_result.rcm);
+    return abs_result.rcm;
+  }
+
+  const std::filesystem::path launch_path =
+      std::filesystem::path(AMStr::Strip(abs_result.data)).lexically_normal();
+  std::error_code ec = {};
+  if (!std::filesystem::exists(launch_path, ec)) {
+    const ECM rcm =
+        ec ? Err(fec(ec), "launch", launch_path.string(), ec.message())
+           : Err(EC::PathNotExist, "launch", launch_path.string(),
+                 "Path does not exist");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  const ECM open_rcm = OpenPathWithDefaultProgram_(launch_path);
+  if (!(open_rcm)) {
+    prompt_io_manager_.ErrorFormat(open_rcm);
+    return open_rcm;
+  }
+  prompt_io_manager_.FmtPrint("Launched: {}", launch_path.string());
+  return OK;
+}
+
+ECM FilesystemInterfaceSerivce::TrashPath(
+    const FilesystemTrashPathArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  (void)arg;
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  auto trash_result = ResolveCurrentTrashDir_(filesystem_service_, control);
+  if (!(trash_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(trash_result.rcm);
+    return trash_result.rcm;
+  }
+
+  prompt_io_manager_.Print(
+      interface_print::BuildStyledPathLabel(style_service_, trash_result.data));
+  return OK;
+}
+
+ECM FilesystemInterfaceSerivce::TrashLs(
+    const FilesystemTrashLsArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  (void)arg;
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  auto rows_result =
+      LoadTrashEntries_(filesystem_service_, control, [this](const ECM &rcm) {
+        prompt_io_manager_.ErrorFormat(rcm);
+      });
+  if (!(rows_result.rcm) && rows_result.data.empty()) {
+    prompt_io_manager_.ErrorFormat(rows_result.rcm);
+    return rows_result.rcm;
+  }
+
+  const size_t size_width = TrashSizeWidth_(rows_result.data);
+  for (const auto &row : rows_result.data) {
+    prompt_io_manager_.Print(
+        BuildTrashEntryLine_(style_service_, row, size_width));
+  }
+  return rows_result.rcm;
+}
+
+ECM FilesystemInterfaceSerivce::TrashStat(
+    const FilesystemTrashStatArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  auto rows_result =
+      LoadTrashEntries_(filesystem_service_, control, [this](const ECM &rcm) {
+        prompt_io_manager_.ErrorFormat(rcm);
+      });
+  if (!(rows_result.rcm) && rows_result.data.empty()) {
+    prompt_io_manager_.ErrorFormat(rows_result.rcm);
+    return rows_result.rcm;
+  }
+
+  auto selected_result = SelectTrashEntries_(rows_result.data, {arg.index});
+  if (!(selected_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(selected_result.rcm);
+    return selected_result.rcm;
+  }
+
+  auto stat_result = filesystem_service_.Stat(
+      selected_result.data.front().target, control, false);
+  if (!(stat_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(stat_result.rcm);
+    return stat_result.rcm;
+  }
+  interface_print::PrintStatBlock(prompt_io_manager_, stat_result.data);
+  return rows_result.rcm;
+}
+
+ECM FilesystemInterfaceSerivce::TrashRemove(
+    const FilesystemTrashRemoveArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  auto rows_result =
+      LoadTrashEntries_(filesystem_service_, control, [this](const ECM &rcm) {
+        prompt_io_manager_.ErrorFormat(rcm);
+      });
+  if (!(rows_result.rcm) && rows_result.data.empty()) {
+    prompt_io_manager_.ErrorFormat(rows_result.rcm);
+    return rows_result.rcm;
+  }
+
+  auto selected_result = SelectTrashEntries_(rows_result.data, arg.indices);
+  if (!(selected_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(selected_result.rcm);
+    return selected_result.rcm;
+  }
+
+  const size_t size_width = TrashSizeWidth_(selected_result.data);
+  std::vector<PathTarget> targets = {};
+  targets.reserve(selected_result.data.size());
+  for (const auto &row : selected_result.data) {
+    prompt_io_manager_.Print(
+        BuildTrashEntryLine_(style_service_, row, size_width));
+    targets.push_back(row.target);
+  }
+
+  bool canceled = false;
+  const bool confirmed = prompt_io_manager_.PromptYesNo(
+      "Are you sure to remove these items? (y/n): ", &canceled);
+  if (canceled || !confirmed) {
+    return Err(EC::ConfigCanceled, "trash.rm", "", "trash remove canceled");
+  }
+
+  auto prepare_result =
+      filesystem_service_.PreparePermanentRemove(std::move(targets), control);
+  for (const auto &entry : prepare_result.data.precheck_errors) {
+    prompt_io_manager_.ErrorFormat(entry.second);
+  }
+  if (!(prepare_result.rcm)) {
+    return prepare_result.rcm;
+  }
+
+  auto execute_result = filesystem_service_.ExecutePermanentRemove(
+      prepare_result.data, control, {}, [this](const PathTarget &, ECM rcm) {
+        prompt_io_manager_.ErrorFormat(rcm);
+      });
+  return MergeStatus_(rows_result.rcm, execute_result.rcm);
+}
+
+ECM FilesystemInterfaceSerivce::TrashFetch(
+    const FilesystemTrashFetchArg &arg,
+    const std::optional<ControlComponent> &control_opt) const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  auto rows_result =
+      LoadTrashEntries_(filesystem_service_, control, [this](const ECM &rcm) {
+        prompt_io_manager_.ErrorFormat(rcm);
+      });
+  if (!(rows_result.rcm) && rows_result.data.empty()) {
+    prompt_io_manager_.ErrorFormat(rows_result.rcm);
+    return rows_result.rcm;
+  }
+
+  auto selected_result = SelectTrashEntries_(rows_result.data, arg.indices);
+  if (!(selected_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(selected_result.rcm);
+    return selected_result.rcm;
+  }
+
+  const std::string current_nickname = NormalizeNickname(
+      AMStr::Strip(filesystem_service_.CurrentNickname()).empty()
+          ? std::string("local")
+          : AMStr::Strip(filesystem_service_.CurrentNickname()));
+  PathTarget dst_dir = {};
+  const std::string raw_output = AMStr::Strip(arg.raw_output);
+  if (raw_output.empty()) {
+    auto cwd_result = filesystem_service_.GetCwd(control);
+    if (!(cwd_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(cwd_result.rcm);
+      return cwd_result.rcm;
+    }
+    dst_dir = std::move(cwd_result.data);
+    if (dst_dir.nickname.empty()) {
+      dst_dir.nickname = current_nickname;
+    }
+  } else {
+    auto dst_result = SplitRawTarget(raw_output);
+    if (!(dst_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(dst_result.rcm);
+      return dst_result.rcm;
+    }
+    dst_dir = std::move(dst_result.data);
+    if (AMDomain::filesystem::service::HasWildcard(dst_dir.path)) {
+      const ECM rcm = Err(EC::InvalidArg, "trash.fetch", raw_output,
+                          "Output wildcard is not supported");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return rcm;
+    }
+    if (NormalizeNickname(dst_dir.nickname) != current_nickname) {
+      const ECM rcm = Err(EC::InvalidArg, "trash.fetch",
+                          interface_print::BuildPathLabel(dst_dir),
+                          "Output path must be on current client");
+      prompt_io_manager_.ErrorFormat(rcm);
+      return rcm;
+    }
+    ECM mkdir_rcm = filesystem_service_.Mkdirs(dst_dir, control);
+    if (!(mkdir_rcm)) {
+      prompt_io_manager_.ErrorFormat(mkdir_rcm);
+      return mkdir_rcm;
+    }
+  }
+  if (dst_dir.path.empty()) {
+    dst_dir.path = ".";
+  }
+
+  const size_t size_width = TrashSizeWidth_(selected_result.data);
+  ECM status = rows_result.rcm;
+  for (const auto &row : selected_result.data) {
+    if (control.IsInterrupted()) {
+      return Err(EC::Terminate, "trash.fetch", row.entry.name,
+                 "Interrupted by user");
+    }
+    if (control.IsTimeout()) {
+      return Err(EC::OperationTimeout, "trash.fetch", row.entry.name,
+                 "Operation timed out");
+    }
+
+    PathTarget dst = dst_dir;
+    dst.path = AMPath::join(dst_dir.path, row.entry.name);
+    if (MakePathKey_(dst) == MakePathKey_(row.target)) {
+      prompt_io_manager_.Print(AMStr::fmt(
+          "✅Fetch {}", BuildTrashEntryLine_(style_service_, row, size_width)));
+      continue;
+    }
+
+    bool overwrite = false;
+    auto dst_stat = filesystem_service_.Stat(dst, control, false);
+    if ((dst_stat.rcm)) {
+      const bool src_is_dir = row.entry.type == PathType::DIR;
+      const bool dst_is_dir = dst_stat.data.type == PathType::DIR;
+      if (src_is_dir != dst_is_dir) {
+        const ECM rcm = Err(EC::PathAlreadyExists, "trash.fetch",
+                            interface_print::BuildPathLabel(dst),
+                            "Destination exists with different type");
+        prompt_io_manager_.ErrorFormat(rcm);
+        status = MergeStatus_(status, rcm);
+        continue;
+      }
+
+      bool canceled = false;
+      const bool confirmed = prompt_io_manager_.PromptYesNo(
+          AMStr::fmt("Are you sure to overlap {}? (y/n): ",
+                     interface_print::BuildPathLabel(dst)),
+          &canceled);
+      if (canceled || !confirmed) {
+        continue;
+      }
+      overwrite = true;
+    } else if (!AMDomain::filesystem::service::IsPathNotExistError(
+                   dst_stat.rcm.code)) {
+      prompt_io_manager_.ErrorFormat(dst_stat.rcm);
+      status = MergeStatus_(status, dst_stat.rcm);
+      continue;
+    }
+
+    if (overwrite) {
+      auto prepare_result =
+          filesystem_service_.PreparePermanentRemove({dst}, control);
+      for (const auto &entry : prepare_result.data.precheck_errors) {
+        prompt_io_manager_.ErrorFormat(entry.second);
+      }
+      if (!(prepare_result.rcm)) {
+        status = MergeStatus_(status, prepare_result.rcm);
+        continue;
+      }
+      auto remove_result = filesystem_service_.ExecutePermanentRemove(
+          prepare_result.data, control, {},
+          [this](const PathTarget &, ECM rcm) {
+            prompt_io_manager_.ErrorFormat(rcm);
+          });
+      if (!(remove_result.rcm)) {
+        status = MergeStatus_(status, remove_result.rcm);
+        continue;
+      }
+    }
+
+    ECM rename_rcm =
+        filesystem_service_.Rename(row.target, dst, control, true, false);
+    if (!(rename_rcm)) {
+      prompt_io_manager_.ErrorFormat(rename_rcm);
+      status = MergeStatus_(status, rename_rcm);
+      continue;
+    }
+
+    prompt_io_manager_.Print(AMStr::fmt(
+        "✅Fetch {}", BuildTrashEntryLine_(style_service_, row, size_width)));
+  }
+  return status;
 }
 
 ECM FilesystemInterfaceSerivce::Tree(

@@ -97,8 +97,10 @@ $env:AMSFTP_ROOT = "D:\Data\amsftp"
 启动交互模式：
 
 ```powershell
-.\build\win-clang-static-release\amsftp.exe bash
+.\build\win-clang-static-release\amsftp.exe
 ```
+
+显式的 `.\build\win-clang-static-release\amsftp.exe bash` 形式仍然可用。
 
 或者先查看命令帮助：
 
@@ -201,8 +203,8 @@ cp dev@${dev:logs}/app.log @D:\logs\app.log
 ### Terminal Control Mode
 
 - `Ctrl+]`：从当前终端会话进入 control mode
-- `e` 或 `Esc`：退出 control mode 并回到终端会话
-- `q`：从前台终端会话 detach
+- `Enter` 或 `e`：退出 control mode 并回到终端会话
+- `Esc` 或 `q`：从前台终端会话 detach
 - `Tab` / `Right`：切换到下一个终端会话
 - `Shift+Tab` / `Left`：切换到上一个终端会话
 - `Up` / `Down`：按行滚动终端历史

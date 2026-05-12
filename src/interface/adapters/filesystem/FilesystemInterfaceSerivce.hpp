@@ -63,6 +63,30 @@ public:
       const FilesystemRealpathArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;
 
+  [[nodiscard]] ECM Launch(
+      const FilesystemLaunchArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
+  [[nodiscard]] ECM TrashPath(
+      const FilesystemTrashPathArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
+  [[nodiscard]] ECM TrashLs(
+      const FilesystemTrashLsArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
+  [[nodiscard]] ECM TrashStat(
+      const FilesystemTrashStatArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
+  [[nodiscard]] ECM TrashRemove(
+      const FilesystemTrashRemoveArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
+  [[nodiscard]] ECM TrashFetch(
+      const FilesystemTrashFetchArg &arg,
+      const std::optional<ControlComponent> &control_opt = std::nullopt) const;
+
   [[nodiscard]] ECM Tree(
       const FilesystemTreeArg &arg,
       const std::optional<ControlComponent> &control_opt = std::nullopt) const;

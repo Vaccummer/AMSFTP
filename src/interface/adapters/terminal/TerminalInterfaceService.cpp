@@ -687,7 +687,7 @@ BuildBackgroundAnsi_(std::string_view raw_background) {
     return false;
   }
   if (text == "/") {
-    *out += "\x1b[0m";
+    *out += "\x1b[22;23;24;39m";
     return true;
   }
 
@@ -1964,6 +1964,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
 
   const auto terminal_request = terminal_handle->GetRequest();
+  terminal_os_type = terminal_handle->GetOSType();
   const auto protocol = terminal_request.protocol;
   if (protocol != AMDomain::host::ClientProtocol::SFTP &&
       protocol != AMDomain::host::ClientProtocol::LOCAL) {
@@ -2482,6 +2483,14 @@ ECM TerminalInterfaceService::LaunchTerminal(
           (void)channel_port->RequestForegroundDetach();
           continue;
         }
+        if (pending_local_input.front() == '\r' ||
+            pending_local_input.front() == '\n') {
+          pending_local_input.erase(0, 1U);
+          control_layer_active.store(false, std::memory_order_release);
+          (void)exit_local_scrollback();
+          render_current_frame();
+          continue;
+        }
         if (pending_local_input.front() == 'e' ||
             pending_local_input.front() == 'E') {
           pending_local_input.erase(0, 1U);
@@ -2523,8 +2532,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
           if (pending_local_input.size() == 1U) {
             pending_local_input.erase(0, 1U);
             control_layer_active.store(false, std::memory_order_release);
-            (void)exit_local_scrollback();
-            render_current_frame();
+            (void)channel_port->RequestForegroundDetach();
             continue;
           }
           const size_t esc_len = CompleteEscapeSequenceLength_(pending_local_input);
@@ -2534,8 +2542,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
           if (esc_len == 1U) {
             pending_local_input.erase(0, 1U);
             control_layer_active.store(false, std::memory_order_release);
-            (void)exit_local_scrollback();
-            render_current_frame();
+            (void)channel_port->RequestForegroundDetach();
             continue;
           }
           const std::string seq = pending_local_input.substr(0, esc_len);

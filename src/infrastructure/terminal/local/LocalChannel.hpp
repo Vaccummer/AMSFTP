@@ -760,8 +760,12 @@ private:
           changed = true;
           continue;
         }
-        if (ch == 'q' || ch == 'Q') {
+        if (ch == 'q' || ch == 'Q' || ch == '\x1b') {
           detach = true;
+          key_ctrl_state_.store(false, std::memory_order_release);
+          continue;
+        }
+        if (ch == '\r' || ch == '\n') {
           key_ctrl_state_.store(false, std::memory_order_release);
           continue;
         }

@@ -1183,9 +1183,13 @@ private:
           continue;
         }
 
-        if (ch == 'q' || ch == 'Q') {
+        if (ch == 'q' || ch == 'Q' || ch == '\x1b') {
           (void)RequestForegroundDetach();
           return;
+        }
+        if (ch == '\r' || ch == '\n') {
+          key_ctrl_state_.store(false, std::memory_order_release);
+          continue;
         }
 
         key_ctrl_state_.store(false, std::memory_order_release);
@@ -1529,8 +1533,12 @@ private:
             continue;
           }
 
-          if (ch == 'q' || ch == 'Q') {
+          if (ch == 'q' || ch == 'Q' || ch == '\x1b') {
             detach = true;
+            key_ctrl_state_.store(false, std::memory_order_release);
+            continue;
+          }
+          if (ch == '\r' || ch == '\n') {
             key_ctrl_state_.store(false, std::memory_order_release);
             continue;
           }

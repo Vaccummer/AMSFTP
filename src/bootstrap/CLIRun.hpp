@@ -18,6 +18,13 @@ inline int RunCLI(AppRuntime &runtime, int argc, char **argv) {
     style_service = &runtime.managers.interfaces.style_service.Get();
   }
 
+  if (argc <= 1) {
+    runtime.run_ctx.async = false;
+    return AMInterface::cli::RunInteractiveLoop(
+        *runtime.cli_app, runtime.cli_commands, runtime.command_tree,
+        runtime.managers, runtime.run_ctx);
+  }
+
   const auto parse_outcome = AMInterface::cli::ParseCliArgv(
       {
           .app = runtime.cli_app.get(),

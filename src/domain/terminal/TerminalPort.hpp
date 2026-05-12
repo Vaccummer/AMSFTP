@@ -20,6 +20,8 @@ public:
 
   [[nodiscard]] virtual ConRequest GetRequest() const = 0;
 
+  [[nodiscard]] virtual AMDomain::client::OS_TYPE GetOSType() const = 0;
+
   virtual ECMData<ChannelOpenResult>
   OpenChannel(const ChannelOpenArgs &open_args,
               const ControlComponent &control = {}) = 0;

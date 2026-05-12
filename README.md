@@ -97,8 +97,10 @@ $env:AMSFTP_ROOT = "D:\Data\amsftp"
 Start interactive mode:
 
 ```powershell
-amsftp.exe bash
+amsftp.exe
 ```
+
+The explicit `amsftp.exe bash` form is still accepted.
 
 Or inspect the command surface first:
 
@@ -201,8 +203,8 @@ cp dev@${dev:logs}/app.log @D:\logs\app.log
 ### Terminal Control Mode
 
 - `Ctrl+]`: enter control mode from an active terminal session
-- `e` or `Esc`: leave control mode and return to the terminal session
-- `q`: detach from the foreground terminal session
+- `Enter` or `e`: leave control mode and return to the terminal session
+- `Esc` or `q`: detach from the foreground terminal session
 - `Tab` / `Right`: switch to the next terminal session
 - `Shift+Tab` / `Left`: switch to the previous terminal session
 - `Up` / `Down`: scroll terminal history by one row
