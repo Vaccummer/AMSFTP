@@ -693,24 +693,57 @@ SplitAnsiFrameLines_(std::string_view frame) {
   return lines;
 }
 
-void AppendTerminalVtRuns_(
-    std::string *out,
+struct TerminalVtRenderRow_ {
+  std::vector<AMDomain::terminal::ChannelVtRenderRun> runs = {};
+  std::string signature = {};
+};
+
+[[nodiscard]] std::vector<TerminalVtRenderRow_> BuildTerminalVtRenderRows_(
     const std::vector<AMDomain::terminal::ChannelVtRenderRun> &runs,
     int row_offset, int rows, int cols) {
-  if (out == nullptr) {
-    return;
-  }
-  const int first_content_row =
-      std::clamp(row_offset + 1, 1, std::max(1, rows));
-  for (int row = first_content_row; row <= rows; ++row) {
-    *out += AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row);
-  }
-
+  std::vector<TerminalVtRenderRow_> out(
+      static_cast<size_t>(std::max(1, rows)) + 1U);
   for (const auto &run : runs) {
     const int target_row = run.row + 1 + row_offset;
     const int target_col = run.col + 1;
     if (target_row < 1 || target_row > rows || target_col < 1 ||
         target_col > cols || run.text.empty()) {
+      continue;
+    }
+    auto &row = out[static_cast<size_t>(target_row)];
+    row.runs.push_back(run);
+    row.signature +=
+        AMStr::fmt("{}:{}:{}:", target_col, run.sgr.size(), run.text.size());
+    row.signature += run.sgr;
+    row.signature.push_back('\x1f');
+    row.signature += run.text;
+    row.signature.push_back('\x1e');
+  }
+  return out;
+}
+
+[[nodiscard]] std::vector<std::string> BuildTerminalVtRowSignatures_(
+    const std::vector<TerminalVtRenderRow_> &rows) {
+  std::vector<std::string> out = {};
+  out.reserve(rows.size());
+  for (const auto &row : rows) {
+    out.push_back(row.signature);
+  }
+  return out;
+}
+
+void AppendTerminalVtRow_(std::string *out, int target_row,
+                          const TerminalVtRenderRow_ &row, int row_offset,
+                          int rows, int cols) {
+  if (out == nullptr || target_row < 1 || target_row > rows) {
+    return;
+  }
+  *out += AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", target_row);
+  for (const auto &run : row.runs) {
+    const int run_row = run.row + 1 + row_offset;
+    const int target_col = run.col + 1;
+    if (run_row != target_row || target_col < 1 || target_col > cols ||
+        run.text.empty()) {
       continue;
     }
     *out += AMStr::fmt("\x1b[{};{}H", target_row, target_col);
@@ -2228,6 +2261,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
   AMTerminalTools::TerminalViewportInfo last_render_geometry = geometry;
   uint64_t last_rendered_viewport_offset = 0;
   std::vector<std::string> last_rendered_lines = {};
+  bool last_render_used_structured = false;
+  std::vector<std::string> last_rendered_vt_row_signatures = {};
   bool have_last_vt_snapshot = false;
   AMDomain::terminal::ChannelVtSnapshot last_vt_snapshot = {};
   bool last_control_layer_active = false;
@@ -2280,6 +2315,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
       last_render_geometry = geometry;
       last_rendered_viewport_offset = 0;
       last_rendered_lines.clear();
+      last_render_used_structured = false;
+      last_rendered_vt_row_signatures.clear();
       have_last_vt_snapshot = false;
       last_vt_snapshot = {};
       last_control_layer_active = false;
@@ -2320,6 +2357,12 @@ ECM TerminalInterfaceService::LaunchTerminal(
     const std::vector<std::string> current_lines = SplitAnsiFrameLines_(frame);
     const bool structured_frame_available =
         vt_snapshot.available && frame_result.vt_visible_frame_runs_available;
+    std::vector<TerminalVtRenderRow_> current_vt_run_rows = {};
+    if (structured_frame_available) {
+      current_vt_run_rows = BuildTerminalVtRenderRows_(
+          frame_result.vt_visible_frame_runs, row_offset,
+          current_geometry.rows, current_geometry.cols);
+    }
     const bool local_input_active = browse_active || control_active;
     const std::string input_protocol_ansi =
         BuildTerminalInputProtocolAnsi_(vt_snapshot, local_input_active);
@@ -2334,8 +2377,11 @@ ECM TerminalInterfaceService::LaunchTerminal(
         vt_snapshot.damage_serial != last_vt_snapshot.damage_serial;
     const bool viewport_offset_changed =
         viewport_offset != last_rendered_viewport_offset;
+    const bool structured_renderer_changed =
+        structured_frame_available && !last_render_used_structured;
     const bool lines_changed =
         force_full_clear || viewport_offset_changed ||
+        structured_renderer_changed ||
         (structured_frame_available ? vt_damage_changed
                                     : current_lines != last_rendered_lines);
     const bool input_protocol_changed =
@@ -2382,9 +2428,32 @@ ECM TerminalInterfaceService::LaunchTerminal(
       if (force_full_clear) {
         repaint += kTerminalClearAndHome_;
       }
-      AppendTerminalVtRuns_(&repaint, frame_result.vt_visible_frame_runs,
-                            row_offset, current_geometry.rows,
-                            current_geometry.cols);
+      const bool repaint_all_vt_rows =
+          force_full_clear || structured_renderer_changed;
+      const int first_content_row =
+          std::clamp(row_offset + 1, 1, std::max(1, current_geometry.rows));
+      for (int row = first_content_row; row <= current_geometry.rows; ++row) {
+        const size_t row_index = static_cast<size_t>(row);
+        const std::string empty_signature = {};
+        const std::string &current_signature =
+            row_index < current_vt_run_rows.size()
+                ? current_vt_run_rows[row_index].signature
+                : empty_signature;
+        const std::string &last_signature =
+            row_index < last_rendered_vt_row_signatures.size()
+                ? last_rendered_vt_row_signatures[row_index]
+                : empty_signature;
+        if (!repaint_all_vt_rows && current_signature == last_signature) {
+          continue;
+        }
+        if (row_index < current_vt_run_rows.size()) {
+          AppendTerminalVtRow_(&repaint, row, current_vt_run_rows[row_index],
+                               row_offset, current_geometry.rows,
+                               current_geometry.cols);
+        } else {
+          repaint += AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row);
+        }
+      }
     } else if (force_full_clear) {
       repaint += kTerminalClearAndHome_;
       for (size_t i = 0; i < current_lines.size(); ++i) {
@@ -2456,6 +2525,14 @@ ECM TerminalInterfaceService::LaunchTerminal(
     repaint += kTerminalEnableAutoWrap_;
     WriteTerminalBytes_(repaint);
     last_rendered_lines = current_lines;
+    if (structured_frame_available) {
+      last_rendered_vt_row_signatures =
+          BuildTerminalVtRowSignatures_(current_vt_run_rows);
+      last_render_used_structured = true;
+    } else {
+      last_rendered_vt_row_signatures.clear();
+      last_render_used_structured = false;
+    }
     last_local_input_active = local_input_active;
     last_render_geometry = current_geometry;
     last_rendered_viewport_offset = viewport_offset;
