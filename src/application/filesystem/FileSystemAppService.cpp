@@ -400,7 +400,7 @@ ECM FileSystemAppService::EnsureClientWorkdir(ClientHandle client,
                       "invalid workdir candidate")};
     }
 
-    auto stat_result = client->IOPort().stat({absolute_path, false}, control);
+    auto stat_result = client->IOPort().stat({absolute_path, true}, control);
     if (!(stat_result.rcm)) {
       return {"", stat_result.rcm};
     }
@@ -410,9 +410,7 @@ ECM FileSystemAppService::EnsureClientWorkdir(ClientHandle client,
     }
 
     std::string resolved = AMPath::NormalizeJoinedPath(
-        AMDomain::filesystem::service::NormalizePath(
-            stat_result.data.info.path),
-        "/");
+        AMDomain::filesystem::service::NormalizePath(absolute_path), "/");
     if (resolved.empty()) {
       resolved = absolute_path;
     }
@@ -479,7 +477,7 @@ ECM FileSystemAppService::ChangeDir(PathTarget path,
   ClientMetaData metadata = *metadata_opt;
   const std::string prev_cwd = metadata.cwd;
   const std::string abs_target = resolved.abs_path;
-  auto stat_result = client->IOPort().stat({abs_target, false}, control);
+  auto stat_result = client->IOPort().stat({abs_target, true}, control);
   if (!stat_result.rcm) {
     TraceFs_(stat_result.rcm, resolved.target, "filesystem.cd", "stat failed");
     return stat_result.rcm;
@@ -491,8 +489,7 @@ ECM FileSystemAppService::ChangeDir(PathTarget path,
     return rcm;
   }
   metadata.cwd = AMPath::NormalizeJoinedPath(
-      AMDomain::filesystem::service::NormalizePath(stat_result.data.info.path),
-      "/");
+      AMDomain::filesystem::service::NormalizePath(abs_target), "/");
   const ECM set_meta_rcm =
       ClientAppService::SetClientMetadata(client, metadata);
   if (!set_meta_rcm) {
@@ -503,8 +500,7 @@ ECM FileSystemAppService::ChangeDir(PathTarget path,
 
   client_service_->SetCurrentClient(client);
 
-  if (!from_history && !prev_cwd.empty() &&
-      prev_cwd != stat_result.data.info.path) {
+  if (!from_history && !prev_cwd.empty() && prev_cwd != metadata.cwd) {
     auto history = cd_history_.lock();
     auto list = history.load();
     PathTarget entry = {};

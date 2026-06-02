@@ -13,6 +13,7 @@ struct TerminalShellRunArg {
 struct TerminalLaunchArg {
   std::string target = {};
   bool start_in_god_mode = false;
+  bool reuse_physical_alt_screen = false;
 };
 
 struct TerminalAddArg {

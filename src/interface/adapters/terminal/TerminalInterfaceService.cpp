@@ -700,11 +700,11 @@ struct TerminalVtRenderRow_ {
 
 [[nodiscard]] std::vector<TerminalVtRenderRow_> BuildTerminalVtRenderRows_(
     const std::vector<AMDomain::terminal::ChannelVtRenderRun> &runs,
-    int row_offset, int rows, int cols) {
+    int row_offset, int source_row_offset, int rows, int cols) {
   std::vector<TerminalVtRenderRow_> out(
       static_cast<size_t>(std::max(1, rows)) + 1U);
   for (const auto &run : runs) {
-    const int target_row = run.row + 1 + row_offset;
+    const int target_row = run.row - source_row_offset + 1 + row_offset;
     const int target_col = run.col + 1;
     if (target_row < 1 || target_row > rows || target_col < 1 ||
         target_col > cols || run.text.empty()) {
@@ -734,13 +734,13 @@ struct TerminalVtRenderRow_ {
 
 void AppendTerminalVtRow_(std::string *out, int target_row,
                           const TerminalVtRenderRow_ &row, int row_offset,
-                          int rows, int cols) {
+                          int source_row_offset, int rows, int cols) {
   if (out == nullptr || target_row < 1 || target_row > rows) {
     return;
   }
   *out += AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", target_row);
   for (const auto &run : row.runs) {
-    const int run_row = run.row + 1 + row_offset;
+    const int run_row = run.row - source_row_offset + 1 + row_offset;
     const int target_col = run.col + 1;
     if (run_row != target_row || target_col < 1 || target_col > cols ||
         run.text.empty()) {
@@ -2254,8 +2254,8 @@ ECM TerminalInterfaceService::LaunchTerminal(
 
   std::mutex render_mutex = {};
   std::mutex local_input_mutex = {};
-  bool physical_alt_screen_active = false;
-  bool have_last_server_screen_state = false;
+  bool physical_alt_screen_active = arg.reuse_physical_alt_screen;
+  bool have_last_server_screen_state = arg.reuse_physical_alt_screen;
   bool last_server_in_alternate_screen = false;
   bool last_local_input_active = false;
   AMTerminalTools::TerminalViewportInfo last_render_geometry = geometry;
@@ -2355,12 +2355,20 @@ ECM TerminalInterfaceService::LaunchTerminal(
         terminal_banner_lines, terminal_control_note_lines, control_active,
         current_geometry.rows);
     const std::vector<std::string> current_lines = SplitAnsiFrameLines_(frame);
+    const int content_rows =
+        std::max(1, current_geometry.rows - std::max(0, row_offset));
+    const int source_rows =
+        vt_snapshot.available
+            ? std::max(1, vt_snapshot.rows)
+            : static_cast<int>(std::max<size_t>(1U, current_lines.size()));
+    const int source_row_offset =
+        std::max(0, source_rows - content_rows);
     const bool structured_frame_available =
         vt_snapshot.available && frame_result.vt_visible_frame_runs_available;
     std::vector<TerminalVtRenderRow_> current_vt_run_rows = {};
     if (structured_frame_available) {
       current_vt_run_rows = BuildTerminalVtRenderRows_(
-          frame_result.vt_visible_frame_runs, row_offset,
+          frame_result.vt_visible_frame_runs, row_offset, source_row_offset,
           current_geometry.rows, current_geometry.cols);
     }
     const bool local_input_active = browse_active || control_active;
@@ -2372,6 +2380,11 @@ ECM TerminalInterfaceService::LaunchTerminal(
         current_geometry.rows != last_render_geometry.rows ||
         last_server_in_alternate_screen != vt_snapshot.in_alternate_screen ||
         last_control_layer_active != control_active;
+    const bool reused_physical_alt_screen_first_paint =
+        arg.reuse_physical_alt_screen && !last_render_used_structured &&
+        last_rendered_lines.empty() && last_rendered_vt_row_signatures.empty();
+    const bool clear_whole_screen =
+        force_full_clear && !reused_physical_alt_screen_first_paint;
     const bool vt_damage_changed =
         !have_last_vt_snapshot ||
         vt_snapshot.damage_serial != last_vt_snapshot.damage_serial;
@@ -2403,7 +2416,9 @@ ECM TerminalInterfaceService::LaunchTerminal(
         cursor_only += input_protocol_ansi;
       }
       const int cursor_row =
-          std::clamp(vt_snapshot.cursor_row + 1 + row_offset, 1,
+          std::clamp(vt_snapshot.cursor_row - source_row_offset + 1 +
+                         row_offset,
+                     1,
                      std::max(1, current_geometry.rows));
       const int cursor_col =
           std::clamp(vt_snapshot.cursor_col + 1, 1,
@@ -2425,7 +2440,7 @@ ECM TerminalInterfaceService::LaunchTerminal(
     repaint += kTerminalDisableAutoWrap_;
     repaint += "\x1b[0m";
     if (structured_frame_available) {
-      if (force_full_clear) {
+      if (clear_whole_screen) {
         repaint += kTerminalClearAndHome_;
       }
       const bool repaint_all_vt_rows =
@@ -2448,30 +2463,48 @@ ECM TerminalInterfaceService::LaunchTerminal(
         }
         if (row_index < current_vt_run_rows.size()) {
           AppendTerminalVtRow_(&repaint, row, current_vt_run_rows[row_index],
-                               row_offset, current_geometry.rows,
-                               current_geometry.cols);
+                               row_offset, source_row_offset,
+                               current_geometry.rows, current_geometry.cols);
         } else {
           repaint += AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row);
         }
       }
     } else if (force_full_clear) {
-      repaint += kTerminalClearAndHome_;
-      for (size_t i = 0; i < current_lines.size(); ++i) {
-        const int target_row = static_cast<int>(i + 1U + row_offset);
+      if (clear_whole_screen) {
+        repaint += kTerminalClearAndHome_;
+      }
+      for (size_t i = static_cast<size_t>(source_row_offset);
+           i < current_lines.size(); ++i) {
+        const int target_row =
+            static_cast<int>(i - static_cast<size_t>(source_row_offset) + 1U +
+                             static_cast<size_t>(row_offset));
         if (target_row > current_geometry.rows) {
           break;
         }
         repaint += AMStr::fmt("\x1b[{};1H", target_row);
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
+      }
+      if (!clear_whole_screen) {
+        const size_t rendered_rows =
+            current_lines.size() > static_cast<size_t>(source_row_offset)
+                ? current_lines.size() - static_cast<size_t>(source_row_offset)
+                : 0U;
+        for (int row = row_offset + static_cast<int>(rendered_rows) + 1;
+             row <= current_geometry.rows; ++row) {
+          repaint += AMStr::fmt("\x1b[{};1H\x1b[2K\x1b[0m", row);
+        }
       }
     } else {
       const size_t overlap = std::min(last_rendered_lines.size(), current_lines.size());
-      for (size_t i = 0; i < overlap; ++i) {
+      for (size_t i = static_cast<size_t>(source_row_offset); i < overlap;
+           ++i) {
         if (last_rendered_lines[i] == current_lines[i]) {
           continue;
         }
-        const int target_row = static_cast<int>(i + 1U + row_offset);
+        const int target_row =
+            static_cast<int>(i - static_cast<size_t>(source_row_offset) + 1U +
+                             static_cast<size_t>(row_offset));
         if (target_row > current_geometry.rows) {
           continue;
         }
@@ -2479,8 +2512,11 @@ ECM TerminalInterfaceService::LaunchTerminal(
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
       }
-      for (size_t i = overlap; i < current_lines.size(); ++i) {
-        const int target_row = static_cast<int>(i + 1U + row_offset);
+      for (size_t i = std::max(overlap, static_cast<size_t>(source_row_offset));
+           i < current_lines.size(); ++i) {
+        const int target_row =
+            static_cast<int>(i - static_cast<size_t>(source_row_offset) + 1U +
+                             static_cast<size_t>(row_offset));
         if (target_row > current_geometry.rows) {
           break;
         }
@@ -2488,8 +2524,12 @@ ECM TerminalInterfaceService::LaunchTerminal(
         repaint += "\x1b[2K\x1b[0m";
         repaint += current_lines[i];
       }
-      for (size_t i = current_lines.size(); i < last_rendered_lines.size(); ++i) {
-        const int target_row = static_cast<int>(i + 1U + row_offset);
+      for (size_t i = std::max(current_lines.size(),
+                               static_cast<size_t>(source_row_offset));
+           i < last_rendered_lines.size(); ++i) {
+        const int target_row =
+            static_cast<int>(i - static_cast<size_t>(source_row_offset) + 1U +
+                             static_cast<size_t>(row_offset));
         if (target_row > current_geometry.rows) {
           break;
         }
@@ -2499,7 +2539,9 @@ ECM TerminalInterfaceService::LaunchTerminal(
     std::string restore_cursor_after_banner = {};
     if (vt_snapshot.available) {
       const int cursor_row =
-          std::clamp(vt_snapshot.cursor_row + 1 + row_offset, 1,
+          std::clamp(vt_snapshot.cursor_row - source_row_offset + 1 +
+                         row_offset,
+                     1,
                      std::max(1, current_geometry.rows));
       const int cursor_col =
           std::clamp(vt_snapshot.cursor_col + 1, 1,
@@ -3060,6 +3102,42 @@ ECM TerminalInterfaceService::LaunchTerminal(
   }
   const bool remove_closed_channel = final_state.closed && !detached;
 
+  std::string switch_key = {};
+  {
+    std::lock_guard<std::mutex> switch_guard(requested_switch_mutex);
+    switch_key = requested_switch_key;
+  }
+  const bool should_switch_terminal =
+      !switch_key.empty() && (wait_rcm) && !remove_closed_channel;
+  if (should_switch_terminal) {
+    (void)channel_port->UnbindForeground();
+#ifdef _WIN32
+    control_guard.reset();
+    if (control_event != nullptr) {
+      (void)CloseHandle(control_event);
+      control_event = nullptr;
+    }
+#endif
+    prompt_cache_guard.Disable();
+    session_lock.unlock();
+    TerminalLaunchArg switch_arg = {};
+    switch_arg.target = switch_key;
+    switch_arg.start_in_god_mode = true;
+    switch_arg.reuse_physical_alt_screen = true;
+    const ECM switch_rcm = LaunchTerminal(switch_arg, control_opt);
+    if ((switch_rcm)) {
+      return switch_rcm;
+    }
+
+    leave_physical_alt_screen();
+    clear_keyboard_capture_buffers();
+    raw_terminal.Restore();
+    RestoreCliPromptStateAfterTerminalExit_();
+    prompt_io_manager_.Print("");
+    prompt_io_manager_.ErrorFormat(switch_rcm);
+    return switch_rcm;
+  }
+
   clear_keyboard_capture_buffers();
   leave_physical_alt_screen();
   raw_terminal.Restore();
@@ -3087,19 +3165,6 @@ ECM TerminalInterfaceService::LaunchTerminal(
     control_event = nullptr;
   }
 #endif
-
-  std::string switch_key = {};
-  {
-    std::lock_guard<std::mutex> switch_guard(requested_switch_mutex);
-    switch_key = requested_switch_key;
-  }
-  if (!switch_key.empty() && (wait_rcm)) {
-    session_lock.unlock();
-    TerminalLaunchArg switch_arg = {};
-    switch_arg.target = switch_key;
-    switch_arg.start_in_god_mode = true;
-    return LaunchTerminal(switch_arg, control_opt);
-  }
 
   if (!(wait_rcm)) {
     prompt_io_manager_.ErrorFormat(wait_rcm);

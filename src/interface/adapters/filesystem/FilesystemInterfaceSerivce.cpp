@@ -390,6 +390,14 @@ std::string FormatStatBlock(const PathInfo &info) {
       << " : " << info.path << "\n";
   out << std::left << std::setw(kWidth) << "type"
       << " : " << AMStr::ToString(info.type) << "\n";
+  if (!info.link_target.empty()) {
+    out << std::left << std::setw(kWidth) << "link_target"
+        << " : " << info.link_target << "\n";
+  }
+  if (!info.resolved_path.empty() && info.resolved_path != info.path) {
+    out << std::left << std::setw(kWidth) << "realpath"
+        << " : " << info.resolved_path << "\n";
+  }
   out << std::left << std::setw(kWidth) << "owner"
       << " : " << info.owner << "\n";
   out << std::left << std::setw(kWidth) << "mode"
@@ -478,8 +486,12 @@ void PrintLsLongEntries(AMInterface::prompt::PromptIOManager &prompt_io_manager,
                                : (info.type == PathType::SYMLINK ? 'l' : '-');
     const std::string mode = std::string(1, type_char) + info.mode_str;
     const std::string size_str = AMStr::FormatSize(info.size);
+    const std::string display_name =
+        info.link_target.empty()
+            ? info.name
+            : AMStr::fmt("{} -> {}", info.name, info.link_target);
     const std::string styled_name = style_service.Format(
-        info.name, AMInterface::style::StyleIndex::None, &info);
+        display_name, AMInterface::style::StyleIndex::None, &info);
 
     std::ostringstream line;
     line << std::left << std::setw(static_cast<int>(mode_width)) << mode << "  "
@@ -963,15 +975,24 @@ ECM FilesystemInterfaceSerivce::Realpath(
   }
 
   const PathTarget print_target = {split_result.data.nickname, npath};
-  auto stat_result = filesystem_service_.Stat(print_target, control, false,
+  auto stat_result = filesystem_service_.Stat(print_target, control, true,
                                               client_result.data);
+  if (stat_result.rcm.code == EC::UnImplentedMethod) {
+    stat_result = filesystem_service_.Stat(print_target, control, false,
+                                           client_result.data);
+  }
   if ((stat_result.rcm)) {
     PathInfo info = stat_result.data;
-    if (AMStr::Strip(info.path).empty()) {
-      info.path = npath;
+    std::string output_path = AMStr::Strip(info.resolved_path);
+    if (output_path.empty()) {
+      output_path = AMStr::Strip(info.path);
+    }
+    if (output_path.empty()) {
+      output_path = npath;
     }
     PathTarget styled_target = print_target;
-    styled_target.path = info.path;
+    styled_target.path = output_path;
+    info.path = output_path;
     const std::string type_text = AMStr::ToString(info.type);
     const std::string styled_label = interface_print::BuildStyledPathLabel(
         style_service_, styled_target, &info);

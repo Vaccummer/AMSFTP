@@ -517,12 +517,16 @@ public:
   std::string name;
   std::string path;
   std::string dir;
+  std::string link_target;
+  std::string resolved_path;
   std::string owner;
   size_t size = 0;
   double create_time = 0;
   double access_time = 0;
   double modify_time = 0;
   PathType type = PathType::FILE;
+  PathType target_type = PathType::Unknown;
+  bool target_exists = false;
   size_t mode_int = 00;
   std::string mode_str = "r--------";
   PathInfo() : name(""), path(""), dir(""), owner("") {}

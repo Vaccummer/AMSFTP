@@ -1966,6 +1966,26 @@ class AMSFTPIOCore final : public SFTPSessionBase {
 private:
   std::unordered_map<long, std::string> user_id_map;
 
+  static bool IsAbsoluteLinkTarget_(const std::string &target) {
+    return !target.empty() &&
+           (target.front() == '/' || target.front() == '\\' ||
+            (target.size() > 1 && target[1] == ':'));
+  }
+
+  static std::string BuildDisplayLinkTarget_(const std::string &link_path,
+                                             const std::string &target) {
+    const std::string stripped_target = AMStr::Strip(target);
+    if (stripped_target.empty() || IsAbsoluteLinkTarget_(stripped_target)) {
+      return AMPath::NormalizeJoinedPath(stripped_target, "/");
+    }
+    std::string parent = AMPath::dirname(link_path);
+    if (parent.empty()) {
+      parent = ".";
+    }
+    return AMPath::NormalizeJoinedPath(
+        AMPath::join(parent, stripped_target, SepType::Unix), "/");
+  }
+
   PathInfo FormatStat(const std::string &path,
                       const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
     PathInfo info;
@@ -2075,6 +2095,41 @@ protected:
       path_t = path_t.substr(1);
     }
     return {rcm, path_t};
+  }
+
+  std::pair<ECM, std::string>
+  ResolveReadlinkCore_(const std::string &path,
+                       const ControlComponent &control) {
+    if (path.empty()) {
+      return {ECM{EC::InvalidArg, "readlink", "<empty>",
+                  "Invalid empty path"},
+              ""};
+    }
+    if (control.IsInterrupted()) {
+      return {ECM{EC::Terminate, "readlink", path, "Interrupted by user"}, ""};
+    }
+    if (control.IsTimeout()) {
+      return {ECM{EC::OperationTimeout, "readlink", path,
+                  "Operation timed out"},
+              ""};
+    }
+    if (!sftp) {
+      return {ECM{EC::NoConnection, "readlink", path, "SFTP not initialized"},
+              ""};
+    }
+
+    char target_buf[1024] = {0};
+    auto nb_res = NBPerform(control, [&] {
+      return libssh2_sftp_readlink(sftp, path.c_str(), target_buf,
+                                   sizeof(target_buf));
+    });
+    ECM rcm =
+        ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_readlink");
+    trace(rcm);
+    if (!rcm) {
+      return {rcm, ""};
+    }
+    return {rcm, std::string(target_buf, static_cast<size_t>(nb_res.value))};
   }
 
 public:
@@ -2428,7 +2483,20 @@ public:
     if (!sftp) {
       return {ECM{EC::NoConnection, "", "", "SFTP not initialized"}};
     }
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    LIBSSH2_SFTP_ATTRIBUTES attrs = {};
+    LIBSSH2_SFTP_ATTRIBUTES link_attrs = {};
+    PathInfo link_info = {};
+    if (args.trace_link) {
+      auto link_stat_res = NBPerform(control, [&] {
+        return libssh2_sftp_lstat(sftp, args.path.c_str(), &link_attrs);
+      });
+      ECM link_rcm = ErrorRecord(link_stat_res, TraceLevel::Error, args.path,
+                                 "libssh2_sftp_lstat");
+      if (link_rcm) {
+        link_info = FormatStat(args.path, link_attrs);
+      }
+    }
+
     NBResult<int> stat_res{0, OK};
     if (args.trace_link) {
       stat_res = NBPerform(control, [&] {
@@ -2445,7 +2513,26 @@ public:
     if (!rcm) {
       return {std::move(rcm)};
     }
-    return {{FormatStat(args.path, attrs)}, std::move(rcm)};
+    PathInfo info = FormatStat(args.path, attrs);
+    if (link_info.type == PathType::SYMLINK || info.type == PathType::SYMLINK) {
+      auto [readlink_rcm, link_target] =
+          ResolveReadlinkCore_(args.path, control);
+      if (readlink_rcm) {
+        info.link_target = BuildDisplayLinkTarget_(args.path, link_target);
+      }
+    }
+    if (args.trace_link || info.type == PathType::SYMLINK) {
+      auto [realpath_rcm, resolved_path] =
+          ResolveRealpathCore_(args.path, control);
+      if (realpath_rcm) {
+        info.resolved_path = std::move(resolved_path);
+      }
+    }
+    if (args.trace_link && link_info.type == PathType::SYMLINK) {
+      info.target_exists = true;
+      info.target_type = info.type;
+    }
+    return {{std::move(info)}, std::move(rcm)};
   }
 
   ECMData<AMFSI::ListResult> listdir(const AMFSI::ListdirArgs &args,

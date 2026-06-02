@@ -695,8 +695,15 @@ public:
       out.data.info = {};
       return out;
     }
+    const fs::path requested_path(args.path);
     std::error_code ec;
-    if (!fs::exists(fs::path(args.path), ec)) {
+    fs::file_status link_status = fs::symlink_status(requested_path, ec);
+    if (ec) {
+      out.rcm = BuildFsError_("stat", args.path, ec);
+      out.data.info = {};
+      return out;
+    }
+    if (!fs::exists(link_status)) {
       if (ec) {
         out.rcm = BuildFsError_("stat", args.path, ec);
       } else {
@@ -719,12 +726,31 @@ public:
     info.name = p.filename().string();
     info.path = pathf;
     info.dir = p.parent_path().string();
+    if (link_status.type() == fs::file_type::symlink) {
+      std::error_code readlink_ec;
+      const fs::path link_target = fs::read_symlink(requested_path, readlink_ec);
+      if (!readlink_ec) {
+        fs::path display_target = link_target;
+        if (display_target.is_relative()) {
+          display_target = requested_path.parent_path() / display_target;
+        }
+        info.link_target = display_target.lexically_normal().string();
+      }
+
+      std::error_code target_ec;
+      const fs::file_status target_status =
+          fs::status(requested_path, target_ec);
+      if (!target_ec && fs::exists(target_status)) {
+        info.target_exists = true;
+        info.target_type = cast_fs_type(target_status.type());
+      }
+    }
 
     fs::file_status status;
     if (args.trace_link) {
-      status = fs::status(p, ec);
+      status = fs::status(requested_path, ec);
     } else {
-      status = fs::symlink_status(p, ec);
+      status = link_status;
     }
 
     if (ec) {
@@ -736,8 +762,16 @@ public:
     }
 
     info.type = cast_fs_type(status.type());
+    if (args.trace_link || !info.link_target.empty()) {
+      std::error_code canonical_ec;
+      const fs::path canonical_path =
+          fs::weakly_canonical(requested_path, canonical_ec);
+      if (!canonical_ec && !canonical_path.empty()) {
+        info.resolved_path = canonical_path.string();
+      }
+    }
 
-    const auto size_f = fs::file_size(p, ec);
+    const auto size_f = fs::file_size(requested_path, ec);
     if (!ec) {
       info.size = size_f;
     } else {
@@ -761,7 +795,10 @@ public:
     info.owner = AMPath::GetFileOwner(AMStr::wstr(pathf));
 #else
     struct stat file_stat;
-    if (::stat(args.path.c_str(), &file_stat) == -1) {
+    const int stat_rc =
+        args.trace_link ? ::stat(args.path.c_str(), &file_stat)
+                        : ::lstat(args.path.c_str(), &file_stat);
+    if (stat_rc == -1) {
       const std::error_code sec(errno, std::generic_category());
       out.rcm = BuildFsError_("stat", args.path, sec);
       out.data.info = info;
@@ -770,6 +807,7 @@ public:
 
     struct passwd *pw = getpwuid(file_stat.st_uid);
     info.owner = pw ? pw->pw_name : std::to_string(file_stat.st_uid);
+    info.size = static_cast<size_t>(file_stat.st_size);
     info.mode_int = static_cast<size_t>(file_stat.st_mode) & 0777U;
     info.mode_str = AMStr::ModeTrans(info.mode_int);
     info.access_time = AMPath::timespec_to_double(file_stat.st_atimespec);
